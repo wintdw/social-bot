@@ -1,0 +1,43 @@
+# social-bot: one long-lived service = feed dashboard (FastAPI on :8083) +
+# the built-in refresh/scan schedules (container-local via TZ). No host cron
+# needed. Publishing is human-gated: the scheduler only refreshes the feed and
+# queues drafts; posts go out only when a human approves them on /review.
+#
+# DATA LIVES ON THE HOST. ./data is bind-mounted so the cached feed survives
+# container rebuilds/removal. The container runs as uid/gid 1000 (matching a
+# typical host user), so ./data needs no chown. Different host uid? Rebuild with
+# --build-arg UID=$(id -u) --build-arg GID=$(id -g) and chown ./data to match.
+#
+# Examples:
+#   docker compose up -d --build          # build + start the service
+#   curl localhost:8083/                  # cached feed (HTML)
+#   curl localhost:8083/health            # state as JSON
+#   curl -X POST localhost:8083/refresh   # refresh the feed now
+#   docker compose logs -f                # follow refresh runs
+#   docker compose run --rm social-bot whoami                    # one-shot CLI
+#   docker compose run --rm social-bot post --dry-run --message "..."
+services:
+  social-bot:
+    build: .
+    image: social-bot:latest
+    container_name: social-bot
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Ho_Chi_Minh        # schedule hours + feed timestamps are container-local
+      # The token comes from credentials.yaml (mounted below); this overrides
+      # it when set.
+      - SOCIAL_BOT_TOKEN=${SOCIAL_BOT_TOKEN:-}
+    ports:
+      - "8083:8080"                # 8083 on the host (voz-bot 8080, otofun-bot 8081, linkin-bot 8082)
+    volumes:
+      - ./data:/app/data
+      # config.yaml is read at startup; mount it so page_id edits need no rebuild.
+      - ./config.yaml:/app/config.yaml:ro
+      # The Atento DNA brief (publish.dna_file) is read on every request; mount it
+      # read-only so voice edits need no rebuild and GET /api/drafts serves it.
+      - ./docs:/app/docs:ro
+      # The access token lives here — git-ignored, never baked into the image.
+      - ./credentials.yaml:/app/credentials.yaml:ro
+    # Refreshes the cached feed twice a day and scans source feeds once, all
+    # container-local. Add --boot-refresh / --boot-scan to populate on first deploy.
+    command: ["serve", "--refresh-at", "07:00", "19:00", "--scan-at", "06:00"]

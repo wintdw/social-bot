@@ -1,0 +1,67 @@
+# social-bot configuration.
+# Every value here overrides a built-in default; delete a key to go back to the default.
+# Relative paths resolve against the project root.
+
+graph:
+  # Base of the Graph API. Pin the version; Meta keeps a rolling window of
+  # supported majors, so bump api_version deliberately when needed.
+  base_url: https://graph.facebook.com
+  api_version: v26.0
+  timeout_seconds: 30.0
+
+  # Page to fetch / post to: Atento Education. Leave empty to force --page-id
+  # on each command, or discover the id with `social-bot whoami`.
+  page_id: "1148652808337860"
+
+  # The access token is a SECRET and does NOT belong in this committed file.
+  # Put it in credentials.yaml (next to this file; git-ignored, template in
+  # credentials.example.yaml) or export SOCIAL_BOT_TOKEN.
+
+feed:
+  limit: 10            # default number of feed posts shown by `feed`
+  dir: data/feed       # cache written by `refresh`, served by `serve` (relative to project root)
+
+# --- Content pipeline: source feeds -> drafts -> human-approved posts ---------
+# `social-bot blog scan` (or the `serve` scan schedule) fetches each source and
+# queues unseen items as drafts. An external rewriter (Command Code, applying your
+# Atento DNA) fills in the caption; a human approves on the /review page, which
+# is the only thing that publishes. Nothing here posts on a timer.
+
+sources:
+  # One entry per feed to watch. type: sitemap | rss | index.
+  # `index` reads a listing page's JSON-LD ItemList (for sites with no feed) —
+  # atento.vn/blog has no RSS and its sitemap omits posts, so we use the index.
+  - name: atento-blog
+    type: index
+    url: https://atento.vn/blog
+    path_prefix: /blog/       # only post URLs containing this are queued
+    lang: vi
+
+# Review queue (/review): queue.json is the list awaiting review; seen.json
+# dedupes scanned source items across runs.
+review:
+  dir: data/review            # the /review data (relative to project root)
+  queue_name: queue.json      # the review queue
+  seen_name: seen.json        # ids already scanned (dedupe across runs)
+
+publish:
+  enabled: true               # false is a global kill-switch (approve returns an error)
+  destinations: [facebook]    # what an approval may post to (linkedin is a stub)
+  max_per_day: 10             # hard cap on posts per day
+  # Private mode: every approve/post is a REAL Graph call but stays unpublished
+  # (visible to page admins only). Private sends are audited, don't consume the
+  # draft, and don't count toward max_per_day — so this is the safe way to test
+  # the pipeline end to end. Set it back to true to test without going public.
+  private: false
+  dna_file: docs/atento-dna.md  # Atento brand-voice brief; surfaced via GET /api/drafts
+  dir: data/publish           # publish audit log (/publish)
+  log_name: published.jsonl   # append-only publish audit
+
+blog:
+  scan_at: ["06:00"]          # daily scan times, container-local (HH:MM)
+  timeout_seconds: 30.0       # per-request timeout for source fetches
+  retries: 2                  # retries with backoff (the blog host is flaky)
+  max_scan: 12                # max new drafts queued per source per scan
+  excerpt_chars: 240          # excerpt truncation for RSS items
+  enrich: true                # fetch each new post page for title/excerpt/image
+  user_agent: social-bot/0.1 (+content pipeline)

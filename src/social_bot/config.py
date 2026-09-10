@@ -1,0 +1,185 @@
+"""Config loading: built-in DEFAULTS deep-merged with the project config.yaml."""
+
+from __future__ import annotations
+
+import copy
+import os
+import pathlib
+from typing import Any
+
+import yaml
+
+# Project root = <src/social_bot>/.. = parent of the src layout. Override with
+# SOCIAL_BOT_HOME when running from a non-editable install (e.g. /app in Docker).
+ROOT = pathlib.Path(
+    os.environ.get("SOCIAL_BOT_HOME") or pathlib.Path(__file__).resolve().parents[2]
+)
+CONFIG_PATH = ROOT / "config.yaml"
+
+# Secrets live here, never in the committed config.yaml. The file sits next to
+# whichever config.yaml is in use, so `--config /elsewhere/config.yaml` picks up
+# /elsewhere/credentials.yaml. Template: credentials.example.yaml.
+CREDENTIALS_NAME = "credentials.yaml"
+
+# Token resolution order: --token flag > SOCIAL_BOT_TOKEN env > graph.token
+# (which credentials.yaml populates).
+TOKEN_ENV = "SOCIAL_BOT_TOKEN"
+
+DEFAULTS: dict[str, Any] = {
+    "graph": {
+        "base_url": "https://graph.facebook.com",
+        "api_version": "v26.0",
+        "timeout_seconds": 30.0,
+        "page_id": "",
+        "token": "",  # populated by credentials.yaml (git-ignored), not config.yaml
+    },
+    "feed": {
+        "limit": 10,  # default number of feed posts shown by `feed`
+        "dir": "data/feed",  # cache written by `refresh` and served by `serve`
+    },
+    # Source feeds the content pipeline scans for new items. Add more entries
+    # to watch more sites; `type` is `sitemap`, `rss`, or `index` (a listing
+    # page's JSON-LD ItemList, for sites with neither feed nor sitemap posts).
+    "sources": [
+        {
+            "name": "atento-blog",
+            "type": "index",
+            "url": "https://atento.vn/blog",
+            "path_prefix": "/blog/",
+            "lang": "vi",
+        },
+    ],
+    # Review queue (/review): queue.json holds the drafts awaiting review, and
+    # seen.json dedupes scanned source items across runs.
+    "review": {
+        "dir": "data/review",
+        "queue_name": "queue.json",
+        "seen_name": "seen.json",
+    },
+    # Publishing is human-gated: destinations are what a review-page approval
+    # may post to. `dna_file` is an optional path to your brand-voice brief,
+    # surfaced to the rewriter through GET /api/drafts. `dir` + `log_name` are
+    # the append-only audit log shown on /publish.
+    "publish": {
+        "enabled": True,
+        "destinations": ["facebook"],
+        "max_per_day": 10,
+        # Real sends but unpublished (visible to page admins only): the Graph
+        # API's way to test posting without going public. Private sends are
+        # audited but don't consume drafts or the daily cap.
+        "private": False,
+        "dna_file": "",
+        "dir": "data/publish",
+        "log_name": "published.jsonl",
+    },
+    # Scanning: how often `serve` looks for new source items, and how it fetches
+    # them. `scan_at` is a list of container-local "HH:MM" slots.
+    "blog": {
+        "scan_at": ["06:00"],
+        "timeout_seconds": 30.0,
+        "retries": 2,
+        "max_scan": 12,
+        "excerpt_chars": 240,
+        "enrich": True,  # fetch each new post page for title/excerpt/image
+        "user_agent": "social-bot/0.1 (+content pipeline)",
+    },
+}
+
+
+def _deep_merge(base: dict, override: dict) -> dict:
+    """Recursively merge override into a copy of base."""
+    out = copy.deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(out.get(key), dict):
+            out[key] = _deep_merge(out[key], value)
+        else:
+            out[key] = copy.deepcopy(value)
+    return out
+
+
+def _read_yaml(path: pathlib.Path) -> dict:
+    """Decode a YAML file into a dict ({} if the document is empty)."""
+    with open(path, encoding="utf-8") as fh:
+        return yaml.safe_load(fh) or {}
+
+
+def load_config(path: str | os.PathLike[str] | None = None) -> dict:
+    """Load config.yaml from the project root (or an explicit path) over DEFAULTS.
+
+    A ``credentials.yaml`` sitting next to the config file is merged last, so
+    the secret token stays out of the committed config.
+    """
+    source = pathlib.Path(path) if path else CONFIG_PATH
+    cfg = _deep_merge(DEFAULTS, {})
+    if source.exists():
+        cfg = _deep_merge(cfg, _read_yaml(source))
+    credentials = source.with_name(CREDENTIALS_NAME)
+    if credentials.exists():
+        cfg = _deep_merge(cfg, _read_yaml(credentials))
+    return cfg
+
+
+def resolve_token(token: str | None, cfg: dict) -> str:
+    """The access token from --token, the environment, or the credentials file;
+    '' if absent."""
+    token = (
+        token
+        or os.environ.get(TOKEN_ENV, "")
+        or str(cfg.get("graph", {}).get("token", ""))
+    )
+    return token.strip()
+
+
+def validate(cfg: dict) -> None:
+    """Raise ValueError on obviously unusable configuration."""
+    graph = cfg.get("graph", {})
+    if not str(graph.get("api_version", "")).startswith("v"):
+        raise ValueError("config: graph.api_version must look like 'v26.0'")
+    if not str(graph.get("base_url", "")).startswith("https://"):
+        raise ValueError("config: graph.base_url must be an https URL")
+    if graph.get("timeout_seconds", 30) <= 0:
+        raise ValueError("config: graph.timeout_seconds must be positive")
+    if cfg.get("feed", {}).get("limit", 10) < 1:
+        raise ValueError("config: feed.limit must be >= 1")
+
+    sources = cfg.get("sources")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("config: sources must be a non-empty list")
+    for source in sources:
+        if not isinstance(source, dict) or not source.get("name"):
+            raise ValueError("config: each source needs a name")
+        if not str(source.get("url", "")).startswith("https://"):
+            raise ValueError(f"config: source {source.get('name')!r} url must be an https URL")
+        if source.get("type") not in ("sitemap", "rss", "index"):
+            raise ValueError(
+                f"config: source {source.get('name')!r} type must be 'sitemap', 'rss', or 'index'"
+            )
+        if source.get("type") in ("sitemap", "index") and not source.get("path_prefix"):
+            raise ValueError(
+                f"config: source {source.get('name')!r} needs path_prefix"
+            )
+
+    publish = cfg.get("publish", {})
+    destinations = publish.get("destinations")
+    if not isinstance(destinations, list) or not destinations:
+        raise ValueError("config: publish.destinations must be a non-empty list")
+    for destination in destinations:
+        if destination not in ("facebook", "linkedin"):
+            raise ValueError(f"config: unknown publish destination {destination!r}")
+    if int(publish.get("max_per_day", 10)) < 1:
+        raise ValueError("config: publish.max_per_day must be >= 1")
+
+    blog = cfg.get("blog", {})
+    if float(blog.get("timeout_seconds", 30)) <= 0:
+        raise ValueError("config: blog.timeout_seconds must be positive")
+    if int(blog.get("max_scan", 12)) < 1:
+        raise ValueError("config: blog.max_scan must be >= 1")
+    scan_at = blog.get("scan_at")
+    if not isinstance(scan_at, list) or not scan_at:
+        raise ValueError("config: blog.scan_at must be a non-empty list of HH:MM")
+    for slot in scan_at:
+        hh, sep, mm = str(slot).partition(":")
+        if not (sep and hh.isdigit() and mm.isdigit()):
+            raise ValueError(f"config: blog.scan_at has invalid time {slot!r}")
+        if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
+            raise ValueError(f"config: blog.scan_at has invalid time {slot!r}")
