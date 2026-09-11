@@ -301,3 +301,82 @@ class TestBlogScanCommand:
         )
         assert cli._cmd_blog_scan(cli._parse_args(["blog", "scan"])) == 1
         assert "boom" in capsys.readouterr().err
+
+
+class TestBlogPublishArgs:
+    def test_flags_parse(self):
+        args = cli._parse_args(["blog", "publish", "--limit", "2", "--dry-run", "--json"])
+        assert args.limit == 2
+        assert args.dry_run is True
+        assert args.json is True
+        assert args.func is cli._cmd_blog_publish
+
+    def test_defaults(self):
+        args = cli._parse_args(["blog", "publish"])
+        assert args.limit is None
+        assert args.dry_run is False
+
+
+class TestBlogPublishCommand:
+    def _stub(self, monkeypatch, result):
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(cli, "publish_scheduled", lambda cfg, **kw: result)
+
+    def test_reports_posted(self, monkeypatch, capsys):
+        self._stub(
+            monkeypatch,
+            {
+                "posted": [
+                    {
+                        "id": "post-one",
+                        "destination": "facebook",
+                        "post_id": "123_9",
+                        "permalink": "https://www.facebook.com/123_9",
+                        "private": False,
+                    }
+                ],
+                "skipped": [],
+                "errors": [],
+                "batch": 1,
+                "queued": 1,
+                "remaining_today": 9,
+            },
+        )
+        assert cli._cmd_blog_publish(cli._parse_args(["blog", "publish"])) == 0
+        out = capsys.readouterr().out
+        assert "Posted 1 draft(s)" in out
+        assert "https://www.facebook.com/123_9" in out
+
+    def test_dry_run_verb(self, monkeypatch, capsys):
+        self._stub(
+            monkeypatch,
+            {"posted": [], "skipped": [], "errors": [], "batch": 1, "queued": 0,
+             "remaining_today": 10},
+        )
+        assert cli._cmd_blog_publish(cli._parse_args(["blog", "publish", "--dry-run"])) == 0
+        assert "Would post 0 draft(s)" in capsys.readouterr().out
+
+    def test_error_exits_1(self, monkeypatch, capsys):
+        self._stub(
+            monkeypatch,
+            {
+                "posted": [],
+                "skipped": [],
+                "errors": [{"id": "a", "error": "boom"}],
+                "batch": 1,
+                "queued": 1,
+                "remaining_today": 10,
+            },
+        )
+        assert cli._cmd_blog_publish(cli._parse_args(["blog", "publish"])) == 1
+        assert "boom" in capsys.readouterr().err
+
+    def test_disabled_returns_usage_error(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+
+        def boom(cfg, **kw):
+            raise ValueError("publishing is disabled")
+
+        monkeypatch.setattr(cli, "publish_scheduled", boom)
+        assert cli._cmd_blog_publish(cli._parse_args(["blog", "publish"])) == 2
+        assert "publishing is disabled" in capsys.readouterr().err

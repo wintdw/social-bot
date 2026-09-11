@@ -167,12 +167,33 @@ def find(drafts: list[Draft], draft_id: str) -> Draft | None:
     return None
 
 
+# Decoded queue JSON keyed by path, validated against (mtime_ns, size). Every
+# request used to re-read and re-parse the whole file; on a warm queue that is
+# the dominant cost of /review, /api/drafts and /status. The cached value is the
+# raw decoded JSON, never Draft objects, so each caller still gets its own
+# mutable copies (publish mutates and re-saves them).
+_QUEUE_CACHE: dict[str, tuple[int, int, list[dict]]] = {}
+
+
+def _read_queue(path: pathlib.Path) -> list[dict]:
+    try:
+        stat = path.stat()
+        key = (stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        return json.loads(path.read_text(encoding="utf-8"))
+    cached = _QUEUE_CACHE.get(str(path))
+    if cached is not None and cached[0] == key[0] and cached[1] == key[1]:
+        return cached[2]
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    _QUEUE_CACHE[str(path)] = (key[0], key[1], raw)
+    return raw
+
+
 def load_drafts(path) -> list[Draft]:
     path = pathlib.Path(path)
     if not path.exists():
         return []
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return [Draft.from_dict(entry) for entry in data]
+    return [Draft.from_dict(entry) for entry in _read_queue(path)]
 
 
 def save_drafts(path, drafts: list[Draft]) -> None:
@@ -183,6 +204,7 @@ def save_drafts(path, drafts: list[Draft]) -> None:
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(payload, encoding="utf-8")
     tmp.replace(path)
+    _QUEUE_CACHE.pop(str(path), None)
 
 
 def append_audit(path, record: dict) -> None:

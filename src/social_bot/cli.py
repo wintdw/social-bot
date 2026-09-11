@@ -10,7 +10,7 @@ import sys
 from . import __version__
 from .api import ApiError, api_from_config
 from .config import load_config, validate
-from .draft_pipeline import apply_masthead, generate_images, scan_sources
+from .draft_pipeline import apply_masthead, generate_images, publish_scheduled, scan_sources
 from .feed import format_feed_md, parse_feed_response
 from .refresh import refresh_feed
 
@@ -110,8 +110,27 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p_masthead.add_argument("--json", action="store_true", help="print the summary as JSON")
     p_masthead.set_defaults(func=_cmd_blog_masthead)
 
+    p_publish = blog_sub.add_parser(
+        "publish",
+        help="post the approved queue now, without waiting for a scheduled slot (never approves)",
+    )
+    p_publish.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="max drafts to post (default: publish.post_per_slot)",
+    )
+    p_publish.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print what would post without sending anything",
+    )
+    p_publish.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_publish.set_defaults(func=_cmd_blog_publish)
+
     p_serve = sub.add_parser(
-        "serve", help="run the feed dashboard + draft review UI + scheduled refresh/scan"
+        "serve",
+        help="run the feed dashboard + draft review UI + scheduled refresh/scan/posting",
     )
     p_serve.add_argument("--host", default="0.0.0.0", help="bind address (default: 0.0.0.0)")
     p_serve.add_argument("--port", type=int, default=8080, help="bind port (default: 8080)")
@@ -134,6 +153,16 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p_serve.add_argument(
         "--boot-scan", action="store_true", help="scan source feeds once shortly after startup"
+    )
+    p_serve.add_argument(
+        "--publish-at",
+        nargs="+",
+        default=None,
+        metavar="HH:MM",
+        help=(
+            "daily posting times for approved drafts, container-local "
+            "(default: publish.post_at); a slot may be a window HH:MM-HH:MM"
+        ),
     )
     p_serve.set_defaults(func=_cmd_serve)
     return parser.parse_args(argv)
@@ -344,6 +373,35 @@ def _cmd_blog_masthead(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_blog_publish(args: argparse.Namespace) -> int:
+    cfg = _load_config(args)
+    try:
+        result = publish_scheduled(cfg, limit=args.limit, dry_run=args.dry_run)
+    except ValueError as exc:
+        print(f"blog publish: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(f"blog publish: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        verb = "Would post" if args.dry_run else "Posted"
+        print(
+            f"{verb} {len(result['posted'])} draft(s); "
+            f"{len(result['skipped'])} skipped, {len(result['errors'])} error(s)."
+        )
+        for entry in result["posted"]:
+            print(f"  - {entry['id']}: {entry['permalink'] or entry['post_id']}")
+    for entry in result["skipped"]:
+        print(f"  · skipped {entry['id']}: {entry['reason']}", file=sys.stderr)
+    for entry in result["errors"]:
+        print(f"  ! {entry['id']}: {entry['error']}", file=sys.stderr)
+    return 1 if result["errors"] else 0
+
+
 def _cmd_serve(args: argparse.Namespace) -> int:
     from .web import create_app
 
@@ -355,6 +413,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         boot_refresh=args.boot_refresh,
         scan_at=args.scan_at,
         boot_scan=args.boot_scan,
+        post_at=args.publish_at,
     )
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
     return 0

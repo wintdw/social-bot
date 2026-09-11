@@ -73,8 +73,10 @@ Routes live in `web.create_app`. Import fastapi names at module scope (they are
 guarded by `try/except ImportError` so `web.py` still imports without the
 extra) — keeping them module-level is required for FastAPI to resolve the
 handlers' string annotations (e.g. `Request`). Mirror `/refresh` for
-fire-and-forget jobs (409 when busy) and `/scan` for the browser-vs-JSON
-response pattern.
+fire-and-forget jobs (409 when busy) and `/scan`/`/publish/run` for the
+browser-vs-JSON response pattern. A new scheduled loop belongs in
+`create_app` beside `_scheduler_loop`/`_scanner_loop`/`_posting_loop`, keyed on a
+pure `HH:MM` helper + a `current_slot` dedupe.
 
 ## Exit codes
 
@@ -90,4 +92,8 @@ Each `_cmd_*` returns the code; `main` never lets an exception traceback.
 5. `publish.private: true` makes the real approve an **unpublished** post, so
    you can exercise the whole publish path (Graph call, audit, redirect) without
    going public.
-6. Only then a real public approve — and only deliberately.
+6. Timed posting: approve a draft (**Approve & schedule**), then either wait for
+   a `publish.post_at` slot or hit `POST /publish/run` / `blog publish`. Confirm
+   exactly one audit record and the expected state (`posted` publicly; the draft
+   stays `approved` after a private send, and a second run the same day skips it).
+7. Only then a real public approve — and only deliberately.

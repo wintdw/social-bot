@@ -198,6 +198,10 @@ class GraphApi:
         """The token's owner (user or page)."""
         return self.get("me", {"fields": "id,name"})
 
+    def page_info(self, page_id: str) -> dict:
+        """A page's basic identity (id, name) — the dashboard shows its name."""
+        return self.get(page_id, {"fields": "id,name"})
+
     def debug_token(self, input_token: str | None = None) -> dict:
         """Metadata for a token (the configured one by default) from /debug_token.
 

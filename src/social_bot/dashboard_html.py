@@ -28,7 +28,7 @@ def _card(num, label: str, sub: str = "") -> str:
     )
 
 
-def _run_line(name: str, runtime: dict) -> str:
+def _run_line(name: str, runtime: dict, next_item: str = "") -> str:
     """One line describing a scheduler's last run and next one."""
     if runtime.get("busy"):
         state = "running now"
@@ -40,12 +40,49 @@ def _run_line(name: str, runtime: dict) -> str:
         state = "not run yet"
     last = runtime.get("last_finished") or "—"
     nxt = runtime.get("next") or "—"
-    schedule = ", ".join(str(s) for s in runtime.get("schedule") or [])
+    schedule = ", ".join(str(s) for s in runtime.get("schedule") or []) or "—"
+    detail = f" · next up {html.escape(next_item)}" if next_item else ""
     return (
         f'<p class="muted">{html.escape(name)}: {html.escape(state)} · '
         f"last {html.escape(str(last))} · next {html.escape(str(nxt))} · "
-        f"at {html.escape(schedule)}</p>"
+        f"at {html.escape(schedule)}{detail}</p>"
     )
+
+
+def _next_draft_label(publish: dict) -> str:
+    """A short 'which draft goes next' label from the publish stats, or ''."""
+    upcoming = (publish or {}).get("next_draft") or None
+    if not upcoming:
+        return ""
+    title = str(upcoming.get("title") or "").strip()
+    ident = str(upcoming.get("id") or "").strip()
+    if title and ident:
+        return f"{title} ({ident})"
+    return title or ident
+
+
+def _next_post_note(publish: dict) -> str:
+    """The 'Next post' card's subtitle: when it may fire and which draft."""
+    parts: list[str] = []
+    remaining = int((publish or {}).get("interval_remaining") or 0)
+    if remaining > 0:
+        parts.append(f"in {remaining} day(s)")
+    label = _next_draft_label(publish)
+    if label:
+        parts.append(label)
+    elif int((publish or {}).get("approved") or 0) == 0:
+        parts.append("nothing approved yet")
+    return " · ".join(parts)
+
+
+def _posting_detail(publish: dict) -> str:
+    """The scheduler line's 'next up …' detail, noting an interval hold."""
+    label = _next_draft_label(publish)
+    remaining = int((publish or {}).get("interval_remaining") or 0)
+    if remaining <= 0:
+        return label
+    hold = f"waits {remaining} day(s)"
+    return f"{label} — {hold}" if label else hold
 
 
 def _table(headers: list[str], rows: list[list[str]]) -> str:
@@ -165,8 +202,10 @@ def render_dashboard_html(
     stats: dict,
     refresh: dict,
     scan: dict,
+    post: dict | None = None,
     images: dict | None = None,
     page_id: str = "",
+    page_name: str = "",
     message: str = "",
     private: bool = False,
     generated_at: dt.datetime | None = None,
@@ -175,12 +214,19 @@ def render_dashboard_html(
     generated_at = generated_at or dt.datetime.now()
     drafts = stats.get("drafts", {})
     published = stats.get("published", {})
+    publish = stats.get("publish", {}) or {}
 
     controls = (
         '<div class="controls">'
         '<form method="post" action="/refresh"><button type="submit">Refresh feed</button></form>'
         '<form method="post" action="/scan"><button type="submit">Scan sources</button></form>'
-        f'<span class="muted">Page {html.escape(page_id or "—")}</span>'
+        + (
+            '<form method="post" action="/publish/run">'
+            '<button type="submit">Post approved now</button></form>'
+            if post
+            else ""
+        )
+        + f'<span class="muted">Page {html.escape(page_name or page_id or "—")}</span>'
         "</div>"
     )
     cards = (
@@ -190,9 +236,16 @@ def render_dashboard_html(
         + _card(stats.get("seen", 0), "Seen items")
         + _card(refresh.get("next", "—"), "Next refresh")
         + _card(scan.get("next", "—"), "Next scan")
+        + (
+            _card((post or {}).get("next") or "—", "Next post", _next_post_note(publish))
+            if post
+            else ""
+        )
         + "</div>"
     )
     runs = _run_line("Feed refresh", refresh) + _run_line("Source scan", scan)
+    if post:
+        runs += _run_line("Timed posting", post, _posting_detail(publish))
 
     if items is None:
         feed = (
@@ -277,6 +330,7 @@ def render_status_html(
     *,
     refresh: dict,
     scan: dict,
+    post: dict | None = None,
     token: dict | None = None,
     images: dict | None = None,
     private: bool = False,
@@ -319,6 +373,12 @@ def render_status_html(
         ["private mode", str(bool(publish.get("private")))],
         ["destinations", html.escape(", ".join(publish.get("destinations", [])))],
         ["max per day", html.escape(str(publish.get("max_per_day", "")))],
+        ["min interval (days)", html.escape(str(publish.get("interval_days", "")))],
+        ["interval remaining (days)", html.escape(str(publish.get("interval_remaining", "")))],
+        ["approved waiting", html.escape(str(publish.get("approved", "")))],
+        ["next up", html.escape(_next_draft_label(publish) or "—")],
+        ["post at", html.escape(", ".join(publish.get("post_at", []) or []) or "—")],
+        ["post per slot", html.escape(str(publish.get("post_per_slot", "")))],
         ["DNA file set", str(bool(publish.get("dna_file_set")))],
     ]
 
@@ -329,6 +389,7 @@ def render_status_html(
         + "<h2>Schedules</h2>"
         + _run_line("Feed refresh", refresh)
         + _run_line("Source scan", scan)
+        + (_run_line("Timed posting", post, _posting_detail(publish)) if post else "")
         + _image_section(images)
         + "<h2>Sources</h2>"
         + _table(["Name", "Type", "URL", "Lang"], source_rows)

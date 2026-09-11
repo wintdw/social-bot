@@ -11,9 +11,11 @@ import datetime as dt
 import json
 import pathlib
 
+from .api import ApiError
 from .config import ROOT, load_config
 from .drafts import (
     AI_DRAFT,
+    APPROVED,
     EXTRACTED,
     STATES,
     Draft,
@@ -25,12 +27,17 @@ from .drafts import (
     save_drafts,
 )
 from .image_gen import DEFAULT_BASE_URL, ImageGenError, generate_for_draft
-from .publishers import publisher_for
+from .publishers import PublisherError, publisher_for
 from .source import Source, parse_blog_posting, parse_source
 from .source_api import SourceClient, SourceError
 
-# States shown for review / rewrite.
+# States shown for review / rewrite. OPEN_STATES is the rewrite backlog (what
+# the rewriter reads and may rewrite); REVIEW_STATES adds approved drafts, which
+# stay on /review until they post.
 OPEN_STATES = ("extracted", "ai_draft")
+REVIEW_STATES = (EXTRACTED, AI_DRAFT, APPROVED)
+# The scheduler's queue: drafts a human approved, waiting for a posting slot.
+SCHEDULED_STATES = (APPROVED,)
 
 
 def _dir(cfg: dict, section: str, default: str) -> pathlib.Path:
@@ -58,18 +65,39 @@ def published_path(cfg: dict) -> pathlib.Path:
     )
 
 
+# Parsed side-files (seen ledger, publish audit, DNA/style briefs) keyed by
+# path, validated against (mtime_ns, size). Read on every request by /status,
+# /review and /api/drafts; re-parsing them each time is pure waste once warm.
+# Callers get a copy of the cached value, never the cache itself.
+_FILE_CACHE: dict[str, tuple[int, int, object]] = {}
+
+
+def _cached_file(path: pathlib.Path, parse):
+    """parse(path) memoized on (mtime_ns, size); None when the file is absent."""
+    try:
+        stat = path.stat()
+    except OSError:
+        return None
+    key = (stat.st_mtime_ns, stat.st_size)
+    cached = _FILE_CACHE.get(str(path))
+    if cached is not None and cached[0] == key[0] and cached[1] == key[1]:
+        return cached[2]
+    value = parse(path)
+    _FILE_CACHE[str(path)] = (key[0], key[1], value)
+    return value
+
+
 def _write_json(path: pathlib.Path, payload) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     tmp.replace(path)
+    _FILE_CACHE.pop(str(path), None)
 
 
 def load_seen(cfg: dict) -> set[str]:
-    path = seen_path(cfg)
-    if not path.exists():
-        return set()
-    return set(json.loads(path.read_text(encoding="utf-8")))
+    cached = _cached_file(seen_path(cfg), lambda p: set(json.loads(p.read_text(encoding="utf-8"))))
+    return set(cached) if cached else set()
 
 
 def save_seen(cfg: dict, seen: set[str]) -> None:
@@ -84,7 +112,7 @@ def _read_optional_file(raw) -> str:
     path = pathlib.Path(raw)
     if not path.is_absolute():
         path = ROOT / path
-    return path.read_text(encoding="utf-8") if path.exists() else ""
+    return _cached_file(path, lambda p: p.read_text(encoding="utf-8")) or ""
 
 
 def dna_text(cfg: dict) -> str:
@@ -253,6 +281,29 @@ def list_drafts(cfg: dict, states: tuple[str, ...] | None = None) -> list[Draft]
     return sorted(drafts, key=_sort_key, reverse=True)
 
 
+def _oldest_first(drafts: list[Draft]) -> list[Draft]:
+    """Sort drafts the way the poster drains them: oldest source date first."""
+    return sorted(drafts, key=_sort_key)
+
+
+def next_scheduled(drafts: list[Draft]) -> Draft | None:
+    """The draft ``publish_scheduled`` would send next: the oldest approved.
+
+    Pure over an already-loaded queue, so callers that need the whole snapshot
+    (``status``) don't re-read the file. Returns None when nothing is approved —
+    the scheduler then has nothing to post.
+    """
+    approved = [draft for draft in drafts if draft.state in SCHEDULED_STATES]
+    return _oldest_first(approved)[0] if approved else None
+
+
+def scheduled_queue(cfg: dict) -> list[Draft]:
+    """Approved drafts in posting order (oldest first) — what the poster drains."""
+    return _oldest_first(
+        [draft for draft in load_drafts(queue_path(cfg)) if draft.state in SCHEDULED_STATES]
+    )
+
+
 def filter_drafts(
     drafts: list[Draft], *, source: str = "", state: str = ""
 ) -> list[Draft]:
@@ -262,6 +313,38 @@ def filter_drafts(
     if state:
         drafts = [d for d in drafts if d.state == state]
     return drafts
+
+
+def paginate(
+    items: list, *, page: int = 1, per_page: int | None = None
+) -> tuple[list, dict]:
+    """Slice an ordered listing into one page plus its metadata.
+
+    ``per_page`` falsy (0/None) disables paging and returns everything on one
+    page. The requested page is clamped to ``[1, pages]`` so a stale bookmark
+    past the end renders the last page instead of an empty one.
+    """
+    total = len(items)
+    if not per_page or per_page < 1:
+        return list(items), {
+            "page": 1,
+            "per_page": total,
+            "total": total,
+            "pages": 1,
+            "has_prev": False,
+            "has_next": False,
+        }
+    pages = max(1, -(-total // per_page))
+    current = max(1, min(int(page or 1), pages))
+    start = (current - 1) * per_page
+    return items[start : start + per_page], {
+        "page": current,
+        "per_page": per_page,
+        "total": total,
+        "pages": pages,
+        "has_prev": current > 1,
+        "has_next": current < pages,
+    }
 
 
 def get_draft(cfg: dict, draft_id: str) -> Draft | None:
@@ -469,6 +552,15 @@ def reject_draft(cfg: dict, draft_id: str) -> Draft:
     return _save_one(cfg, draft_id, lambda d: d.reject())
 
 
+def approve_draft(cfg: dict, draft_id: str) -> Draft:
+    """Queue a draft for the next posting slot (human action on /review).
+
+    Approval does not post — the scheduler posts approved drafts later. This is
+    the human gate: the scheduler itself never approves.
+    """
+    return _save_one(cfg, draft_id, lambda d: d.approve())
+
+
 def _split_hashtags(text: str) -> list[str]:
     for sep in (",", "\n"):
         text = text.replace(sep, " ")
@@ -528,11 +620,7 @@ def apply_masthead(
 # -- publishing ----------------------------------------------------------
 
 
-def list_published(cfg: dict) -> list[dict]:
-    """The publish audit log as a list of records (newest last)."""
-    path = published_path(cfg)
-    if not path.exists():
-        return []
+def _parse_published(path: pathlib.Path) -> list[dict]:
     records: list[dict] = []
     for line in path.read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -543,6 +631,12 @@ def list_published(cfg: dict) -> list[dict]:
         except ValueError:
             continue
     return records
+
+
+def list_published(cfg: dict) -> list[dict]:
+    """The publish audit log as a list of records (newest last)."""
+    records = _cached_file(published_path(cfg), _parse_published)
+    return list(records) if records else []
 
 
 def _published_today(cfg: dict) -> int:
@@ -556,6 +650,45 @@ def _published_today(cfg: dict) -> int:
     )
 
 
+def interval_days(cfg: dict) -> int:
+    """``publish.interval_days`` as an int (0 = no minimum gap)."""
+    return int(cfg.get("publish", {}).get("interval_days", 0) or 0)
+
+
+def _last_public_post_date(cfg: dict) -> dt.date | None:
+    """The local date of the most recent public post, or None if there is none.
+
+    Private (unpublished) sends are ignored, so they never pace the interval.
+    """
+    latest: dt.date | None = None
+    for record in list_published(cfg):
+        if record.get("private"):
+            continue
+        posted = str(record.get("posted_at", ""))[:10]
+        try:
+            day = dt.date.fromisoformat(posted)
+        except ValueError:
+            continue
+        if latest is None or day > latest:
+            latest = day
+    return latest
+
+
+def _interval_remaining(cfg: dict) -> int:
+    """Days still to wait before interval_days allows another public post.
+
+    0 means posting is allowed now (no interval, or enough days have passed).
+    """
+    minimum = interval_days(cfg)
+    if minimum <= 0:
+        return 0
+    last = _last_public_post_date(cfg)
+    if last is None:
+        return 0
+    elapsed = (dt.datetime.now().astimezone().date() - last).days
+    return max(0, minimum - elapsed)
+
+
 def status(cfg: dict | None = None) -> dict:
     """A snapshot of the pipeline state for an operator/monitoring endpoint."""
     cfg = cfg or load_config()
@@ -565,6 +698,7 @@ def status(cfg: dict | None = None) -> dict:
         by_state[draft.state] = by_state.get(draft.state, 0) + 1
     published = list_published(cfg)
     recent = list(reversed(published[-5:]))
+    upcoming = next_scheduled(drafts)
     return {
         "sources": [
             {
@@ -577,7 +711,11 @@ def status(cfg: dict | None = None) -> dict:
         ],
         "drafts": {
             "total": len(drafts),
-            "open": by_state.get(EXTRACTED, 0) + by_state.get(AI_DRAFT, 0),
+            "open": (
+                by_state.get(EXTRACTED, 0)
+                + by_state.get(AI_DRAFT, 0)
+                + by_state.get(APPROVED, 0)
+            ),
             "by_state": by_state,
         },
         "seen": len(load_seen(cfg)),
@@ -591,6 +729,23 @@ def status(cfg: dict | None = None) -> dict:
             "private": bool(cfg.get("publish", {}).get("private", False)),
             "destinations": list(cfg.get("publish", {}).get("destinations", [])),
             "max_per_day": int(cfg.get("publish", {}).get("max_per_day", 10)),
+            "post_at": list(cfg.get("publish", {}).get("post_at", []) or []),
+            "post_per_slot": int(cfg.get("publish", {}).get("post_per_slot", 1)),
+            "interval_days": interval_days(cfg),
+            "interval_remaining": _interval_remaining(cfg),
+            "approved": by_state.get(APPROVED, 0),
+            # What the poster will actually send next (the oldest approved). None
+            # when nothing is approved, so the UI can say so instead of guessing.
+            "next_draft": (
+                {
+                    "id": upcoming.id,
+                    "title": upcoming.title,
+                    "source": upcoming.source,
+                    "has_image": bool(upcoming.image),
+                }
+                if upcoming
+                else None
+            ),
             "dna_file_set": bool(str(cfg.get("publish", {}).get("dna_file") or "").strip()),
         },
         "image_gen": {
@@ -641,6 +796,13 @@ def publish_draft(
         cap = int(cfg.get("publish", {}).get("max_per_day", 10))
         if _published_today(cfg) >= cap:
             raise ValueError(f"daily publish cap reached ({cap}); not posting today")
+        remaining = _interval_remaining(cfg)
+        if remaining > 0:
+            raise ValueError(
+                f"publish interval not reached (last public post "
+                f"{_last_public_post_date(cfg)}, minimum {interval_days(cfg)} day(s), "
+                f"{remaining} to go); not posting"
+            )
 
     results: list[dict] = []
     for name in targets:
@@ -693,4 +855,97 @@ def publish_draft(
         "results": results,
         "dry_run": dry_run,
         "private": any(result.get("private") for result in results),
+    }
+
+
+def _private_sent_today(cfg: dict, draft_id: str) -> bool:
+    """True when this draft already had a *private* send today.
+
+    Private sends deliberately leave the draft in the queue (see
+    ``publish_draft``), so without this guard the scheduler would re-post the
+    same draft at every slot while ``publish.private`` is on.
+    """
+    today = dt.datetime.now().astimezone().date().isoformat()
+    return any(
+        record.get("private")
+        and record.get("id") == draft_id
+        and str(record.get("posted_at", "")).startswith(today)
+        for record in list_published(cfg)
+    )
+
+
+def publish_scheduled(
+    cfg: dict | None = None,
+    *,
+    limit: int | None = None,
+    destination: str | None = None,
+    token: str | None = None,
+    dry_run: bool = False,
+) -> dict:
+    """Post the oldest human-approved drafts, one slot's worth at a time.
+
+    Human-gated by construction: it only ever touches drafts in state
+    ``approved`` (a person clicked Approve on /review/{id}); it never approves.
+    Each draft goes through the ordinary ``publish_draft`` path, so the
+    ``publish.enabled`` kill-switch, the daily cap and the per-destination
+    adapters all apply unchanged.
+
+    ``limit`` overrides ``publish.post_per_slot`` for a manual run. A
+    ``ValueError`` (the daily cap, most likely) stops the batch; a publisher or
+    API error is recorded and the batch carries on.
+    """
+    cfg = cfg or load_config()
+    if not cfg.get("publish", {}).get("enabled", True):
+        raise ValueError("publishing is disabled (publish.enabled is false)")
+
+    per_slot = int(cfg.get("publish", {}).get("post_per_slot", 1))
+    batch = int(limit) if limit is not None else max(per_slot, 1)
+    queued = scheduled_queue(cfg)  # oldest first
+
+    posted: list[dict] = []
+    skipped: list[dict] = []
+    errors: list[dict] = []
+    for draft in queued:
+        if len(posted) >= batch:
+            break
+        if not dry_run and _private_sent_today(cfg, draft.id):
+            skipped.append({"id": draft.id, "reason": "already posted privately today"})
+            continue
+        try:
+            result = publish_draft(
+                cfg,
+                draft.id,
+                dry_run=dry_run,
+                destination=destination,
+                token=token,
+            )
+        except ValueError as exc:
+            skipped.append({"id": draft.id, "reason": str(exc)})
+            break  # cap reached / state changed: the rest would fail too
+        except (PublisherError, ApiError) as exc:
+            errors.append({"id": draft.id, "error": str(exc)})
+            continue
+        posted.append(
+            {
+                "id": draft.id,
+                "destination": (
+                    result["results"][0].get("destination") if result["results"] else ""
+                ),
+                "post_id": result["draft"].get("post_id", ""),
+                "permalink": result["draft"].get("permalink", ""),
+                "private": result["private"],
+            }
+        )
+
+    return {
+        "posted": posted,
+        "skipped": skipped,
+        "errors": errors,
+        "batch": batch,
+        "queued": len(queued),
+        "remaining_today": max(
+            0,
+            int(cfg.get("publish", {}).get("max_per_day", 10)) - _published_today(cfg),
+        ),
+        "interval_remaining": _interval_remaining(cfg),
     }

@@ -9,6 +9,7 @@ from social_bot.draft_html import (
     render_drafts_html,
     render_message_html,
 )
+from social_bot.draft_pipeline import paginate
 from social_bot.drafts import Draft
 
 GENERATED = dt.datetime(2026, 9, 10, 12, 0)
@@ -140,6 +141,62 @@ class TestReviewFilters:
         assert 'href="/review"' in out
 
 
+class TestReviewPagination:
+    def _page(self, total, page, per_page):
+        drafts = [Draft(id=f"d{i}", title=f"T{i}") for i in range(total)]
+        window, info = paginate(drafts, page=page, per_page=per_page)
+        return window, info
+
+    def test_no_pager_on_a_single_page(self):
+        drafts, info = self._page(3, 1, 10)
+        out = render_drafts_html(drafts, page=info, generated_at=GENERATED)
+        assert "Page 1 /" not in out
+
+    def test_first_page_links_forward_preserving_filters(self):
+        drafts, info = self._page(5, 1, 2)
+        out = render_drafts_html(
+            drafts,
+            page=info,
+            sources=[("a", 5)],
+            statuses=[("extracted", 5)],
+            selected_source="a",
+            selected_status="extracted",
+            total=5,
+            generated_at=GENERATED,
+        )
+        assert "Page 1 / 3" in out
+        assert "source=a&amp;status=extracted&amp;page=2&amp;per_page=2" in out
+        assert "← Newer" not in out
+
+    def test_later_page_links_back_and_not_forward(self):
+        drafts, info = self._page(5, 3, 2)
+        out = render_drafts_html(drafts, page=info, total=5, generated_at=GENERATED)
+        assert "Page 3 / 3" in out
+        assert "← Newer" in out
+        assert "Older →" not in out
+
+    def test_header_counts_matches_not_the_page_size(self):
+        drafts, info = self._page(5, 1, 2)
+        out = render_drafts_html(
+            drafts, page=info, total=5, matched=5, generated_at=GENERATED
+        )
+        assert "5 open draft(s)" in out
+        assert "2 of 5" not in out
+
+    def test_header_shows_filtered_matches_with_paging(self):
+        drafts, info = self._page(5, 1, 2)
+        out = render_drafts_html(
+            drafts,
+            page=info,
+            total=12,
+            matched=5,
+            sources=[("a", 5)],
+            selected_source="a",
+            generated_at=GENERATED,
+        )
+        assert "5 of 12 open draft(s)" in out
+
+
 class TestRenderDraftHtml:
     def test_has_editable_caption_and_actions(self):
         draft = Draft(id="p", title="T", url="https://x/blog/p", caption="Body <x>",
@@ -240,6 +297,45 @@ class TestRenderDraftHtml:
     def test_no_private_notice_by_default(self):
         out = render_draft_html(Draft(id="p", title="T"))
         assert "Private mode" not in out
+
+    def test_approve_and_schedule_button_when_scheduling(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", caption="Hi", state="ai_draft"),
+            scheduling=True,
+            next_post="2026-09-11 09:00",
+        )
+        assert 'name="approve"' in out
+        assert 'form="publish-form"' in out  # carries the caption/hashtag edits
+        assert "Approve &amp; schedule" in out
+        assert "2026-09-11 09:00" in out
+
+    def test_no_approve_button_without_scheduling(self):
+        out = render_draft_html(Draft(id="p", title="T", caption="Hi", state="ai_draft"))
+        assert 'name="approve"' not in out
+        assert "Approve &amp; schedule" not in out
+
+    def test_no_approve_button_for_an_extracted_draft(self):
+        out = render_draft_html(Draft(id="p", title="T"), scheduling=True)
+        assert 'name="approve"' not in out
+
+    def test_approved_draft_shows_waiting_note_without_button(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", caption="Hi", state="approved"),
+            scheduling=True,
+            next_post="2026-09-11 09:00",
+        )
+        assert 'name="approve"' not in out
+        assert "waiting for" in out
+        assert "2026-09-11 09:00" in out
+
+    def test_review_list_has_post_approved_now_when_scheduling(self):
+        out = render_drafts_html([], scheduling=True, generated_at=GENERATED)
+        assert 'action="/publish/run"' in out
+        assert "Post approved now" in out
+
+    def test_review_list_hides_post_approved_now_by_default(self):
+        out = render_drafts_html([], generated_at=GENERATED)
+        assert 'action="/publish/run"' not in out
 
 
 class TestMessageHtml:

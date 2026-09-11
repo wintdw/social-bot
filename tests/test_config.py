@@ -83,6 +83,19 @@ def test_validate_accepts_defaults():
     validate({**DEFAULTS})  # should not raise
 
 
+def test_validate_accepts_a_configured_post_schedule():
+    cfg = {
+        **DEFAULTS,
+        "publish": {
+            **DEFAULTS["publish"],
+            "post_at": ["09:00", "20:30", "19:30-21:00"],
+            "post_per_slot": 2,
+            "interval_days": 2,
+        },
+    }
+    validate(cfg)  # should not raise
+
+
 @pytest.mark.parametrize(
     "cfg",
     [
@@ -103,6 +116,9 @@ def test_defaults_include_pipeline_sections(tmp_path):
     assert cfg["sources"][0]["name"] == "atento-blog"
     assert cfg["sources"][0]["type"] == "index"
     assert cfg["publish"]["destinations"] == ["facebook"]
+    assert cfg["publish"]["post_at"] == []  # timed posting is off by default
+    assert cfg["publish"]["post_per_slot"] == 1
+    assert cfg["publish"]["interval_days"] == 0  # no minimum gap by default
     assert cfg["blog"]["scan_at"] == ["06:00"]
     assert cfg["review"]["dir"] == "data/review"
     assert cfg["publish"]["log_name"] == "published.jsonl"
@@ -138,6 +154,13 @@ def test_credentials_file_supplies_image_key(tmp_path):
         {"publish": {"destinations": []}},
         {"publish": {"destinations": ["mastodon"]}},
         {"publish": {"max_per_day": 0}},
+        {"publish": {"destinations": ["facebook"], "post_at": ["nope"]}},
+        {"publish": {"destinations": ["facebook"], "post_at": ["24:00"]}},
+        {"publish": {"destinations": ["facebook"], "post_at": ["19:30-21:00-22:00"]}},
+        {"publish": {"destinations": ["facebook"], "post_at": ["21:00-19:30"]}},
+        {"publish": {"destinations": ["facebook"], "post_at": "09:00"}},
+        {"publish": {"destinations": ["facebook"], "post_per_slot": 0}},
+        {"publish": {"destinations": ["facebook"], "interval_days": -1}},
         {"blog": {"scan_at": ["nope"]}},
         {"blog": {"scan_at": []}},
         {"blog": {"timeout_seconds": 0}},
@@ -155,6 +178,13 @@ def test_credentials_file_supplies_image_key(tmp_path):
         "no-destinations",
         "unknown-destination",
         "zero-cap",
+        "bad-post-at",
+        "out-of-range-post-at",
+        "post-at-window-triple",
+        "post-at-window-reversed",
+        "post-at-not-a-list",
+        "zero-post-per-slot",
+        "negative-interval-days",
         "bad-scan-at",
         "empty-scan-at",
         "bad-blog-timeout",

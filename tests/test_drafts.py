@@ -8,6 +8,7 @@ import pytest
 
 from social_bot.drafts import (
     AI_DRAFT,
+    APPROVED,
     EXTRACTED,
     POSTED,
     REJECTED,
@@ -39,6 +40,20 @@ class TestState:
     def test_cannot_approve_from_extracted(self):
         with pytest.raises(ValueError):
             _draft().approve()
+
+    def test_approve_moves_to_approved(self):
+        draft = _draft()
+        draft.apply_rewrite(caption="c")
+        draft.approve()
+        assert draft.state == APPROVED
+        assert draft.can_publish()  # still publishable, now by the scheduler
+
+    def test_cannot_approve_a_posted_draft(self):
+        draft = _draft()
+        draft.apply_rewrite(caption="c")
+        draft.mark_posted(post_id="1_2")
+        with pytest.raises(ValueError):
+            draft.approve()
 
     def test_can_publish_after_rewrite(self):
         draft = _draft()
@@ -105,6 +120,27 @@ class TestPersistence:
         loaded = load_drafts(path)
         assert [d.id for d in loaded] == ["post-one", "post-two"]
         assert not (tmp_path / "queue.json.tmp").exists()
+
+    def test_cache_invalidates_on_save(self, tmp_path):
+        path = tmp_path / "queue.json"
+        save_drafts(path, [_draft(title="one")])
+        assert load_drafts(path)[0].title == "one"
+        save_drafts(path, [_draft(title="two")])
+        assert load_drafts(path)[0].title == "two"
+
+    def test_cache_reflects_external_rewrite(self, tmp_path):
+        path = tmp_path / "queue.json"
+        save_drafts(path, [_draft(title="one")])
+        load_drafts(path)  # warm the cache
+        path.write_text(json.dumps([_draft(title="two").to_dict()]), encoding="utf-8")
+        assert load_drafts(path)[0].title == "two"
+
+    def test_load_returns_independent_copies(self, tmp_path):
+        path = tmp_path / "queue.json"
+        save_drafts(path, [_draft(title="one")])
+        first = load_drafts(path)
+        first[0].title = "mutated"
+        assert load_drafts(path)[0].title == "one"
 
     def test_missing_file_is_empty(self, tmp_path):
         assert load_drafts(tmp_path / "nope.json") == []

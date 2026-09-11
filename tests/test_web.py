@@ -8,9 +8,17 @@ import pytest
 
 from social_bot.web import (
     _parse_hhmm,
+    _slot_time,
+    _slot_window,
+    _writable_dir,
+    apply_runtime_state,
     current_slot,
     image_jobs_view,
+    infer_last_runs,
+    live_view,
     next_run_at,
+    readiness_view,
+    runtime_state_snapshot,
     seconds_until,
     seconds_until_any,
 )
@@ -25,6 +33,41 @@ class TestParseHhmm:
     def test_invalid(self, bad):
         with pytest.raises(ValueError):
             _parse_hhmm(bad)
+
+
+class TestSlotWindows:
+    """A 'HH:MM-HH:MM' slot fires at a stable random time inside the window."""
+
+    DAY = dt.date(2026, 9, 10)
+
+    def test_slot_window_detects_ranges(self):
+        assert _slot_window("07:00") is None
+        assert _slot_window("19:30-21:00") == ((19, 30), (21, 0))
+
+    def test_fixed_time_unchanged(self):
+        assert _slot_time("07:00", self.DAY) == dt.datetime(2026, 9, 10, 7, 0)
+
+    def test_window_time_is_inside_and_on_the_day(self):
+        moment = _slot_time("19:30-21:00", self.DAY)
+        assert moment.date() == self.DAY
+        assert dt.datetime(2026, 9, 10, 19, 30) <= moment < dt.datetime(2026, 9, 10, 21, 0)
+
+    def test_window_time_is_stable_for_the_day(self):
+        assert _slot_time("19:30-21:00", self.DAY) == _slot_time("19:30-21:00", self.DAY)
+
+    def test_seconds_until_window_lands_in_the_window(self):
+        now = dt.datetime(2026, 9, 10, 12, 0)
+        target = now + dt.timedelta(seconds=seconds_until("19:30-21:00", now))
+        assert dt.datetime(2026, 9, 10, 19, 30) <= target < dt.datetime(2026, 9, 10, 21, 0)
+
+    def test_current_slot_uses_today_once_past_the_window(self):
+        slot = current_slot(["19:30-21:00"], dt.datetime(2026, 9, 10, 23, 0))
+        assert slot is not None and slot.startswith("2026-09-10 ")
+        assert "2026-09-10 19:30" <= slot < "2026-09-10 21:00"
+
+    def test_current_slot_uses_yesterday_before_the_window(self):
+        slot = current_slot(["19:30-21:00"], dt.datetime(2026, 9, 10, 12, 0))
+        assert slot is not None and slot.startswith("2026-09-09 ")
 
 
 class TestSecondsUntil:
@@ -68,6 +111,92 @@ class TestCurrentSlot:
     def test_before_first_uses_yesterday(self):
         now = dt.datetime(2026, 9, 10, 6, 0)
         assert current_slot(["07:00", "19:00"], now) == "2026-09-09 19:00"
+
+
+class TestReadiness:
+    def test_all_checks_pass(self):
+        payload, status = readiness_view({"a": True, "b": True})
+        assert status == 200
+        assert payload["status"] == "ready"
+        assert payload["failed"] == []
+
+    def test_any_failure_is_503(self):
+        payload, status = readiness_view({"a": True, "b": False})
+        assert status == 503
+        assert payload["status"] == "not ready"
+        assert payload["failed"] == ["b"]
+
+    def test_live_view_always_alive(self):
+        assert live_view() == {"status": "alive"}
+
+
+class TestWritableDir:
+    def test_existing_dir(self, tmp_path):
+        assert _writable_dir(tmp_path) is True
+
+    def test_missing_dir_walks_up_to_writable_parent(self, tmp_path):
+        assert _writable_dir(tmp_path / "nested" / "deep") is True
+
+
+class TestRuntimeState:
+    def test_round_trip(self):
+        state = {
+            "last_started": dt.datetime(2026, 9, 11, 7, 0, 5),
+            "last_finished": dt.datetime(2026, 9, 11, 7, 0, 30),
+            "last_ok": True,
+            "last_error": None,
+            "last_slot": "2026-09-11 07:00",
+            "scan_started": None,
+            "scan_finished": dt.datetime(2026, 9, 11, 6, 0, 12),
+            "scan_ok": False,
+            "scan_error": "boom",
+            "scan_slot": "2026-09-11 06:00",
+            "last_added": 3,
+        }
+        restored: dict = {}
+        apply_runtime_state(restored, runtime_state_snapshot(state))
+        assert restored["last_finished"] == dt.datetime(2026, 9, 11, 7, 0, 30)
+        assert restored["last_ok"] is True
+        assert restored["last_slot"] == "2026-09-11 07:00"
+        assert restored["scan_finished"] == dt.datetime(2026, 9, 11, 6, 0, 12)
+        assert restored["scan_ok"] is False
+        assert restored["scan_error"] == "boom"
+        assert restored["scan_started"] is None
+        assert restored["last_added"] == 3
+
+    def test_snapshot_of_fresh_state_is_all_none(self):
+        snap = runtime_state_snapshot({})
+        assert snap["refresh"]["last_finished"] is None
+        assert snap["refresh"]["ok"] is None
+        assert snap["scan"]["slot"] is None
+
+    def test_bad_payload_is_ignored(self):
+        state = {"last_ok": True}
+        apply_runtime_state(state, "not a dict")
+        assert state["last_ok"] is True
+
+
+class TestInferLastRuns:
+    @staticmethod
+    def _cfg(root):
+        return {
+            "feed": {"dir": str(root / "feed")},
+            "review": {"dir": str(root / "review"), "seen_name": "seen.json"},
+        }
+
+    def test_reads_artifact_mtimes(self, tmp_path):
+        (tmp_path / "feed").mkdir()
+        (tmp_path / "review").mkdir()
+        (tmp_path / "feed" / "latest.json").write_text("[]", encoding="utf-8")
+        (tmp_path / "review" / "seen.json").write_text("[]", encoding="utf-8")
+        out = infer_last_runs(self._cfg(tmp_path))
+        assert out["refresh"] is not None
+        assert out["scan"] is not None
+
+    def test_missing_artifacts_are_none(self, tmp_path):
+        out = infer_last_runs(self._cfg(tmp_path))
+        assert out["refresh"] is None
+        assert out["scan"] is None
 
 
 class TestImageJobsView:

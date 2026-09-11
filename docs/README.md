@@ -48,9 +48,11 @@ your task.
 2. **Orchestration is thin and explicit.** `refresh.py` and
    `draft_pipeline.py` wire pure code + I/O together and are the only places
    that read/write the `data/` files.
-3. **Nothing posts on a timer.** The `serve` scheduler only refreshes the feed
-   and scans sources into drafts. Publishing is always a human action on
-   `/review/{id}`. Do not wire `publish_draft` into a scheduler.
+3. **Nothing posts without a human approval.** The `serve` scheduler refreshes
+   the feed and scans sources into drafts; its posting loop (`--publish-at` /
+   `publish.post_at`) only ever posts drafts a person already approved on
+   `/review/{id}`. It never approves, rewrites, or touches `extracted`/`ai_draft`
+   drafts. `publish.post_at: []` disables timed posting entirely.
 4. **No new runtime dependency without cause.** Runtime is PyYAML only;
    HTTP is stdlib `urllib`; XML/HTML use `xml.etree` / `html.parser`.
    fastapi/uvicorn/python-multipart are the optional `[server]` extra.

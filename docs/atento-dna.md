@@ -313,6 +313,10 @@ dung. Ghép một format (§5.2) với một template — chọn format hợp nh
 *"Đọc đầy đủ tại comment"* ở cuối caption — **link bài sẽ tự động được đăng ở
 comment đầu tiên** bởi pipeline (Facebook không thích link trong caption, nên
 chuyển sang comment), rồi nhắc lại câu đó trong `cta`.
+
+- **Không để URL hay tên miền trong `caption`** — kể cả trong dòng ghi nguồn.
+  Facebook tự biến mọi chuỗi dạng `seangoedecke.com` thành link, làm giảm reach
+  đúng như khi dán link thẳng. Link bài chỉ nằm ở comment do pipeline đăng.
 - Tuyển sinh: *"Đăng ký theo nhóm hoặc giới thiệu học viên để nhận ưu đãi nhoaaaa. 😊"*
 - Seminar: *"Ai còn quên chưa đăng ký thì nhanh tay để shop gửi email confirm lun nào. 📩"*
 - Cộng đồng (nhẹ, gây tương tác lành mạnh): *"Các bạn làm bài tập về nhà chưa? 😈"*
@@ -327,23 +331,24 @@ Có **hai loại item**, và cách ghi nguồn khác nhau:
 - **`atento-blog`** — bài của chính Atento. Không cần ghi công; CTA giữ
   *"Đọc đầy đủ tại comment"*.
 - **Nguồn ngoài** — mọi `sources[]` khác (ví dụ blog của một tác giả khác).
-  Đây là bài của người khác, nên phải **ghi rõ tên tác giả và tên site** trong
-  `caption`, và đổi CTA thành *"Đọc bài gốc đầy đủ tại comment"* — bài gốc sẽ
-  được pipeline đăng ở comment đầu tiên.
+  Đây là bài của người khác, nên phải **ghi rõ tên tác giả** trong `caption`, và
+  đổi CTA thành *"Đọc bài gốc đầy đủ tại comment"* — bài gốc sẽ được pipeline
+  đăng ở comment đầu tiên. **Không kèm tên miền/site** (xem §7.2): tên miền tự
+  động thành link trong bài đăng.
 
 Đặt credit thành **một dòng riêng, ngay trước CTA**:
 
-> Nguồn: <Tác giả> — "<tiêu đề bài gốc>" (<tên site>).
+> Nguồn: <Tác giả> — "<tiêu đề bài gốc>".
 
 Ví dụ:
 
-> Nguồn: Sean Goedecke — "Automatically detecting AI text in my browser" (seangoedecke.com).
+> Nguồn: Sean Goedecke — "Automatically detecting AI text in my browser".
 
 - Xác định loại item qua trường `source` của draft (`atento-blog` = của Atento).
-- Lấy tên tác giả/site từ `url` + `title` của draft; **không bịa** tên người
-  hay tên site.
-- Không xác định được tác giả cá nhân thì ghi tên site (*"Nguồn: <tên site>"*)
-  — **không được bỏ** phần ghi nguồn.
+- Lấy tên tác giả từ `url` + `title` của draft; **không bịa** tên người.
+- Không xác định được tác giả cá nhân thì ghi **tên ấn phẩm viết như tên riêng**
+  (*"Nguồn: <tên ấn phẩm>"*) — **không được bỏ** phần ghi nguồn, nhưng cũng
+  không được viết tên miền.
 - Caption là phần **dẫn lại + bình luận**, không phải bản dịch nguyên văn của
   bài gốc; luôn giữ tên tác giả, không lược đi cho gọn.
 
@@ -357,7 +362,7 @@ Ví dụ:
 - Nêu trade-off; nói cả mặt được và mặt mất.
 - Kết bằng một câu chốt đáng nhớ.
 - Viết hoa/viết đúng tên khóa học, thời gian, học phí, địa điểm nếu có.
-- Ghi công **tác giả + tên site** khi bài lấy từ nguồn ngoài (§7.3).
+- Ghi công **tác giả** khi bài lấy từ nguồn ngoài (§7.3); không kèm tên miền.
 - Giữ đúng vai: caption là **bản nháp cho người duyệt**, không phải bản cuối bắt buộc.
 
 **Don't**
@@ -371,6 +376,8 @@ Ví dụ:
 - ❌ Emoji tràn lan trong bài technical; emoji trong câu quote chốt.
 - ❌ Dịch máy, câu dài, đoạn dày đặc.
 - ❌ Nhét hashtag vào giữa caption (để ở trường `hashtags`).
+- ❌ Để URL hay tên miền (`seangoedecke.com`) trong caption — kể cả ở dòng ghi
+  nguồn; Facebook tự biến nó thành link và giảm reach (§7.2).
 
 ---
 
@@ -380,7 +387,7 @@ Ví dụ:
 
 | Field | Kiểu | Ghi chú |
 |---|---|---|
-| `caption` | string | Nội dung chính, tiếng Việt, **không** chứa hashtag. Mở bằng masthead hợp bài (§4.5), rồi tới một format (§5); CTA và link bài (nếu có) nằm ở cuối — đây là phần duy nhất được đăng. |
+| `caption` | string | Nội dung chính, tiếng Việt, **không** chứa hashtag. Mở bằng masthead hợp bài (§4.5), rồi tới một format (§5); CTA nằm ở cuối — đây là phần duy nhất được đăng. **Không** chứa URL hay tên miền (link bài do pipeline đăng ở comment, §7.2). |
 | `hashtags` | array[string] | 2–4 tag, **kèm dấu `#`**, gồm `#Atento` + `#fromfoundationtoexcellence` + 1 topic. |
 | `cta` | string | Câu kêu gọi hành động — **chỉ để người duyệt đọc**, không được đăng; bản tương ứng phải có trong `caption`. |
 | `alt_text` | string | Mô tả ảnh bằng tiếng Việt, ngắn, phục vụ trợ năng. |
@@ -445,7 +452,8 @@ Ví dụ:
 - [ ] Có trade-off hoặc góc nhìn hai chiều (bài technical).
 - [ ] Đủ `#Atento` + `#fromfoundationtoexcellence` + 1 topic; hashtag nằm ở trường riêng.
 - [ ] CTA đúng loại item (tuyển sinh / seminar / blog / cộng đồng).
-- [ ] Nguồn ngoài: đã ghi tên **tác giả + site** và CTA dùng *"Đọc bài gốc"* (§7.3).
+- [ ] Nguồn ngoài: đã ghi tên **tác giả** (không kèm tên miền) và CTA dùng *"Đọc bài gốc"* (§7.3).
+- [ ] Caption **không** chứa URL hay tên miền (`seangoedecke.com`) — link bài ở comment (§7.2).
 - [ ] Không hype, không bịa, không engagement bait / clickbait.
 - [ ] Emoji đúng liều theo register.
 - [ ] `alt_text` và `commentary` đã điền (commentary nêu rõ format + mức drama).

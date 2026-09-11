@@ -64,6 +64,19 @@ DEFAULTS: dict[str, Any] = {
         "enabled": True,
         "destinations": ["facebook"],
         "max_per_day": 10,
+        # Timed posting: a list of container-local "HH:MM" slots. The serve
+        # scheduler posts *human-approved* drafts at each slot (oldest first,
+        # up to `post_per_slot`), never approving anything itself. Empty (the
+        # default) disables timed posting — approval then only posts on demand.
+        # An entry may also be a window "HH:MM-HH:MM": the scheduler then fires
+        # once that day at a random time inside it (stable per day across
+        # restarts), which reads less mechanically than a fixed slot.
+        "post_at": [],
+        "post_per_slot": 1,
+        # Minimum days between *public* posts (0 = no minimum). Enforced by
+        # publish_draft alongside the daily cap, so it paces the scheduler and a
+        # manual "Post now" alike; private (unpublished) sends don't count.
+        "interval_days": 0,
         # Real sends but unpublished (visible to page admins only): the Graph
         # API's way to test posting without going public. Private sends are
         # audited but don't consume drafts or the daily cap.
@@ -161,6 +174,17 @@ def resolve_token(token: str | None, cfg: dict) -> str:
     return token.strip()
 
 
+def _hhmm_minutes(value: str, field: str) -> int:
+    """Parse "HH:MM" into minutes since midnight; raise ValueError on anything else."""
+    hh, sep, mm = str(value).partition(":")
+    if not (sep and hh.isdigit() and mm.isdigit()):
+        raise ValueError(f"config: {field} has invalid time {value!r}")
+    hour, minute = int(hh), int(mm)
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise ValueError(f"config: {field} has invalid time {value!r}")
+    return hour * 60 + minute
+
+
 def validate(cfg: dict) -> None:
     """Raise ValueError on obviously unusable configuration."""
     graph = cfg.get("graph", {})
@@ -199,6 +223,25 @@ def validate(cfg: dict) -> None:
             raise ValueError(f"config: unknown publish destination {destination!r}")
     if int(publish.get("max_per_day", 10)) < 1:
         raise ValueError("config: publish.max_per_day must be >= 1")
+    if int(publish.get("post_per_slot", 1)) < 1:
+        raise ValueError("config: publish.post_per_slot must be >= 1")
+    if int(publish.get("interval_days", 0)) < 0:
+        raise ValueError("config: publish.interval_days must be >= 0")
+    post_at = publish.get("post_at", [])
+    if not isinstance(post_at, list):
+        raise ValueError("config: publish.post_at must be a list of HH:MM")
+    for slot in post_at:
+        text = str(slot)
+        if "-" in text:
+            start, _, end = text.partition("-")
+            if _hhmm_minutes(start, "publish.post_at") >= _hhmm_minutes(
+                end, "publish.post_at"
+            ):
+                raise ValueError(
+                    f"config: publish.post_at window {slot!r} must start before it ends"
+                )
+        else:
+            _hhmm_minutes(text, "publish.post_at")
 
     blog = cfg.get("blog", {})
     if float(blog.get("timeout_seconds", 30)) <= 0:
@@ -209,11 +252,7 @@ def validate(cfg: dict) -> None:
     if not isinstance(scan_at, list) or not scan_at:
         raise ValueError("config: blog.scan_at must be a non-empty list of HH:MM")
     for slot in scan_at:
-        hh, sep, mm = str(slot).partition(":")
-        if not (sep and hh.isdigit() and mm.isdigit()):
-            raise ValueError(f"config: blog.scan_at has invalid time {slot!r}")
-        if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
-            raise ValueError(f"config: blog.scan_at has invalid time {slot!r}")
+        _hhmm_minutes(str(slot), "blog.scan_at")
 
     image_gen = cfg.get("image_gen", {})
     if image_gen.get("provider") not in ("pollinations",):

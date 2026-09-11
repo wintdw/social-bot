@@ -179,6 +179,23 @@ def test_api_requires_token():
         api_from_config(cfg, token=None)
 
 
+class TestPageInfo:
+    def test_requests_id_and_name_for_the_configured_page(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+
+        def fake_get(path, params=None):
+            captured["path"] = path
+            captured["params"] = params
+            return {"id": "1148652808337860", "name": "Atento Education"}
+
+        monkeypatch.setattr(api, "get", fake_get)
+        info = api.page_info("1148652808337860")
+        assert captured["path"] == "1148652808337860"
+        assert captured["params"] == {"fields": "id,name"}
+        assert info["name"] == "Atento Education"
+
+
 class TestDebugTokenEndpoint:
     def test_targets_debug_token_with_input_token(self, monkeypatch):
         api = GraphApi(token="tok", api_version="v26.0")

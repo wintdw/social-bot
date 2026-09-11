@@ -52,8 +52,9 @@ _DETAIL_SCRIPT = """<script>
   form.addEventListener('submit', function (event) {
     if (form.dataset.submitting === '1') { event.preventDefault(); return; }
     var button = event.submitter;
-    var isDry = !!button && button.value === '1';
-    if (!isDry && form.dataset.private !== 'true') {
+    var isDry = !!button && button.name === 'dry_run';
+    var isApprove = !!button && button.name === 'approve';
+    if (!isDry && !isApprove && form.dataset.private !== 'true') {
       if (!window.confirm('Post this publicly to the Facebook Page?')) {
         event.preventDefault();
         return;
@@ -63,7 +64,8 @@ _DETAIL_SCRIPT = """<script>
     for (var i = 0; i < buttons.length; i++) {
       if (buttons[i] !== button) buttons[i].disabled = true;
     }
-    if (button && !isDry) button.textContent = 'Posting\u2026';
+    if (isApprove) button.textContent = 'Approving\u2026';
+    else if (button && !isDry) button.textContent = 'Posting\u2026';
   });
   var reject = document.getElementById('reject-form');
   if (reject) reject.addEventListener('submit', function (event) {
@@ -117,11 +119,17 @@ def _draft_card(draft: Draft) -> str:
     return "".join(parts)
 
 
-def _review_query(source: str = "", status: str = "") -> str:
-    """The /review URL for a (source, status) filter pair, omitting empties."""
-    query = urllib.parse.urlencode(
-        {key: value for key, value in (("source", source), ("status", status)) if value}
-    )
+def _review_query(
+    source: str = "", status: str = "", *, page: int = 0, per_page: int = 0
+) -> str:
+    """The /review URL for these filters, omitting empties and page defaults."""
+    params = {
+        "source": source,
+        "status": status,
+        "page": str(page) if page and page > 1 else "",
+        "per_page": str(per_page) if per_page else "",
+    }
+    query = urllib.parse.urlencode({key: value for key, value in params.items() if value})
     return f"/review?{query}" if query else "/review"
 
 
@@ -130,6 +138,38 @@ def _chip(label: str, href: str, *, active: bool, count: int | None = None) -> s
     cls = "chip chip-active" if active else "chip"
     num = f'<span class="count">{count}</span>' if count is not None else ""
     return f'<a class="{cls}" href="{html.escape(href)}"{current}>{html.escape(label)}{num}</a>'
+
+
+def _pagination_bar(page: dict, source: str, status: str) -> str:
+    """Prev/next pager for the review list, preserving the active filters."""
+    pages = int(page.get("pages") or 1)
+    if pages <= 1:
+        return ""
+    per_page = int(page.get("per_page") or 0)
+    current = int(page.get("page") or 1)
+    chips: list[str] = []
+    if page.get("has_prev"):
+        chips.append(
+            _chip(
+                "← Newer",
+                _review_query(source, status, page=current - 1, per_page=per_page),
+                active=False,
+            )
+        )
+    chips.append(f'<span class="chip chip-active">Page {current} / {pages}</span>')
+    if page.get("has_next"):
+        chips.append(
+            _chip(
+                "Older →",
+                _review_query(source, status, page=current + 1, per_page=per_page),
+                active=False,
+            )
+        )
+    return (
+        '<div class="filter-row"><span class="filter-label">Page</span>'
+        + "".join(chips)
+        + "</div>"
+    )
 
 
 def _filter_bar(
@@ -190,28 +230,34 @@ def render_drafts_html(
     private: bool = False,
     generated_at: dt.datetime | None = None,
     total: int | None = None,
+    matched: int | None = None,
     sources: list[tuple[str, int]] = (),
     statuses: list[tuple[str, int]] = (),
     selected_source: str = "",
     selected_status: str = "",
     source_total: int | None = None,
     status_total: int | None = None,
+    page: dict | None = None,
+    scheduling: bool = False,
 ) -> str:
     """Render the draft queue as a standalone HTML list page.
 
-    ``drafts`` is the (already filtered, newest-first) list to show. ``sources``
+    ``drafts`` is the (already filtered, newest-first) *page* to show. ``sources``
     and ``statuses`` are the ``(value, count)`` filter choices, computed by the
     caller against the *other* active filter, with ``source_total`` /
     ``status_total`` the count each row's "All" chip should show; ``total`` is
-    the unfiltered queue size, so the header can read "3 of 12 open draft(s)".
+    the unfiltered queue size and ``matched`` the count matching the filters
+    (defaults to the page size), so the header can read "3 of 12 open draft(s)".
+    ``page`` is ``draft_pipeline.paginate``'s metadata (prev/next pager) or None.
     """
     generated_at = generated_at or dt.datetime.now()
-    total = len(drafts) if total is None else total
+    matched = len(drafts) if matched is None else matched
+    total = matched if total is None else total
     source_total = total if source_total is None else source_total
     status_total = total if status_total is None else status_total
-    filtered = total != len(drafts)
+    filtered = total != matched
     count_text = (
-        f"{len(drafts)} of {total} open draft(s)" if filtered else f"{len(drafts)} open draft(s)"
+        f"{matched} of {total} open draft(s)" if filtered else f"{matched} open draft(s)"
     )
     header = (
         "<header>"
@@ -222,7 +268,15 @@ def render_drafts_html(
         '<button type="submit">Scan sources now</button>'
         '<span class="muted">fetch new items from the source feeds</span>'
         "</form>"
-        "</header>"
+        + (
+            '<form class="toolbar" method="post" action="/publish/run">'
+            '<button type="submit">Post approved now</button>'
+            '<span class="muted">post the approved queue without waiting for a slot</span>'
+            "</form>"
+            if scheduling
+            else ""
+        )
+        + "</header>"
     )
     filters = _filter_bar(
         sources,
@@ -232,6 +286,7 @@ def render_drafts_html(
         source_total,
         status_total,
     )
+    pager = _pagination_bar(page, selected_source, selected_status) if page else ""
     if not drafts:
         if filtered:
             body = (
@@ -248,7 +303,7 @@ def render_drafts_html(
 
     return layout(
         "social-bot — review",
-        header + filters + body,
+        header + filters + pager + body,
         active="review",
         message=message,
         private=private,
@@ -266,6 +321,8 @@ def render_draft_html(
     image_status: dict | None = None,
     generated_at: dt.datetime | None = None,
     next_id: str | None = None,
+    scheduling: bool = False,
+    next_post: str = "",
 ) -> str:
     """Render one draft: the post it will create, its source, and the actions."""
     title = html.escape(draft.title or draft.id)
@@ -362,11 +419,22 @@ def render_draft_html(
             f'<form id="image-form" method="post" action="{action}/image">'
             f'<button type="submit" class="btn-quiet">{label}</button></form>'
         )
+    # Timed posting: a human approves here, the serve scheduler posts later.
+    # The button submits the caption form too, so edits are saved with the
+    # approval instead of being silently dropped. Only an ai_draft can approve.
+    approve_button = ""
+    when = f"the next slot ({next_post})" if next_post else "the next slot"
+    if scheduling and draft.state == "ai_draft":
+        approve_button = (
+            '<button type="submit" form="publish-form" name="approve" value="1" '
+            'class="btn-quiet">Approve &amp; schedule</button>'
+        )
     action_bar = (
         '<div class="action-bar">'
         f'<button type="submit" form="publish-form" class="btn-primary">{primary}</button>'
         '<button type="submit" form="publish-form" name="dry_run" value="1" '
         'class="btn-quiet">Dry run</button>'
+        f"{approve_button}"
         f"{image_button}"
         f'<span class="muted">{target}</span>'
         '<span class="spacer"></span>'
@@ -374,6 +442,18 @@ def render_draft_html(
         '<button type="submit" class="btn-danger">Reject</button></form>'
         "</div>"
     )
+
+    schedule_note = ""
+    if scheduling and draft.state == "approved":
+        schedule_note = (
+            f'<p class="field-hint">Approved — waiting for {html.escape(when)}. '
+            "Use Post now to send it immediately.</p>"
+        )
+    elif scheduling and draft.state == "ai_draft":
+        schedule_note = (
+            f'<p class="field-hint">Approve &amp; schedule queues this for '
+            f"{html.escape(when)}; Post now sends it immediately.</p>"
+        )
 
     posted = ""
     if draft.post_id:
@@ -389,6 +469,7 @@ def render_draft_html(
         + form
         + preview
         + action_bar
+        + schedule_note
         + posted
         + "</main>"
     )

@@ -10,8 +10,10 @@ Graph API** — no browser anywhere. `whoami` validates the access token and
 lists manageable pages, `feed` fetches the page's own feed, `post` creates a
 status/link/photo post, `refresh` caches the feed, `blog scan` queues new items
 from source feeds as drafts, `blog image` generates AI images for queued
-drafts, `blog masthead` backfills the series masthead onto existing captions, and `serve` runs a long-lived feed dashboard + a draft review UI +
-scheduled refresh/scan. Skeleton cloned from the voz-bot/otofun-bot family
+drafts, `blog masthead` backfills the series masthead onto existing captions,
+`blog publish` posts the human-approved queue on demand, and `serve` runs a
+long-lived feed dashboard + a draft review UI + scheduled
+refresh/scan/posting. Skeleton cloned from the voz-bot/otofun-bot family
 (cli/config/tests/Docker layout); the crawl engine is replaced by `api.py`, a
 ~150-line urllib Graph client.
 
@@ -22,7 +24,7 @@ scheduled refresh/scan. Skeleton cloned from the voz-bot/otofun-bot family
 
 ```
 src/social_bot/
-├── cli.py            # entry point (social-bot): whoami, feed, post, refresh, blog scan/image, serve
+├── cli.py            # entry point (social-bot): whoami, feed, post, refresh, blog scan/image/masthead/publish, serve
 ├── config.py         # DEFAULTS + config.yaml + credentials.yaml; token resolution
 ├── api.py            # urllib Graph client: GET/POST + ApiError from FB payloads
 ├── feed.py           # pure parse/render of /{page}/feed JSON -> markdown
@@ -31,13 +33,13 @@ src/social_bot/
 ├── source.py         # pure parse of sitemap / RSS / Atom -> Item (no network)
 ├── source_api.py     # urllib source fetcher: retries + SourceError
 ├── drafts.py         # Draft model + state machine + atomic persistence
-├── draft_pipeline.py # scan sources -> drafts; generate images; receive rewrite; publish
+├── draft_pipeline.py # scan sources -> drafts; generate images; receive rewrite; publish (on demand + scheduled)
 ├── image_gen.py      # urllib Pollinations client: prompt build + image generation
 ├── publishers.py     # destination adapters: Facebook (real), LinkedIn (stub)
 ├── ui.py             # shared operator-UI chrome: stylesheet, nav, layout
 ├── draft_html.py     # pure render of the /review queue + a draft detail page
 ├── dashboard_html.py # pure render of / (dashboard), /publish, /status
-├── web.py            # FastAPI operator UI + JSON API + scan/refresh schedulers
+├── web.py            # FastAPI operator UI + JSON API + refresh/scan/posting schedulers
 └── __init__.py
 ```
 
@@ -47,11 +49,13 @@ Flow: `load_config` merges `config.yaml` and `credentials.yaml` over `DEFAULTS`
 `feed.py`; `post` sends `message` (+ optional `link`) to `/{page}/feed`, or
 `url` + `caption` to `/{page}/photos` when `--photo` is given.
 
-`serve` flow: the FastAPI `lifespan` starts two asyncio schedulers; the refresh
+`serve` flow: the FastAPI `lifespan` starts three asyncio schedulers; the refresh
 loop calls `refresh.py:refresh_feed` (via `asyncio.to_thread`) at the
 `--refresh-at` slots and on `POST /refresh`, writing
-`data/feed/latest.{json,html}`, while the scan loop calls
-`draft_pipeline.py:scan_sources` at the `--scan-at` slots. The operator UI is
+`data/feed/latest.{json,html}`, the scan loop calls
+`draft_pipeline.py:scan_sources` at the `--scan-at` slots, and the posting loop
+calls `draft_pipeline.py:publish_scheduled` at the `--publish-at` slots (from
+`publish.post_at`; empty disables it). The operator UI is
 four HTML pages sharing the `ui.py` nav: `/` (dashboard — controls, counts,
 scheduler state, and the cached feed rendered live from `latest.json`), `/review`
 (the queue + a detail page), `/publish` (the audit log), and `/status`.
@@ -68,9 +72,12 @@ demand for drafts already queued. An external
 rewriter — Command Code, applying the Atento DNA (`docs/atento-dna.md`, wired
 via `publish.dna_file`) — reads `GET /api/drafts` and
 POSTs the caption back to `/api/drafts/{id}/rewrite` (`AI_DRAFT`). A human
-approves on `/review/{id}`, which calls `publish_draft` and posts through a
-`publishers.py` adapter. **The scheduler only refreshes and scans; publishing
-happens solely on that explicit human approval — `serve` never auto-posts.**
+approves on `/review/{id}`, which either posts immediately through a
+`publishers.py` adapter or — when `publish.post_at` slots are configured —
+queues the draft as `APPROVED` for the posting scheduler. **The scan and
+refresh loops never post, and the posting loop never approves: it only posts
+drafts a human already approved. `publish.post_at: []` disables timed posting
+entirely, leaving approval as the only publish path.**
 
 ## Hard-won facts
 
@@ -157,6 +164,26 @@ happens solely on that explicit human approval — `serve` never auto-posts.**
   upload returns only the photo `id`, no `post_id`, because no feed story is
   created — so `permalink` is legitimately empty; don't treat that as an error.
   `publish.private: true` turns this on globally for testing the pipeline.
+- **Timed posting posts only what a human approved.** `publish.post_at` is a list
+  of container-local `HH:MM` slots (or window `HH:MM-HH:MM` entries — the
+  scheduler then fires once that day at a random time inside the window, seeded
+  by date+slot so it stays stable across restarts); `serve` runs a posting loop
+  (`draft_pipeline.publish_scheduled`) that, at each slot, posts the **oldest**
+  in-state `approved` drafts first (FIFO), up to `publish.post_per_slot` per
+  slot, `publish.max_per_day` overall, and only if `publish.interval_days` (a
+  minimum gap between public posts, 0 = off) has elapsed. It never rewrites,
+  approves, or
+  touches `extracted`/`ai_draft` drafts. `publish.post_at: []` (the built-in
+  default) disables the loop; the same drain is available on demand via
+  `POST /publish/run` and `blog publish`. Because a private send deliberately
+  leaves the draft in the queue, `publish_scheduled` also skips a draft already
+  sent privately that day (otherwise it would re-post every slot).
+- **The "next up" shown to operators must be the draft that actually posts.**
+  `draft_pipeline.scheduled_queue` (oldest `approved`, FIFO) is the one ordering
+  the poster drains; `status()` derives `publish.next_draft` from the same rule
+  (and `publish.approved` / `publish.interval_remaining`). The dashboard
+  **Next post** card, the `/status` **Timed posting** line, and `GET /api/status`
+  all render that, so don't re-derive "next" anywhere else.
 - `serve` needs the `[server]` extra (fastapi/uvicorn) and stays web-free
   otherwise. Docker: host port **8083** (voz-bot 8080, otofun-bot 8081,
   linkin-bot 8082), `./data` bind-mounted for the feed cache, and
@@ -173,13 +200,17 @@ happens solely on that explicit human approval — `serve` never auto-posts.**
 - `publish.private: true` (config.yaml) makes every approval a **real but
   unpublished** Graph post (`published=false`) — visible to page admins only.
   It is not a dry run. Private sends are audited with `"private": true`, leave
-  the draft in the review queue, and are excluded from `publish.max_per_day`;
+  the draft in the review queue, and are excluded from `publish.max_per_day` and
+  `publish.interval_days`;
   only a *public* send calls `mark_posted`. Flip it to `false` to post publicly.
 - API posts must stay within Facebook platform policies (no engagement bait,
   spam, inauthentic behavior). The content pipeline keeps its human review
   step: `scan_sources` only queues drafts, the AI rewrite only suggests a
-  caption, and nothing publishes except an explicit human approval on
-  `/review/{id}` (`publish_draft`). Never wire an approval into the scheduler.
+  caption, and nothing publishes except what a human approved on
+  `/review/{id}` — either immediately ("Post now") or by queueing it for a
+  scheduled slot ("Approve & schedule"). The posting scheduler may only post
+  drafts already in state `approved`; never wire an approval, a rewrite, or an
+  `ai_draft` into it.
 - Source scanning fetches only the configured official feeds (sitemap / RSS) —
   no HTML scraping. Stay within each site's robots.txt and rate limits; fetch
   politely (timeouts + bounded retries).
@@ -200,7 +231,8 @@ Tests cover config defaults/deep-merge/validation, token precedence,
 Graph URL/error-payload handling, feed timestamp parsing, markdown + HTML
 rendering, the refresh cache writer, source parsing (sitemap/RSS/Atom/JSON-LD
 index), the draft model/persistence, the publisher adapters, the
-scan/rewrite/publish pipeline (stubbed clients), image prompt building and
+scan/rewrite/publish pipeline (stubbed clients), the scheduled drain
+(`publish_scheduled`, `approve_draft`), image prompt building and
 URL construction (`image_gen.py`, stubbed `urlopen`), the operator pages
 (`ui.py` / `draft_html.py` / `dashboard_html.py`), and serve's pure scheduling
 helpers (no fastapi import needed). Live calls are manual: `whoami` first, then

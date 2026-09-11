@@ -48,9 +48,9 @@ sources:
     type: rss                 # Atom is parsed by the `rss` reader too
     url: https://martinfowler.com/feed.atom
     lang: en
-  - name: stripe-dev
+  - name: netflix-tech-blog
     type: rss
-    url: https://stripe.dev/blog/feed
+    url: https://netflixtechblog.com/feed
     lang: en
 
 # Review queue (/review): queue.json is the list awaiting review; seen.json
@@ -64,10 +64,24 @@ publish:
   enabled: true               # false is a global kill-switch (approve returns an error)
   destinations: [facebook]    # what an approval may post to (linkedin is a stub)
   max_per_day: 10             # hard cap on posts per day
+  # Timed posting: a human still approves each draft (Approve & schedule on
+  # /review/{id}); the serve scheduler then posts approved drafts at these
+  # container-local slots, oldest first. It never approves anything. An empty
+  # list disables timed posting — approval then only posts on demand.
+  #
+  # A slot may be a window "HH:MM-HH:MM": the scheduler fires once that day at a
+  # random time inside it, so posts don't land at a fixed clock minute. 19:30 to
+  # 21:00 Vietnam time (compose sets TZ=Asia/Ho_Chi_Minh).
+  post_at: ["19:30-21:00"]
+  post_per_slot: 1            # oldest approved drafts posted per slot
+  # Minimum days between *public* posts, alongside max_per_day. 2 = one post
+  # every other day: the scheduler still wakes daily, but skips until the gap
+  # has elapsed. Private (unpublished) test sends don't count toward it.
+  interval_days: 2
   # Private mode: every approve/post is a REAL Graph call but stays unpublished
   # (visible to page admins only). Private sends are audited, don't consume the
-  # draft, and don't count toward max_per_day — so this is the safe way to test
-  # the pipeline end to end. Set it back to true to test without going public.
+  # draft, and don't count toward max_per_day or interval_days — so this is the
+  # safe way to test the pipeline end to end. Set it back to false to go public.
   private: false
   # Series masthead on line 1 of every caption — the recognition cue a new
   # reader learns. The rewriter picks one of `choices` per post by content

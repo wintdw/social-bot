@@ -1,7 +1,8 @@
 # social-bot: one long-lived service = feed dashboard (FastAPI on :8083) +
-# the built-in refresh/scan schedules (container-local via TZ). No host cron
-# needed. Publishing is human-gated: the scheduler only refreshes the feed and
-# queues drafts; posts go out only when a human approves them on /review.
+# the built-in refresh/scan/posting schedules (container-local via TZ). No host
+# cron needed. Publishing stays human-gated: the scan loop only queues drafts,
+# and the posting loop (publish.post_at) only posts drafts a human approved on
+# /review. Set publish.post_at: [] in config.yaml to disable timed posting.
 #
 # DATA LIVES ON THE HOST. ./data is bind-mounted so the cached feed survives
 # container rebuilds/removal. The container runs as uid/gid 1000 (matching a

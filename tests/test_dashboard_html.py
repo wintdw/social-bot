@@ -25,6 +25,17 @@ STATS = {
         "private": False,
         "destinations": ["facebook"],
         "max_per_day": 10,
+        "post_at": ["09:00", "20:00"],
+        "post_per_slot": 1,
+        "interval_days": 2,
+        "interval_remaining": 0,
+        "approved": 2,
+        "next_draft": {
+            "id": "post-old",
+            "title": "Oldest approved draft",
+            "source": "atento-blog",
+            "has_image": True,
+        },
         "dna_file_set": True,
     },
 }
@@ -45,6 +56,15 @@ SCAN = {
     "last_finished": None,
     "schedule": ["06:00"],
     "next": "2026-09-11 06:00",
+}
+POST = {
+    "busy": False,
+    "ok": None,
+    "error": None,
+    "last_posted": None,
+    "last_finished": None,
+    "schedule": ["09:00", "20:00"],
+    "next": "2026-09-11 09:00",
 }
 
 RECORDS = [
@@ -119,6 +139,22 @@ class TestDashboard:
             private=True, generated_at=GENERATED,
         )
         assert "Private mode" in out
+
+    def test_shows_page_name_over_id(self):
+        out = render_dashboard_html(
+            items=[], stats=STATS, refresh=REFRESH, scan=SCAN,
+            page_id="1148652808337860", page_name="Atento Education",
+            generated_at=GENERATED,
+        )
+        assert "Page Atento Education" in out
+        assert "1148652808337860" not in out
+
+    def test_falls_back_to_page_id_without_name(self):
+        out = render_dashboard_html(
+            items=[], stats=STATS, refresh=REFRESH, scan=SCAN,
+            page_id="1148652808337860", generated_at=GENERATED,
+        )
+        assert "Page 1148652808337860" in out
 
 
 IMAGES = {
@@ -286,3 +322,105 @@ class TestStatus:
         )
         assert "<script>" not in out
         assert "&lt;script&gt;" in out
+
+
+class TestTimedPosting:
+    def test_dashboard_shows_next_post_and_control(self):
+        out = render_dashboard_html(
+            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, post=POST,
+            generated_at=GENERATED,
+        )
+        assert "Next post" in out
+        assert "2026-09-11 09:00" in out
+        assert "Timed posting" in out
+        assert 'action="/publish/run"' in out
+
+    def test_dashboard_hides_posting_without_a_schedule(self):
+        out = render_dashboard_html(
+            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
+        )
+        assert "Next post" not in out
+        assert "Timed posting" not in out
+        assert 'action="/publish/run"' not in out
+
+    def test_status_shows_schedule_and_settings(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, post=POST, generated_at=GENERATED
+        )
+        assert "Timed posting" in out
+        assert "post at" in out
+        assert "09:00, 20:00" in out
+        assert "min interval (days)" in out
+        assert ">2<" in out
+
+    def test_dashboard_next_post_card_names_the_draft(self):
+        out = render_dashboard_html(
+            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, post=POST,
+            generated_at=GENERATED,
+        )
+        assert "Next post" in out
+        assert "Oldest approved draft (post-old)" in out
+
+    def test_dashboard_posting_line_names_the_draft(self):
+        out = render_dashboard_html(
+            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, post=POST,
+            generated_at=GENERATED,
+        )
+        assert "next up Oldest approved draft (post-old)" in out
+
+    def test_dashboard_says_when_nothing_is_approved(self):
+        stats = {**STATS, "publish": {**STATS["publish"], "approved": 0, "next_draft": None}}
+        out = render_dashboard_html(
+            items=[], stats=stats, refresh=REFRESH, scan=SCAN, post=POST,
+            generated_at=GENERATED,
+        )
+        assert "nothing approved yet" in out
+
+    def test_dashboard_shows_the_interval_hold(self):
+        stats = {
+            **STATS,
+            "publish": {**STATS["publish"], "interval_remaining": 2},
+        }
+        out = render_dashboard_html(
+            items=[], stats=stats, refresh=REFRESH, scan=SCAN, post=POST,
+            generated_at=GENERATED,
+        )
+        assert "in 2 day(s)" in out
+
+    def test_status_lists_the_next_draft_and_interval(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, post=POST, generated_at=GENERATED
+        )
+        assert "next up" in out
+        assert "Oldest approved draft (post-old)" in out
+        assert "interval remaining (days)" in out
+
+    def test_posting_line_notes_the_interval_hold(self):
+        stats = {
+            **STATS,
+            "publish": {**STATS["publish"], "interval_remaining": 2},
+        }
+        out = render_status_html(
+            stats, refresh=REFRESH, scan=SCAN, post=POST, generated_at=GENERATED
+        )
+        assert "waits 2 day(s)" in out
+
+    def test_next_draft_title_is_escaped(self):
+        stats = {
+            **STATS,
+            "publish": {
+                **STATS["publish"],
+                "next_draft": {"id": "x", "title": "<script>alert(1)</script>"},
+            },
+        }
+        out = render_dashboard_html(
+            items=[], stats=stats, refresh=REFRESH, scan=SCAN, post=POST,
+            generated_at=GENERATED,
+        )
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out
+
+    def test_status_hides_posting_without_a_schedule(self):
+        out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
+        assert "Timed posting" not in out
+        assert "post at" in out  # the setting row still renders, as "—"

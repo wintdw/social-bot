@@ -6,15 +6,21 @@ posts, with an external AI doing the rewrite.
 ## Flow
 
 ```
- source feeds                 drafts/                       review                publish
- ────────────                 ──────                       ──────                ───────
- index|sitemap|rss  ─scan─▶  extracted  ─rewrite API─▶  ai_draft  ─human OK─▶  posted
- (source.py)      (draft_pipeline)      (draft_pipeline)           (publishers)
+ source feeds                 drafts/                       review                   publish
+ ────────────                 ──────                       ──────                   ───────
+ index|sitemap|rss  ─scan─▶  extracted  ─rewrite API─▶  ai_draft ──human "Post now"──▶ posted
+ (source.py)      (draft_pipeline)      (draft_pipeline)      │                        (publishers)
+                                                              │ human "Approve & schedule"
+                                                              ▼
+                                                          approved ─post_at slot / POST /publish/run─▶ posted
+                                                          (publish_scheduled)
 ```
 
 The rewrite is done by an **external agent** (Command Code applying the Atento
 DNA), not by this codebase. The bot only exposes the drafts and accepts the
-result back. The scheduler never publishes; only a human approve does.
+result back. The scan and refresh loops never publish. Publishing only ever
+happens for drafts a human approved: the posting scheduler (`publish.post_at`)
+picks *when* an approved draft goes out — it never approves anything itself.
 
 ## State machine (`drafts.py`)
 
@@ -22,12 +28,13 @@ result back. The scheduler never publishes; only a human approve does.
 |---|---|
 | `extracted` | Scanned from a source; awaiting a rewrite. |
 | `ai_draft` | A rewrite has been stored; awaiting human review. |
-| `approved` | Explicitly approved (optional — publishing is allowed from `ai_draft` too). |
+| `approved` | Human-approved. Queued for the next posting slot (`publish.post_at`) — or posted immediately if approved with "Post now". |
 | `posted` | Published; `post_id`/`permalink`/`posted_at` set and audited. |
 | `rejected` | Dismissed; not published. |
 
 Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approved
-→ posted` (`Draft.mark_posted`), any `→ rejected` (`Draft.reject`).
+→ posted` (`Draft.mark_posted`), `ai_draft → approved` (`Draft.approve`), any
+`→ rejected` (`Draft.reject`).
 `can_receive_rewrite()` = `extracted|ai_draft`; `can_publish()` = `ai_draft|approved`.
 
 ## Steps and where they live
@@ -49,8 +56,9 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   queued.
 
 ### 2. Rewrite (`draft_pipeline.receive_rewrite`)
-- The agent calls `GET /api/drafts` (returns open drafts + `publish.dna_file`
-  contents as `dna`) and `POST /api/drafts/{id}/rewrite` with
+- The agent calls `GET /api/drafts` (open drafts + `publish.dna_file` contents
+  as `dna`; paged — pass `limit`/`offset` and follow `next_offset`) and
+  `POST /api/drafts/{id}/rewrite` with
   `{caption, hashtags, cta, alt_text, commentary, image_prompt}`.
 - Stored via `Draft.apply_rewrite`; the draft becomes `ai_draft`.
 - `publish.mastheads` (config.yaml) sets the series masthead on line 1 of every
@@ -108,7 +116,8 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   existing image: image generation never blocks the pipeline.
 
 ### 3. Review (human)
-- `/review` lists open drafts **newest first by the item's own date**
+- `/review` lists open drafts (`extracted`/`ai_draft` plus `approved` ones still
+  waiting for a slot) **newest first by the item's own date**
   (`published`, falling back to when it was queued — a whole scan is queued
   within seconds, so `created_at` alone orders a batch arbitrarily), with
   **Source** and **Status** filter chips
@@ -116,17 +125,23 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   badge, the source, and the date it is sorted by (`published`, or `queued`
   when the source gave none).
   `/review/{id}` shows the extracted info, the
-  editable caption + hashtags, and Approve / Reject. Rendered by
+  editable caption + hashtags, and the actions. Rendered by
   `draft_html.render_draft_html`.
+- Actions: **Post now** (publish immediately) and **Dry run** always; **Reject**.
+  When `publish.post_at` is non-empty, **Approve & schedule** also appears — it
+  saves the caption edits and queues the draft as `approved` for the next slot
+  (an already-`approved` draft shows "waiting for the next slot" instead). The
+  review page also carries a **Post approved now** button (`POST /publish/run`).
 - `/publish` lists the audit log (what has actually been posted); `/status`
   shows the token's validity and expiry, sources, drafts by state, and publish
   settings. `/` is the dashboard with the refresh/scan controls. All four share
   the nav from `ui.py`.
 
 ### 4. Publish (`draft_pipeline.publish_draft`)
-- Triggered only by `POST /review/{id}/publish` (the review page), parsed in
-  `web.py`. Validates `can_publish()`, then selects a publisher per destination
-  from `publishers.PUBLISHERS`.
+- Triggered by `POST /review/{id}/publish` (the review page's **Post now**) or,
+  for approved drafts, by the posting scheduler / `POST /publish/run` /
+  `blog publish`. Parsed in `web.py`. Validates `can_publish()`, then selects a
+  publisher per destination from `publishers.PUBLISHERS`.
 - `FacebookPublisher` posts `Draft.post_text` (**caption + hashtags**) — a photo
   post via `create_photo_post` when `image` is set, else a link post via
   `create_post`.
@@ -137,6 +152,35 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   record in `published.jsonl` gets `"private": true`. Private sends don't count
   toward `publish.max_per_day`.
 - On a public success: `mark_posted`, append to `published.jsonl`, save.
+
+### 4b. Scheduled posting (`draft_pipeline.publish_scheduled`)
+- `serve` runs a posting loop at the `publish.post_at` slots (override with
+  `serve --publish-at HH:MM …`; `[]` disables it). A slot is a fixed `HH:MM` or
+  a window `HH:MM-HH:MM` — inside a window the loop fires once that day at a
+  random time (seeded by date+slot, so it is stable across restarts). At each
+  slot it drains the
+  **oldest** `approved` drafts first (FIFO), up to `publish.post_per_slot` per
+  slot and `publish.max_per_day` overall, calling `publish_draft` per draft — so
+  the kill-switch, cap, interval and destination adapters are shared with the
+  on-demand path. It never approves, rewrites, or touches `extracted`/`ai_draft`
+  drafts.
+- On demand: `POST /publish/run` (the dashboard/review "Post approved now"
+  button, content-negotiated like `/scan`) and `social-bot blog publish
+  [--limit N] [--dry-run]`.
+- `publish.interval_days` sets a minimum gap between **public** posts (e.g. `2`
+  = one post every other day); enforced in `publish_draft` next to the cap, so
+  it paces both the scheduler and "Post now". Private sends don't count. The
+  built-in default is `0` (no minimum).
+- The next send is knowable ahead of time: `status()` sets
+  `publish.next_draft` (the oldest `approved` — exactly what `publish_scheduled`
+  drains first), plus `publish.approved` and `publish.interval_remaining`. The
+  dashboard's **Next post** card and the `/status` **Timed posting** line render
+  that as time + which draft; `GET /api/status` exposes the same fields.
+- A daily-cap or interval `ValueError` stops the batch; a publisher/API error is
+  recorded
+  and the batch continues. Because a private send leaves the draft in the queue,
+  a draft already sent **privately** that day is skipped, so `publish.private`
+  can't re-post it at every slot.
 
 ## Data files (`review.dir` + `publish.dir`)
 
@@ -151,19 +195,22 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/` | Dashboard: controls, counts, scheduler state, cached feed. |
-| GET | `/review` | Review list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters. |
-| GET | `/review/{id}` | Review detail: editable caption, Dry run / Approve / Reject (+ Generate image when enabled). |
+| GET | `/review` | Review list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters; paged with `?page=<n>&per_page=<n>` (default 20, max 200). |
+| GET | `/review/{id}` | Review detail: editable caption, Post now / Dry run / Reject, plus Approve & schedule when `publish.post_at` is set (+ Generate image when enabled). |
 | GET | `/publish` | Publish audit log (public + private sends). |
 | GET | `/status` | Human-readable snapshot: token validity/expiry, schedules, sources. |
 | GET | `/drafts` | Redirect (307) to `/review` for old links. |
-| GET | `/health` | Liveness + last run info. |
-| GET | `/api/status` | Full pipeline snapshot (JSON). |
+| GET | `/health` | Liveness + last run info (JSON). |
+| GET | `/live` | Liveness probe: `{"status": "alive"}`, never touches state. |
+| GET | `/ready` | Readiness probe: 200 when serving, 503 while draining or if a scheduler died / state dir is unwritable. |
+| GET | `/api/status` | Full pipeline snapshot (JSON); `publish.next_draft` is the oldest approved draft the poster will send next. |
 | POST | `/refresh` | Refresh the feed now. |
 | POST | `/scan` | Scan sources now (JSON, or a 303 back to `/review` for browsers). |
-| POST | `/review/{id}/publish` | Publish (form; `dry_run=1` to preview). |
+| POST | `/publish/run` | Drain the approved queue now (JSON, or a 303 back to `/review`). |
+| POST | `/review/{id}/publish` | Publish (form; `dry_run=1` to preview). With `approve=1` it saves the edits and queues the draft as `approved` instead of posting. |
 | POST | `/review/{id}/reject` | Reject. |
 | POST | `/review/{id}/image` | Generate/regenerate a draft's image (form; redirects back). |
-| GET | `/api/drafts` | Open drafts + DNA, for the rewriter. |
+| GET | `/api/drafts` | Open drafts + DNA, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
 | POST | `/api/drafts/{id}/rewrite` | Store the rewrite. |
 | POST | `/api/drafts/{id}/image` | Generate an image for one draft (JSON), for the rewriter/operator. |
 
@@ -199,10 +246,15 @@ Swap the image endpoint/provider with `image_gen.base_url` + `image_gen.model`.
 
 ## Guardrails (do not weaken)
 
-- Scanning/refreshing runs on the scheduler; **publishing never does**.
-- `publish_draft` is only reached from the explicit approve action.
+- Scanning/refreshing runs on the scheduler; **posting never happens without a
+  human approval**. The posting scheduler only posts drafts already in state
+  `approved`; it must never approve, rewrite, or touch `extracted`/`ai_draft`.
+- `publish_draft` is reached from the explicit **Post now** action, the scheduled
+  drain, `POST /publish/run`, and `blog publish`. `publish.post_at: []` disables
+  timed posting entirely.
 - `publish.enabled: false` is a global kill-switch; `publish.max_per_day` caps
-  posts/day (enforced in `publish_draft`).
+  posts/day and `publish.interval_days` enforces a minimum gap between public
+  posts (both enforced in `publish_draft`).
 - `--dry-run` is available on every publish path (`post` command and the review
   page).
 - Only the configured official feeds are fetched — no HTML scraping of

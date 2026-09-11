@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import copy
+import datetime as dt
 import json
 
 import pytest
 
 from social_bot import draft_pipeline as pipeline
 from social_bot.config import DEFAULTS
-from social_bot.drafts import AI_DRAFT, EXTRACTED, POSTED, REJECTED, Draft
+from social_bot.drafts import AI_DRAFT, APPROVED, EXTRACTED, POSTED, REJECTED, Draft
 from social_bot.image_gen import DEFAULT_BASE_URL
+from social_bot.publishers import PublisherError
 from social_bot.source_api import SourceError
 
 SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
@@ -453,6 +455,68 @@ class TestQueueListing:
         assert pipeline.filter_drafts(drafts, source="nope") == []
 
 
+class TestPaginate:
+    def test_no_per_page_returns_everything(self):
+        page, info = pipeline.paginate([1, 2, 3], page=1, per_page=0)
+        assert page == [1, 2, 3]
+        assert info == {
+            "page": 1,
+            "per_page": 3,
+            "total": 3,
+            "pages": 1,
+            "has_prev": False,
+            "has_next": False,
+        }
+
+    def test_slices_into_pages(self):
+        page, info = pipeline.paginate(list(range(5)), page=2, per_page=2)
+        assert page == [2, 3]
+        assert (info["total"], info["pages"]) == (5, 3)
+        assert info["has_prev"] and info["has_next"]
+
+    def test_last_page_has_no_next(self):
+        page, info = pipeline.paginate(list(range(5)), page=3, per_page=2)
+        assert page == [4]
+        assert info["has_prev"] is True and info["has_next"] is False
+
+    def test_page_clamped_to_bounds(self):
+        page, info = pipeline.paginate(list(range(3)), page=99, per_page=2)
+        assert page == [2]
+        assert info["page"] == 2
+        assert pipeline.paginate(list(range(3)), page=0, per_page=2)[1]["page"] == 1
+
+    def test_empty_list_is_a_single_page(self):
+        page, info = pipeline.paginate([], page=1, per_page=10)
+        assert page == []
+        assert (info["total"], info["pages"]) == (0, 1)
+
+
+class TestFileCaches:
+    def test_published_log_cache_invalidates_on_append(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        assert pipeline.list_published(cfg) == []
+        pipeline.append_audit(pipeline.published_path(cfg), {"id": "a"})
+        assert [r["id"] for r in pipeline.list_published(cfg)] == ["a"]
+        pipeline.append_audit(pipeline.published_path(cfg), {"id": "b"})
+        assert [r["id"] for r in pipeline.list_published(cfg)] == ["a", "b"]
+
+    def test_seen_cache_is_not_shared_with_callers(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        pipeline.save_seen(cfg, {"a", "b"})
+        seen = pipeline.load_seen(cfg)
+        seen.add("c")
+        assert pipeline.load_seen(cfg) == {"a", "b"}
+
+    def test_dna_file_is_re_read_when_it_changes(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        dna = tmp_path / "dna.md"
+        dna.write_text("voice one", encoding="utf-8")
+        cfg["publish"]["dna_file"] = str(dna)
+        assert pipeline.dna_text(cfg) == "voice one"
+        dna.write_text("voice two", encoding="utf-8")
+        assert pipeline.dna_text(cfg) == "voice two"
+
+
 class TestPublish:
     def test_dry_run_does_not_publish(self, tmp_path, monkeypatch, capsys):
         cfg = _seed_draft(tmp_path, caption="Hello")
@@ -499,6 +563,45 @@ class TestPublish:
         )
         with pytest.raises(ValueError):
             pipeline.publish_draft(cfg, "post-two")
+
+    def _audit_public(self, cfg, days_ago=0):
+        day = (dt.datetime.now().astimezone().date() - dt.timedelta(days=days_ago)).isoformat()
+        pipeline.append_audit(
+            pipeline.published_path(cfg),
+            {"id": "older", "posted_at": f"{day}T10:00:00+00:00"},
+        )
+
+    def test_interval_days_blocks_a_post_too_soon(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        cfg["publish"]["interval_days"] = 2
+        self._audit_public(cfg, days_ago=0)
+        fake = FakePublisher()
+        monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: fake)
+        with pytest.raises(ValueError, match="interval"):
+            pipeline.publish_draft(cfg, "post-one")
+        assert fake.published == []
+
+    def test_interval_days_allows_a_post_after_the_gap(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        cfg["publish"]["interval_days"] = 2
+        self._audit_public(cfg, days_ago=2)
+        fake = FakePublisher()
+        monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: fake)
+        pipeline.publish_draft(cfg, "post-one")
+        assert fake.published == ["post-one"]
+
+    def test_interval_days_ignores_private_sends(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        cfg["publish"]["interval_days"] = 2
+        day = dt.datetime.now().astimezone().date().isoformat()
+        pipeline.append_audit(
+            pipeline.published_path(cfg),
+            {"id": "older", "posted_at": f"{day}T10:00:00+00:00", "private": True},
+        )
+        fake = FakePublisher()
+        monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: fake)
+        pipeline.publish_draft(cfg, "post-one")
+        assert fake.published == ["post-one"]
 
 
 class PrivatePublisher(FakePublisher):
@@ -561,6 +664,182 @@ class TestPublishPrivate:
         assert snapshot["publish"]["private"] is True
         assert snapshot["published"]["private"] == 1
         assert snapshot["drafts"]["open"] == 1  # still in the queue
+
+
+class TestPublishScheduled:
+    """The scheduler posts only human-approved drafts, oldest first."""
+
+    def _seed(self, tmp_path, drafts):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(pipeline.queue_path(cfg), drafts)
+        return cfg
+
+    def _stub(self, monkeypatch, publisher=None):
+        fake = publisher or FakePublisher()
+        monkeypatch.setattr(
+            pipeline, "publisher_for", lambda name, cfg, token=None: fake
+        )
+        return fake
+
+    def test_posts_only_approved_oldest_first(self, tmp_path, monkeypatch):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="new", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at="2026-09-10T00:00:00+00:00"),
+                Draft(id="old", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at="2026-09-01T00:00:00+00:00"),
+                Draft(id="ai", state=AI_DRAFT, caption="c", destinations=["facebook"]),
+                Draft(id="ext", state=EXTRACTED, destinations=["facebook"]),
+            ],
+        )
+        fake = self._stub(monkeypatch)
+        result = pipeline.publish_scheduled(cfg)
+        assert [entry["id"] for entry in result["posted"]] == ["old"]
+        assert fake.published == ["old"]
+        assert pipeline.get_draft(cfg, "old").state == POSTED
+        assert pipeline.get_draft(cfg, "ai").state == AI_DRAFT  # never auto-approved
+
+    def test_next_scheduled_matches_what_the_poster_sends(self, tmp_path, monkeypatch):
+        """The 'next up' the UI shows must be the draft that actually posts."""
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="new", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at="2026-09-10T00:00:00+00:00"),
+                Draft(id="old", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at="2026-09-01T00:00:00+00:00"),
+                Draft(id="ai", state=AI_DRAFT, caption="c", destinations=["facebook"]),
+            ],
+        )
+        upcoming = pipeline.next_scheduled(pipeline.load_drafts(pipeline.queue_path(cfg)))
+        assert upcoming is not None and upcoming.id == "old"
+        self._stub(monkeypatch)
+        result = pipeline.publish_scheduled(cfg)
+        assert result["posted"][0]["id"] == upcoming.id
+
+    def test_scheduled_queue_is_oldest_first(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="b", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at="2026-09-05T00:00:00+00:00"),
+                Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at="2026-09-01T00:00:00+00:00"),
+                Draft(id="ai", state=AI_DRAFT, caption="c", destinations=["facebook"]),
+            ],
+        )
+        assert [d.id for d in pipeline.scheduled_queue(cfg)] == ["a", "b"]
+
+    def test_post_per_slot_caps_the_batch(self, tmp_path, monkeypatch):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id=f"d{i}", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at=f"2026-09-0{i + 1}T00:00:00+00:00")
+                for i in range(3)
+            ],
+        )
+        cfg["publish"]["post_per_slot"] = 2
+        fake = self._stub(monkeypatch)
+        result = pipeline.publish_scheduled(cfg)
+        assert len(result["posted"]) == 2
+        assert fake.published == ["d0", "d1"]
+
+    def test_limit_overrides_post_per_slot(self, tmp_path, monkeypatch):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id=f"d{i}", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at=f"2026-09-0{i + 1}T00:00:00+00:00")
+                for i in range(3)
+            ],
+        )
+        cfg["publish"]["post_per_slot"] = 1
+        fake = self._stub(monkeypatch)
+        result = pipeline.publish_scheduled(cfg, limit=2)
+        assert len(result["posted"]) == 2
+        assert fake.published == ["d0", "d1"]
+
+    def test_stops_at_the_daily_cap(self, tmp_path, monkeypatch):
+        cfg = self._seed(
+            tmp_path, [Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"])]
+        )
+        cfg["publish"]["max_per_day"] = 1
+        cfg["publish"]["post_per_slot"] = 5
+        self._stub(monkeypatch)
+        pipeline.publish_scheduled(cfg)  # consumes the only slot
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg),
+            [Draft(id="b", state=APPROVED, caption="c", destinations=["facebook"])],
+        )
+        result = pipeline.publish_scheduled(cfg)
+        assert result["posted"] == []
+        assert result["skipped"][0]["id"] == "b"
+        assert "cap" in result["skipped"][0]["reason"]
+
+    def test_dry_run_sends_nothing(self, tmp_path, monkeypatch):
+        cfg = self._seed(
+            tmp_path, [Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"])]
+        )
+        fake = self._stub(monkeypatch)
+        pipeline.publish_scheduled(cfg, dry_run=True)
+        assert fake.published == []
+        assert pipeline.get_draft(cfg, "a").state == APPROVED
+
+    def test_private_send_is_not_repeated_today(self, tmp_path, monkeypatch):
+        """Private sends leave the draft approved: the poster must not loop on it."""
+        cfg = self._seed(
+            tmp_path, [Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"])]
+        )
+        fake = self._stub(monkeypatch, PrivatePublisher())
+        first = pipeline.publish_scheduled(cfg, limit=5)
+        assert len(first["posted"]) == 1
+        second = pipeline.publish_scheduled(cfg, limit=5)
+        assert second["posted"] == []
+        assert second["skipped"][0]["id"] == "a"
+        assert len(fake.published) == 1
+        assert pipeline.get_draft(cfg, "a").state == APPROVED
+
+    def test_publisher_error_is_recorded_not_raised(self, tmp_path, monkeypatch):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at="2026-09-01T00:00:00+00:00"),
+                Draft(id="b", state=APPROVED, caption="c", destinations=["facebook"],
+                      created_at="2026-09-02T00:00:00+00:00"),
+            ],
+        )
+        cfg["publish"]["post_per_slot"] = 5
+
+        class Boom(FakePublisher):
+            def publish(self, draft):
+                raise PublisherError("nope")
+
+        self._stub(monkeypatch, Boom())
+        result = pipeline.publish_scheduled(cfg)
+        assert result["posted"] == []
+        assert [entry["id"] for entry in result["errors"]] == ["a", "b"]
+
+    def test_disabled_publishing_raises(self, tmp_path):
+        cfg = self._seed(
+            tmp_path, [Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"])]
+        )
+        cfg["publish"]["enabled"] = False
+        with pytest.raises(ValueError):
+            pipeline.publish_scheduled(cfg)
+
+
+class TestApprove:
+    def test_approve_draft_queues_without_posting(self, tmp_path):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        assert pipeline.approve_draft(cfg, "post-one").state == APPROVED
+        assert pipeline.published_path(cfg).exists() is False
+
+    def test_approve_unknown_draft_raises(self, tmp_path):
+        with pytest.raises(ValueError):
+            pipeline.approve_draft(_cfg(tmp_path), "nope")
 
 
 class TestDna:
@@ -873,6 +1152,47 @@ class TestStatus:
         assert snapshot["sources"][0]["name"] == "atento-blog"
         assert snapshot["publish"]["destinations"] == ["facebook"]
         assert snapshot["publish"]["dna_file_set"] is False
+
+    def test_next_draft_is_the_oldest_approved(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg),
+            [
+                Draft(id="new", state=APPROVED, title="Newest", caption="c",
+                      destinations=["facebook"], published="2026-09-10T00:00:00+00:00"),
+                Draft(id="old", state=APPROVED, title="Oldest", caption="c",
+                      destinations=["facebook"], published="2026-09-01T00:00:00+00:00"),
+                Draft(id="drafting", state=AI_DRAFT, title="Not approved",
+                      destinations=["facebook"]),
+            ],
+        )
+        publish = pipeline.status(cfg)["publish"]
+        assert publish["approved"] == 2
+        assert publish["next_draft"]["id"] == "old"
+        assert publish["next_draft"]["title"] == "Oldest"
+        assert publish["next_draft"]["has_image"] is False
+
+    def test_next_draft_is_none_without_approvals(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg),
+            [Draft(id="drafting", state=AI_DRAFT, caption="c", destinations=["facebook"])],
+        )
+        publish = pipeline.status(cfg)["publish"]
+        assert publish["approved"] == 0
+        assert publish["next_draft"] is None
+
+    def test_next_draft_reports_an_existing_image(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg),
+            [
+                Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"],
+                      image="https://img/cover.jpg"),
+            ],
+        )
+        publish = pipeline.status(cfg)["publish"]
+        assert publish["next_draft"]["has_image"] is True
 
     def test_recent_posted(self, tmp_path, monkeypatch):
         cfg = _seed_draft(tmp_path, caption="Hello")
