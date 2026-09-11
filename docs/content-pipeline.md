@@ -53,6 +53,17 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   contents as `dna`) and `POST /api/drafts/{id}/rewrite` with
   `{caption, hashtags, cta, alt_text, commentary, image_prompt}`.
 - Stored via `Draft.apply_rewrite`; the draft becomes `ai_draft`.
+- `publish.mastheads` (config.yaml) sets the series masthead on line 1 of every
+  caption. The label is a **content judgment, not a source default**: the
+  rewriter picks one of `mastheads.choices` per post (DNA §4.5 — knowledge worth
+  learning → Học, merely informational → Đọc báo, a one-idea nugget → Mỗi ngày).
+  `mastheads.default` is only the fallback the pipeline prepends when the
+  rewriter omits one. It lands in `caption`, so the review preview, the
+  character count, and the posted text all include it.
+- Captions written **before** the mastheads were configured lack one;
+  `social-bot blog masthead` fills the default in (idempotent, never replaces a
+  chosen label, never touches the image). Re-label a misjudged post on
+  `/review/{id}`.
 
 ### 2b. Images (`image_gen.py`, optional)
 - Images are generated **after** the rewrite, on demand via
@@ -173,6 +184,7 @@ LinkedIn Community Management API approval.
 
 **Changing the caption text.** The published text is `Draft.post_text`
 (caption + hashtags). Keep hashtags in the `hashtags` field, not the caption.
+The series masthead is `publish.mastheads` (clear `choices` to disable).
 
 **Changing the brand voice.** Edit `docs/atento-dna.md` (the brief the rewriter
 reads) and keep `publish.dna_file` pointed at it; the contents ride along in

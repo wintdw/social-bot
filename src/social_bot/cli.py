@@ -10,7 +10,7 @@ import sys
 from . import __version__
 from .api import ApiError, api_from_config
 from .config import load_config, validate
-from .draft_pipeline import generate_images, scan_sources
+from .draft_pipeline import apply_masthead, generate_images, scan_sources
 from .feed import format_feed_md, parse_feed_response
 from .refresh import refresh_feed
 
@@ -93,6 +93,22 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p_image.add_argument("--json", action="store_true", help="print the summary as JSON")
     p_image.set_defaults(func=_cmd_blog_image)
+
+    p_masthead = blog_sub.add_parser(
+        "masthead",
+        help="fill publish.mastheads.default into draft captions that lack one (never posts)",
+    )
+    p_masthead.add_argument(
+        "--draft",
+        action="append",
+        metavar="ID",
+        help="only this draft id (repeatable; default: all open drafts)",
+    )
+    p_masthead.add_argument(
+        "--limit", type=int, default=None, help="max drafts to update"
+    )
+    p_masthead.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_masthead.set_defaults(func=_cmd_blog_masthead)
 
     p_serve = sub.add_parser(
         "serve", help="run the feed dashboard + draft review UI + scheduled refresh/scan"
@@ -305,6 +321,27 @@ def _cmd_blog_image(args: argparse.Namespace) -> int:
     for err in result["errors"]:
         print(f"  ! {err['source']}: {err['error']}", file=sys.stderr)
     return 1 if result["errors"] else 0
+
+
+def _cmd_blog_masthead(args: argparse.Namespace) -> int:
+    cfg = _load_config(args)
+    try:
+        result = apply_masthead(cfg, draft_ids=args.draft, limit=args.limit)
+    except ValueError as exc:
+        print(f"blog masthead: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(f"blog masthead: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(f"Filled masthead on {result['updated']} draft(s): {result['masthead']!r}")
+        for draft_id in result["ids"]:
+            print(f"  - {draft_id}")
+    return 0
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:

@@ -82,7 +82,7 @@ def _seed_draft(tmp_path, **kw):
     cfg = _cfg(tmp_path)
     draft = Draft(
         id=kw.get("id", "post-one"),
-        source="atento-blog",
+        source=kw.get("source", "atento-blog"),
         url="https://atento.vn/blog/post-one",
         title=kw.get("title", "Title"),
         destinations=["facebook"],
@@ -93,6 +93,20 @@ def _seed_draft(tmp_path, **kw):
         draft.caption = kw["caption"]
         draft.state = AI_DRAFT
     pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+    return cfg
+
+
+HOC = "[Học cùng Atento]"
+DOC_BAO = "[Đọc báo cùng Atento]"
+MOI_NGAY = "[Mỗi ngày 1 kiến thức mới]"
+
+
+def _set_mastheads(cfg, *, choices=(HOC, DOC_BAO, MOI_NGAY), default=DOC_BAO):
+    """Configure publish.mastheads on a test config."""
+    cfg["publish"]["mastheads"] = {
+        "choices": list(choices),
+        "default": default,
+    }
     return cfg
 
 
@@ -180,6 +194,29 @@ class TestRewriteIntake:
         assert draft.state == AI_DRAFT
         assert draft.caption == "Hello"
 
+    def test_receive_rewrite_prepends_the_default(self, tmp_path):
+        cfg = _set_mastheads(_seed_draft(tmp_path))
+        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "Hello"})
+        assert draft.caption == f"{DOC_BAO}\n\nHello"
+        assert draft.post_text.startswith(DOC_BAO)
+
+    def test_keeps_the_rewriters_chosen_masthead(self, tmp_path):
+        """A post the rewriter judged worth learning keeps [Học] whatever its source."""
+        cfg = _set_mastheads(_seed_draft(tmp_path, source="seangoedecke"))
+        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": f"{HOC}\n\nHello"})
+        assert draft.caption == f"{HOC}\n\nHello"
+
+    def test_receive_rewrite_does_not_double_the_masthead(self, tmp_path):
+        cfg = _set_mastheads(_seed_draft(tmp_path))
+        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": f"{DOC_BAO}\n\nHello"})
+        assert draft.caption == f"{DOC_BAO}\n\nHello"
+        assert draft.caption.count(DOC_BAO) == 1
+
+    def test_unset_mastheads_leave_the_caption_alone(self, tmp_path):
+        cfg = _seed_draft(tmp_path)  # DEFAULTS: no mastheads configured
+        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "Hello"})
+        assert draft.caption == "Hello"
+
     def test_edit_splits_hashtags(self, tmp_path):
         cfg = _seed_draft(tmp_path)
         pipeline.receive_rewrite(cfg, "post-one", {"caption": "c"})
@@ -194,6 +231,119 @@ class TestRewriteIntake:
     def test_unknown_draft_raises(self, tmp_path):
         with pytest.raises(ValueError):
             pipeline.receive_rewrite(_cfg(tmp_path), "nope", {"caption": "x"})
+
+
+class TestApplyMasthead:
+    def _seed(self, tmp_path, drafts, **mastheads):
+        cfg = _set_mastheads(_cfg(tmp_path), **mastheads)
+        pipeline.save_drafts(pipeline.queue_path(cfg), drafts)
+        return cfg
+
+    def test_fills_the_default_when_missing(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="own", source="atento-blog", state=AI_DRAFT, caption="Bài của Atento"),
+                Draft(id="ext", source="seangoedecke", state=AI_DRAFT, caption="Bài ngoài"),
+            ],
+        )
+        result = pipeline.apply_masthead(cfg)
+        assert result["updated"] == 2
+        assert result["masthead"] == DOC_BAO
+        assert pipeline.get_draft(cfg, "own").caption == f"{DOC_BAO}\n\nBài của Atento"
+        assert pipeline.get_draft(cfg, "ext").caption == f"{DOC_BAO}\n\nBài ngoài"
+
+    def test_never_replaces_a_chosen_label(self, tmp_path):
+        """A label is a content judgment — the backfill must not overrule it."""
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(
+                    id="ext",
+                    source="seangoedecke",
+                    state=AI_DRAFT,
+                    caption=f"{HOC}\n\nBài đáng học",
+                )
+            ],
+        )
+        assert pipeline.apply_masthead(cfg)["updated"] == 0
+        assert pipeline.get_draft(cfg, "ext").caption == f"{HOC}\n\nBài đáng học"
+
+    def test_is_idempotent(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [Draft(id="ext", source="seangoedecke", state=AI_DRAFT, caption="Hello")],
+        )
+        assert pipeline.apply_masthead(cfg)["updated"] == 1
+        assert pipeline.apply_masthead(cfg)["updated"] == 0
+        assert pipeline.get_draft(cfg, "ext").caption == f"{DOC_BAO}\n\nHello"
+
+    def test_never_touches_the_image(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(
+                    id="ext",
+                    source="seangoedecke",
+                    state=AI_DRAFT,
+                    caption="Hello",
+                    image="https://img/a.jpg",
+                )
+            ],
+        )
+        pipeline.apply_masthead(cfg)
+        assert pipeline.get_draft(cfg, "ext").image == "https://img/a.jpg"
+
+    def test_skips_captionless_and_closed_drafts(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="none", source="seangoedecke", state=AI_DRAFT, caption=""),
+                Draft(id="posted", source="seangoedecke", state=POSTED, caption="Old"),
+                Draft(id="ok", source="seangoedecke", state=AI_DRAFT, caption="Hello"),
+            ],
+        )
+        result = pipeline.apply_masthead(cfg)
+        assert result["ids"] == ["ok"]
+        assert pipeline.get_draft(cfg, "posted").caption == "Old"
+
+    def test_only_selected_drafts(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="a", source="seangoedecke", state=AI_DRAFT, caption="A"),
+                Draft(id="b", source="seangoedecke", state=AI_DRAFT, caption="B"),
+            ],
+        )
+        result = pipeline.apply_masthead(cfg, draft_ids=["b"])
+        assert result["ids"] == ["b"]
+        assert pipeline.get_draft(cfg, "a").caption == "A"
+
+    def test_unknown_draft_raises(self, tmp_path):
+        cfg = self._seed(
+            tmp_path, [Draft(id="a", source="seangoedecke", state=AI_DRAFT, caption="A")]
+        )
+        with pytest.raises(ValueError):
+            pipeline.apply_masthead(cfg, draft_ids=["nope"])
+
+    def test_limit_caps_updates(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id=f"d{i}", source="seangoedecke", state=AI_DRAFT, caption="x")
+                for i in range(3)
+            ],
+        )
+        assert pipeline.apply_masthead(cfg, limit=2)["updated"] == 2
+        assert pipeline.apply_masthead(cfg)["updated"] == 1
+
+    def test_unconfigured_raises(self, tmp_path):
+        cfg = _cfg(tmp_path)  # DEFAULTS: no mastheads
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg), [Draft(id="a", state=AI_DRAFT, caption="A")]
+        )
+        with pytest.raises(ValueError):
+            pipeline.apply_masthead(cfg)
 
 
 class TestQueueListing:
@@ -488,6 +638,30 @@ class TestGenerateImages:
         assert result["generated"] == 0
         assert calls == []
         assert pipeline.get_draft(cfg, "post-one").image == "https://blog/cover.jpg"
+
+    def test_does_not_clobber_a_write_that_lands_during_generation(
+        self, tmp_path, monkeypatch
+    ):
+        """Generation is slow: a rewrite arriving mid-call must survive the save.
+
+        serve fills a draft's image in the background while rewriter batches are
+        still posting, so writing back the queue loaded before the provider call
+        used to roll back every rewrite that landed in between.
+        """
+        cfg = self._cfg_with_gen(tmp_path)
+
+        def concurrent(*a, **kw):
+            other = pipeline.get_draft(cfg, "post-one")
+            other.caption = "landed while generating"
+            other.touch()
+            pipeline.save_drafts(pipeline.queue_path(cfg), [other])
+            return "https://gen/one.jpg"
+
+        monkeypatch.setattr(pipeline, "generate_for_draft", concurrent)
+        pipeline.generate_images(cfg)
+        fresh = pipeline.get_draft(cfg, "post-one")
+        assert fresh.caption == "landed while generating"
+        assert fresh.image == "https://gen/one.jpg"
 
     def test_failure_is_recorded_not_raised(self, tmp_path, monkeypatch):
         from social_bot.image_gen import ImageGenError

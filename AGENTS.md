@@ -10,7 +10,7 @@ Graph API** — no browser anywhere. `whoami` validates the access token and
 lists manageable pages, `feed` fetches the page's own feed, `post` creates a
 status/link/photo post, `refresh` caches the feed, `blog scan` queues new items
 from source feeds as drafts, `blog image` generates AI images for queued
-drafts, and `serve` runs a long-lived feed dashboard + a draft review UI +
+drafts, `blog masthead` backfills the series masthead onto existing captions, and `serve` runs a long-lived feed dashboard + a draft review UI +
 scheduled refresh/scan. Skeleton cloned from the voz-bot/otofun-bot family
 (cli/config/tests/Docker layout); the crawl engine is replaced by `api.py`, a
 ~150-line urllib Graph client.
@@ -137,6 +137,16 @@ happens solely on that explicit human approval — `serve` never auto-posts.**
 - The API key must ride in the `Authorization` header, **never the URL**: the
   URL is stored on the draft, shown in page HTML, and sent to Graph as the
   photo `url`. The old `?token=` form leaked it into all three.
+- **Every caption opens with a series masthead** from `publish.mastheads`
+  (config.yaml: `[Học cùng Atento]`, `[Đọc báo cùng Atento]`, `[Mỗi ngày 1 kiến
+  thức mới]`) on its own line, before the hook — the recognition cue a new reader
+  learns. The label is a **content judgment, not a source default** (DNA §4.5:
+  worth learning → Học, merely informational → Đọc báo, one-idea nugget → Mỗi
+  ngày). The rewriter picks one per post; `draft_pipeline.receive_rewrite` keeps
+  a valid choice and otherwise prepends `mastheads.default`. It lives in
+  `caption`, so the review preview, the character count, and the posted text all
+  agree (a human can still edit it out on `/review/{id}`). Captions that predate
+  the setting get the default filled in once with `blog masthead`.
 - Feed error bodies are JSON `{"error": {code, message, type, ...}}`;
   `ApiError.from_payload` decodes them, including non-JSON/HTTP-only failures.
 - Page post ids come back as `"<page_id>_<post_id>"`; the underscore form is

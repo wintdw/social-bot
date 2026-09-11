@@ -69,6 +69,18 @@ publish:
   # draft, and don't count toward max_per_day — so this is the safe way to test
   # the pipeline end to end. Set it back to true to test without going public.
   private: false
+  # Series masthead on line 1 of every caption — the recognition cue a new
+  # reader learns. The rewriter picks one of `choices` per post by content
+  # (DNA §4.5): knowledge worth learning -> Học, merely informational -> Đọc
+  # báo, a one-idea nugget -> Mỗi ngày. `default` is only the fallback the
+  # pipeline prepends when the rewriter omits a label. Clear `choices` to
+  # disable the masthead.
+  mastheads:
+    choices:
+      - "[Học cùng Atento]"            # kiến thức đáng học (khái niệm/kỹ năng/tư duy)
+      - "[Đọc báo cùng Atento]"        # chỉ để biết tin (tin tức/thông báo/tổng hợp)
+      - "[Mỗi ngày 1 kiến thức mới]"   # một mẩu kiến thức ngắn, một ý
+    default: "[Đọc báo cùng Atento]"
   dna_file: docs/atento-dna.md  # Atento brand-voice brief; surfaced via GET /api/drafts
   dir: data/publish           # publish audit log (/publish)
   log_name: published.jsonl   # append-only publish audit

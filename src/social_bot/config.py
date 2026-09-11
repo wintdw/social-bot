@@ -68,6 +68,12 @@ DEFAULTS: dict[str, Any] = {
         # API's way to test posting without going public. Private sends are
         # audited but don't consume drafts or the daily cap.
         "private": False,
+        # Series masthead on line 1 of every caption (see the DNA §4.5). The
+        # label is a content judgment, not a source default: the rewriter picks
+        # one of `choices` per post (worth learning vs just information);
+        # `default` is only the fallback the pipeline prepends when it doesn't.
+        # Empty `choices` + `default` disables the masthead.
+        "mastheads": {"choices": [], "default": ""},
         "dna_file": "",
         "dir": "data/publish",
         "log_name": "published.jsonl",

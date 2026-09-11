@@ -174,7 +174,7 @@ def generate_images(
         selected = selected[:limit]
 
     errors: list[dict] = []
-    updated: list[Draft] = []
+    generated: dict[str, str] = {}
     style = image_style_text(cfg)
     for draft in selected:
         url = _generate_image(
@@ -188,16 +188,23 @@ def generate_images(
         )
         if not url:
             continue
-        draft.image = url
-        draft.touch()
-        updated.append(draft)
+        generated[draft.id] = url
 
-    if updated:
-        save_drafts(queue_path(cfg), drafts)
+    if generated:
+        # Re-read before saving: generation is slow, and writing back the queue
+        # loaded above would discard anything that landed meanwhile (serve
+        # fills a draft's image in the background while rewrites are arriving).
+        fresh = load_drafts(queue_path(cfg))
+        for draft in fresh:
+            url = generated.get(draft.id)
+            if url:
+                draft.image = url
+                draft.touch()
+        save_drafts(queue_path(cfg), fresh)
     return {
-        "generated": len(updated),
+        "generated": len(generated),
         "candidates": len(selected),
-        "ids": [draft.id for draft in updated],
+        "ids": list(generated),
         "errors": errors,
     }
 
@@ -376,15 +383,59 @@ def scan_sources(
 # -- rewrite intake ------------------------------------------------------
 
 
+def masthead_config(cfg: dict) -> dict:
+    return dict(cfg.get("publish", {}).get("mastheads", {}) or {})
+
+
+def masthead_choices(cfg: dict) -> list[str]:
+    """The mastheads a rewriter may pick from (DNA §4.5)."""
+    raw = masthead_config(cfg).get("choices") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return [str(masthead).strip() for masthead in raw if str(masthead).strip()]
+
+
+def default_masthead(cfg: dict) -> str:
+    """The masthead the pipeline falls back to when the rewriter omits one."""
+    return str(masthead_config(cfg).get("default") or "").strip()
+
+
+def _leading_masthead(caption: str, choices: list[str]) -> str:
+    """The allowed masthead the caption already opens with, or ''."""
+    text = caption.lstrip()
+    for masthead in choices:
+        if text.startswith(masthead):
+            return masthead
+    return ""
+
+
+def _ensure_masthead(caption: str, fallback: str, choices: list[str]) -> str:
+    """Keep the rewriter's chosen masthead; prepend the fallback when absent.
+
+    The DNA asks the rewriter to pick a masthead per post (by content, not
+    source), so a caption that already opens with one of ``choices`` is left
+    exactly as written. This only fills the gap when the rewriter didn't.
+    """
+    fallback = fallback.strip()
+    if not fallback or _leading_masthead(caption, choices):
+        return caption
+    return f"{fallback}\n\n{caption}" if caption else fallback
+
+
 def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
     """Store the AI rewrite (from the Command Code agent) on a draft."""
+
+    choices = masthead_choices(cfg)
+    fallback = default_masthead(cfg)
 
     def mutate(draft: Draft) -> None:
         if not draft.can_receive_rewrite():
             raise ValueError(f"draft {draft_id!r} in state {draft.state!r} cannot be rewritten")
         hashtags = body.get("hashtags")
         draft.apply_rewrite(
-            caption=str(body.get("caption", "") or ""),
+            caption=_ensure_masthead(
+                str(body.get("caption", "") or ""), fallback, choices
+            ),
             hashtags=hashtags if hashtags is None else hashtags,
             cta=str(body.get("cta", "") or ""),
             alt_text=str(body.get("alt_text", "") or ""),
@@ -422,6 +473,56 @@ def _split_hashtags(text: str) -> list[str]:
     for sep in (",", "\n"):
         text = text.replace(sep, " ")
     return [tag for tag in text.split() if tag]
+
+
+def apply_masthead(
+    cfg: dict | None = None,
+    *,
+    draft_ids: list[str] | None = None,
+    states: tuple[str, ...] | None = OPEN_STATES,
+    limit: int | None = None,
+) -> dict:
+    """Fill the default masthead into captions that have none.
+
+    A safety net for captions written before/without a masthead. Normally the
+    rewriter picks one per post (DNA §4.5) and ``receive_rewrite`` keeps it —
+    and since that choice is a *content* judgment, this never replaces an
+    existing one; a wrong label is for a human to fix on ``/review/{id}``.
+    Idempotent, and never touches the image.
+    """
+    cfg = cfg or load_config()
+    fallback = default_masthead(cfg)
+    if not fallback:
+        raise ValueError("no default masthead: set publish.mastheads.default in config.yaml")
+    known = list(dict.fromkeys([fallback, *masthead_choices(cfg)]))
+    drafts = load_drafts(queue_path(cfg))
+    wanted = set(draft_ids) if draft_ids else None
+    if wanted:
+        missing = wanted - {draft.id for draft in drafts}
+        if missing:
+            raise ValueError(f"no draft {sorted(missing)[0]!r}")
+
+    updated: list[Draft] = []
+    for draft in drafts:
+        if wanted is not None and draft.id not in wanted:
+            continue
+        if states is not None and draft.state not in states:
+            continue
+        if not draft.caption or _leading_masthead(draft.caption, known):
+            continue
+        if limit is not None and len(updated) >= limit:
+            break
+        draft.caption = f"{fallback}\n\n{draft.caption}"
+        draft.touch()
+        updated.append(draft)
+
+    if updated:
+        save_drafts(queue_path(cfg), drafts)
+    return {
+        "masthead": fallback,
+        "updated": len(updated),
+        "ids": [draft.id for draft in updated],
+    }
 
 
 # -- publishing ----------------------------------------------------------

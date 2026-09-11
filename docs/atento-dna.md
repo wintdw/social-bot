@@ -154,6 +154,28 @@ bằng một **format** ở §5, chỉ khác liều drama.
 - Bullet: dùng `*` hoặc `-`; trong caption Facebook giữ dòng ngắn, dễ đọc trên mobile.
 - Câu chốt/định nghĩa có thể để dạng quote (xuống dòng, nổi bật).
 
+### 4.5 Masthead — chọn theo từng bài
+
+Mọi caption mở bằng **đúng một dòng masthead**, rồi một dòng trống, rồi mới tới
+hook (§5). Chọn nhãn theo **giá trị của bài**, không theo nguồn:
+
+| Masthead | Dùng khi |
+|---|---|
+| `[Học cùng Atento]` | Bài **đáng học**: giải thích một khái niệm, kỹ thuật, nguyên lý, kỹ năng hay cách tư duy — đọc xong người đọc *học được* một điều dùng được lâu dài. Bài của Atento mặc định ở nhóm này. |
+| `[Đọc báo cùng Atento]` | Bài **chỉ để biết tin**: tin tức, thông báo, sản phẩm mới, nhận định thị trường/công ty, tổng hợp link (Fragments…), dữ liệu khảo sát. |
+| `[Mỗi ngày 1 kiến thức mới]` | Một **mẩu kiến thức ngắn** đơn lẻ — một mẹo, một châm ngôn, một điều nhỏ đọc trong một phút. |
+
+Tiêu chí duy nhất: **đọc xong có học được gì không?**
+
+- Có → `[Học cùng Atento]`. Không, chỉ để nắm thông tin → `[Đọc báo cùng Atento]`.
+  Một mẩu ngắn một ý → `[Mỗi ngày 1 kiến thức mới]`.
+- **Không phải bài nguồn ngoài nào cũng là `Đọc báo`** — một bài kỹ thuật hay
+  essay từ nguồn ngoài vẫn là `Học` nếu nó dạy được điều gì đó. Và ngược lại,
+  một tin của chính Atento vẫn là `Đọc báo` nếu chỉ để biết tin.
+- Viết **nguyên văn** một trong ba nhãn — không đổi chữ, không thêm emoji, không
+  dịch, **không tự chế nhãn mới**; đúng **một** nhãn, ở **dòng đầu tiên**.
+- Pipeline có nhãn mặc định nếu bạn quên, nhưng **bạn phải tự chọn theo bài**.
+
 ---
 
 ## 5. Hooks & formats — chọn format hợp bài
@@ -358,7 +380,7 @@ Ví dụ:
 
 | Field | Kiểu | Ghi chú |
 |---|---|---|
-| `caption` | string | Nội dung chính, tiếng Việt, **không** chứa hashtag. Mở bằng một format (§5); CTA và link bài (nếu có) nằm ở cuối — đây là phần duy nhất được đăng. |
+| `caption` | string | Nội dung chính, tiếng Việt, **không** chứa hashtag. Mở bằng masthead hợp bài (§4.5), rồi tới một format (§5); CTA và link bài (nếu có) nằm ở cuối — đây là phần duy nhất được đăng. |
 | `hashtags` | array[string] | 2–4 tag, **kèm dấu `#`**, gồm `#Atento` + `#fromfoundationtoexcellence` + 1 topic. |
 | `cta` | string | Câu kêu gọi hành động — **chỉ để người duyệt đọc**, không được đăng; bản tương ứng phải có trong `caption`. |
 | `alt_text` | string | Mô tả ảnh bằng tiếng Việt, ngắn, phục vụ trợ năng. |
@@ -414,6 +436,7 @@ Ví dụ:
 
 ## 10. Checklist trước khi gửi rewrite
 
+- [ ] Caption mở bằng **một** masthead hợp bài (§4.5) ở dòng đầu, cách hook một dòng trống.
 - [ ] Đúng **một** register; xưng hô nhất quán.
 - [ ] Đã chọn **format** (§5.2) hợp nhất với bài — không gò cho khác bài trước.
 - [ ] Mở bài chạm trong 2 dòng đầu; luận điểm để ở cuối.

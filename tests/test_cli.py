@@ -200,6 +200,64 @@ class TestBlogImageCommand:
         assert "image generation is disabled" in capsys.readouterr().err
 
 
+class TestBlogMastheadArgs:
+    def test_flags_parse(self):
+        args = cli._parse_args(["blog", "masthead", "--draft", "a", "--limit", "2", "--json"])
+        assert args.draft == ["a"]
+        assert args.limit == 2
+        assert args.json is True
+        assert args.func is cli._cmd_blog_masthead
+
+    def test_defaults(self):
+        args = cli._parse_args(["blog", "masthead"])
+        assert args.draft is None
+        assert args.limit is None
+
+
+class TestBlogMastheadCommand:
+    DOC_BAO = "[Đọc báo cùng Atento]"
+
+    def _stub(self, monkeypatch, result):
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(cli, "apply_masthead", lambda cfg, **kw: result)
+
+    def test_reports_filled(self, monkeypatch, capsys):
+        self._stub(
+            monkeypatch,
+            {"updated": 2, "ids": ["a", "b"], "masthead": self.DOC_BAO},
+        )
+        assert cli._cmd_blog_masthead(cli._parse_args(["blog", "masthead"])) == 0
+        out = capsys.readouterr().out
+        assert "Filled masthead on 2 draft(s)" in out and self.DOC_BAO in out
+
+    def test_flags_are_passed_through(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(
+            cli,
+            "apply_masthead",
+            lambda cfg, **kw: captured.update(kw)
+            or {"updated": 0, "ids": [], "masthead": ""},
+        )
+        cli._cmd_blog_masthead(cli._parse_args(["blog", "masthead", "--draft", "a", "--limit", "5"]))
+        assert captured == {"draft_ids": ["a"], "limit": 5}
+
+    def test_json_mode(self, monkeypatch, capsys):
+        self._stub(monkeypatch, {"updated": 0, "ids": [], "masthead": ""})
+        assert cli._cmd_blog_masthead(cli._parse_args(["blog", "masthead", "--json"])) == 0
+        assert json.loads(capsys.readouterr().out)["updated"] == 0
+
+    def test_unconfigured_returns_usage_error(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+
+        def boom(cfg, **kw):
+            raise ValueError("no default masthead: set publish.mastheads.default in config.yaml")
+
+        monkeypatch.setattr(cli, "apply_masthead", boom)
+        assert cli._cmd_blog_masthead(cli._parse_args(["blog", "masthead"])) == 2
+        assert "no default masthead" in capsys.readouterr().err
+
+
 class TestBlogScanCommand:
     def _stub(self, monkeypatch, result):
         monkeypatch.setattr(cli, "_load_config", lambda args: {})
