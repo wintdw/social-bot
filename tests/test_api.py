@@ -144,6 +144,23 @@ class TestCreatePost:
         assert captured == {"message": "hello", "published": "false"}
 
 
+class TestAddComment:
+    def test_comment_targets_post_comments_endpoint(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+
+        def fake_post(path, params=None):
+            captured["path"] = path
+            captured["params"] = params
+            return {"id": "456"}
+
+        monkeypatch.setattr(api, "post", fake_post)
+        resp = api.add_comment("123_9", "https://atento.vn/blog/p")
+        assert captured["path"] == "123_9/comments"
+        assert captured["params"] == {"message": "https://atento.vn/blog/p"}
+        assert resp["id"] == "456"
+
+
 def test_api_requires_token():
     from social_bot.api import api_from_config
     from social_bot.config import DEFAULTS, load_config

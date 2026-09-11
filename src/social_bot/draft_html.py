@@ -13,6 +13,57 @@ import html
 from .drafts import Draft
 from .ui import badge, layout
 
+# Client-side enhancement for the detail page: keeps the post preview and the
+# character count in sync while editing, blocks a double submit, and asks for
+# confirmation before a public post. The form still works without it.
+_DETAIL_SCRIPT = """<script>
+(function () {
+  var form = document.getElementById('publish-form');
+  if (!form) return;
+  var caption = document.getElementById('caption');
+  var tags = document.getElementById('hashtags');
+  var body = document.getElementById('preview-body');
+  var tagLine = document.getElementById('preview-tags');
+  var count = document.getElementById('caption-count');
+  var buttons = document.querySelectorAll('button[form="publish-form"]');
+  function normTags() {
+    return tags.value.trim().replace(/[,\\n]+/g, ' ').replace(/\\s+/g, ' ');
+  }
+  function sync() {
+    var text = caption.value;
+    var tagText = normTags();
+    body.textContent = text;
+    tagLine.textContent = tagText;
+    count.textContent = String(text.length + (tagText ? 2 + tagText.length : 0));
+  }
+  caption.addEventListener('input', sync);
+  tags.addEventListener('input', sync);
+  sync();
+  form.addEventListener('submit', function (event) {
+    if (form.dataset.submitting === '1') { event.preventDefault(); return; }
+    var button = event.submitter;
+    var isDry = !!button && button.value === '1';
+    if (!isDry && form.dataset.private !== 'true') {
+      if (!window.confirm('Post this publicly to the Facebook Page?')) {
+        event.preventDefault();
+        return;
+      }
+    }
+    form.dataset.submitting = '1';
+    for (var i = 0; i < buttons.length; i++) {
+      if (buttons[i] !== button) buttons[i].disabled = true;
+    }
+    if (button && !isDry) button.textContent = 'Posting\u2026';
+  });
+  var reject = document.getElementById('reject-form');
+  if (reject) reject.addEventListener('submit', function (event) {
+    if (!window.confirm('Reject this draft? It leaves the review queue.')) {
+      event.preventDefault();
+    }
+  });
+})();
+</script>"""
+
 
 def render_drafts_html(
     drafts: list[Draft],
@@ -69,58 +120,149 @@ def render_draft_html(
     *,
     dna: str = "",
     message: str = "",
+    message_kind: str = "info",
     private: bool = False,
     generated_at: dt.datetime | None = None,
+    next_id: str | None = None,
 ) -> str:
-    """Render one draft with an editable caption and approve/reject actions."""
-    info: list[str] = [
-        "<header>",
-        f"<h1>{html.escape(draft.title or draft.id)}</h1>",
-        f'<div class="meta">{badge(draft.state)} · '
-        f"{html.escape(draft.source)} · {html.escape(draft.published or '')}</div>",
-        "</header>",
-    ]
-    info.append(f'<p><a href="{html.escape(draft.url)}">{html.escape(draft.url)}</a></p>')
-    if draft.image:
-        info.append(
-            f'<p><img class="preview" src="{html.escape(draft.image)}" '
-            f'alt="{html.escape(draft.alt_text or draft.title)}"></p>'
+    """Render one draft: the post it will create, its source, and the actions."""
+    title = html.escape(draft.title or draft.id)
+    meta_bits = [badge(draft.state)]
+    if draft.source:
+        meta_bits.append(f"<span>{html.escape(draft.source)}</span>")
+    if draft.published:
+        meta_bits.append(f"<span>· {html.escape(draft.published)}</span>")
+    next_link = ""
+    if next_id:
+        next_link = (
+            f'<a class="next" href="/review/{html.escape(next_id)}">Next draft →</a>'
         )
-    if draft.excerpt:
-        info.append(f'<p class="excerpt">{html.escape(draft.excerpt)}</p>')
-
-    caption = html.escape(draft.caption or "")
-    hashtags = html.escape(" ".join(draft.hashtags))
-    action = html.escape(f"/review/{draft.id}")
-    body = [
-        f'<form method="post" action="{action}/publish">',
-        '<div class="field"><label for="caption">Caption (editable — this is what gets posted)</label>',
-        f'<textarea id="caption" name="caption">{caption}</textarea></div>',
-        '<div class="field"><label for="hashtags">Hashtags (comma or space separated)</label>',
-        f'<input type="text" id="hashtags" name="hashtags" value="{hashtags}"></div>',
-        '<div class="field"><button type="submit" name="dry_run" value="1">Dry run</button>',
-        '<button type="submit">Approve &amp; post</button></div>',
-        "</form>",
-        f'<form method="post" action="{action}/reject"><button type="submit">Reject</button></form>',
-    ]
-    if draft.post_id:
-        permalink = html.escape(draft.permalink or draft.post_id)
-        body.append(f'<p class="muted">Posted: {permalink}</p>')
-    if dna:
-        body.append(
-            '<details class="field"><summary>Atento DNA (brand voice)</summary>'
-            f"<pre class='muted'>{html.escape(dna)}</pre></details>"
-        )
-    body.append(
-        '<p class="muted">Publishing is human-gated: only the buttons above send anything.</p>'
+    header = (
+        "<header>"
+        '<a class="back" href="/review">← Review queue</a>'
+        f"<h1>{title}</h1>"
+        f'<div class="meta head-meta">{"".join(meta_bits)}{next_link}</div>'
+        "</header>"
     )
 
+    media = ""
+    if draft.image:
+        alt = html.escape(draft.alt_text or draft.title or "Post image")
+        media = (
+            '<figure class="post-media">'
+            f'<img src="{html.escape(draft.image)}" alt="{alt}" loading="lazy">'
+            "</figure>"
+        )
+
+    caption = html.escape(draft.caption or "")
+    tags = html.escape(" ".join(draft.hashtags))
+    action = html.escape(f"/review/{draft.id}")
+
+    form = (
+        f'<form id="publish-form" class="form-block" method="post" action="{action}/publish"'
+        f' data-private="{"true" if private else "false"}">'
+        '<div class="field"><label for="caption">Caption</label>'
+        f'<textarea id="caption" name="caption" lang="vi">{caption}</textarea>'
+        '<div class="field-hint"><span id="caption-count">'
+        f"{len(draft.post_text)}</span> characters posted (caption + hashtags)"
+        "</div></div>"
+        '<div class="field"><label for="hashtags">Hashtags</label>'
+        f'<input type="text" id="hashtags" name="hashtags" value="{tags}">'
+        '<div class="field-hint">Appended to the caption when posted. '
+        "Space or comma separated.</div></div>"
+        "</form>"
+    )
+
+    preview = (
+        '<div class="fb-preview">'
+        f'<div class="body" id="preview-body" lang="vi">{caption}</div>'
+        f'<div class="tags" id="preview-tags">{tags}</div>'
+        "</div>"
+        '<p class="field-hint">Preview of the exact text that posts. Facebook shows '
+        "roughly the first two lines before “See more”.</p>"
+    )
+
+    primary = "Publish privately" if private else "Post publicly"
+    target = (
+        "Private mode: posted unpublished, visible to page admins only."
+        if private
+        else "This publishes to the Facebook Page."
+    )
+    action_bar = (
+        '<div class="action-bar">'
+        f'<button type="submit" form="publish-form" class="btn-primary">{primary}</button>'
+        '<button type="submit" form="publish-form" name="dry_run" value="1" '
+        'class="btn-quiet">Dry run</button>'
+        f'<span class="muted">{target}</span>'
+        '<span class="spacer"></span>'
+        f'<form id="reject-form" method="post" action="{action}/reject">'
+        '<button type="submit" class="btn-danger">Reject</button></form>'
+        "</div>"
+    )
+
+    posted = ""
+    if draft.post_id:
+        posted = (
+            f'<p class="muted">Already posted: '
+            f"{html.escape(draft.permalink or draft.post_id)}</p>"
+        )
+
+    post_panel = (
+        '<main class="panel">'
+        + media
+        + form
+        + preview
+        + action_bar
+        + posted
+        + "</main>"
+    )
+
+    rail_parts = ["<h2>Source</h2>"]
+    if draft.url:
+        rail_parts.append(
+            f'<p class="source-link"><a href="{html.escape(draft.url)}">'
+            f"{html.escape(draft.url)}</a></p>"
+        )
+    if draft.published:
+        rail_parts.append(f'<p class="meta">Published {html.escape(draft.published)}</p>')
+    if draft.excerpt:
+        rail_parts.append(f'<p class="excerpt">{html.escape(draft.excerpt)}</p>')
+    if draft.commentary:
+        rail_parts.append(f"<h3>Rewriter notes</h3><p>{html.escape(draft.commentary)}</p>")
+    if draft.cta:
+        rail_parts.append(
+            f'<h3>CTA (review only, not posted)</h3>'
+            f'<p class="muted">{html.escape(draft.cta)}</p>'
+        )
+    if draft.alt_text:
+        rail_parts.append(
+            f"<h3>Image alt text</h3><p class=\"muted\">{html.escape(draft.alt_text)}</p>"
+        )
+    rail = '<aside class="panel rail">' + "".join(rail_parts) + "</aside>"
+
+    tail: list[str] = []
+    if dna:
+        tail.append(
+            '<details class="dna"><summary>Atento DNA: brand voice</summary>'
+            f"<pre>{html.escape(dna)}</pre></details>"
+        )
+    tail.append(
+        '<p class="muted">Publishing is human-gated: only the buttons here send anything.</p>'
+    )
+
+    body = (
+        header
+        + f'<div class="detail-grid">{post_panel}{rail}</div>'
+        + "".join(tail)
+        + _DETAIL_SCRIPT
+    )
     return layout(
         f"social-bot — {draft.id}",
-        "".join(info) + "\n" + "".join(body),
+        body,
         active="review",
         message=message,
         private=private,
+        kind=message_kind,
     )
 
 

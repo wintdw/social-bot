@@ -8,8 +8,15 @@ posting needs LinkedIn Community Management API approval).
 
 from __future__ import annotations
 
+import time
+
 from .api import ApiError, api_from_config
 from .drafts import Draft
+
+# Seconds to wait before commenting on a freshly created post. Facebook's
+# Graph API can have a brief propagation delay before the post is available
+# for commenting.
+COMMENT_DELAY_SECONDS = 3
 
 
 class PublisherError(Exception):
@@ -60,6 +67,18 @@ class FacebookPublisher:
             )
         post_id = str(resp.get("post_id") or resp.get("id") or "")
         permalink = f"https://www.facebook.com/{post_id}" if "_" in post_id else ""
+
+        # Post the link as the first comment to avoid Facebook's algorithm
+        # deprioritizing posts with external URLs in the caption. Wait a few
+        # seconds first — the post may not be immediately available for
+        # commenting due to Graph API propagation delay.
+        if draft.url and post_id and "_" in post_id:
+            time.sleep(COMMENT_DELAY_SECONDS)
+            try:
+                self.api.add_comment(post_id, draft.url)
+            except ApiError:
+                pass  # Comment failure shouldn't fail the publish
+
         return {
             "destination": self.name,
             "post_id": post_id,

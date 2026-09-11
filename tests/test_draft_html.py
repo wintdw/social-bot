@@ -50,10 +50,45 @@ class TestRenderDraftHtml:
         draft = Draft(id="p", title="T", url="https://x/blog/p", caption="Body <x>",
                       state="ai_draft")
         out = render_draft_html(draft, dna="Atento voice", generated_at=GENERATED)
-        assert '<textarea id="caption" name="caption">Body &lt;x&gt;</textarea>' in out
+        assert 'id="caption"' in out and 'name="caption"' in out
+        assert 'lang="vi"' in out
+        assert ">Body &lt;x&gt;</textarea>" in out
         assert "/review/p/publish" in out
         assert "/review/p/reject" in out
         assert "Atento voice" in out
+
+    def test_shows_the_composed_post_text(self):
+        draft = Draft(id="p", title="T", caption="Hello", hashtags=["#Atento"],
+                      state="ai_draft")
+        out = render_draft_html(draft)
+        assert 'id="preview-body"' in out and 'id="preview-tags"' in out
+        assert 'id="caption-count"' in out
+        assert "#Atento" in out
+
+    def test_public_action_is_primary_and_labelled(self):
+        out = render_draft_html(Draft(id="p", title="T", caption="Hi"))
+        assert 'class="btn-primary"' in out
+        assert "Post publicly" in out
+        assert "This publishes to the Facebook Page." in out
+        assert 'data-private="false"' in out
+
+    def test_private_action_is_labelled_private(self):
+        out = render_draft_html(Draft(id="p", title="T", caption="Hi"), private=True)
+        assert "Publish privately" in out
+        assert "visible to page admins only." in out
+        assert 'data-private="true"' in out
+
+    def test_next_draft_link(self):
+        out = render_draft_html(Draft(id="p", title="T"), next_id="other")
+        assert 'href="/review/other"' in out
+
+    def test_state_badge_is_colour_coded(self):
+        out = render_draft_html(Draft(id="p", title="T", state="ai_draft"))
+        assert 'class="badge badge-ai-draft"' in out
+
+    def test_message_kind_is_applied(self):
+        out = render_draft_html(Draft(id="p", title="T"), message="Posted", message_kind="success")
+        assert 'class="notice notice-ok"' in out
 
     def test_escapes_image_src(self):
         draft = Draft(id="p", title="T", image='x" onerror="alert(1)')

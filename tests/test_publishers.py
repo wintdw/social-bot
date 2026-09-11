@@ -27,6 +27,7 @@ class FakeApi:
     def __init__(self):
         self.photo = None
         self.status = None
+        self.comment = None
 
     def create_photo_post(self, page_id, caption, url, published=True):
         self.photo = (page_id, caption, url, published)
@@ -35,6 +36,10 @@ class FakeApi:
     def create_post(self, page_id, message, link=None, published=True):
         self.status = (page_id, message, link, published)
         return {"id": "123_8"}
+
+    def add_comment(self, post_id, message):
+        self.comment = (post_id, message)
+        return {"id": "456"}
 
 
 def _draft(**kw):
@@ -47,6 +52,7 @@ class TestFacebookPublisher:
     def test_photo_path(self, monkeypatch):
         fake = FakeApi()
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft(image="https://img/x.jpg")
         draft.apply_rewrite(caption="Caption")
         result = FacebookPublisher(_cfg()).publish(draft)
@@ -58,6 +64,7 @@ class TestFacebookPublisher:
     def test_link_fallback_without_image(self, monkeypatch):
         fake = FakeApi()
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft()
         draft.apply_rewrite(caption="Caption")
         FacebookPublisher(_cfg()).publish(draft)
@@ -66,6 +73,7 @@ class TestFacebookPublisher:
     def test_hashtags_appended_to_caption(self, monkeypatch):
         fake = FakeApi()
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft(image="https://img/x.jpg")
         draft.apply_rewrite(caption="Caption", hashtags=["#a", "#b"])
         FacebookPublisher(_cfg()).publish(draft)
@@ -76,6 +84,7 @@ class TestFacebookPublisher:
         cfg["publish"]["private"] = True
         fake = FakeApi()
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft(image="https://img/x.jpg")
         draft.apply_rewrite(caption="Caption")
         result = FacebookPublisher(cfg).publish(draft)
@@ -87,6 +96,7 @@ class TestFacebookPublisher:
         cfg["publish"]["private"] = True
         fake = FakeApi()
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft()
         draft.apply_rewrite(caption="Caption")
         FacebookPublisher(cfg).publish(draft)
@@ -103,6 +113,49 @@ class TestFacebookPublisher:
         publisher = FacebookPublisher(_cfg())
         assert publisher.describe(_draft(image="x")) == "POST /123/photos"
         assert publisher.describe(_draft()) == "POST /123/feed"
+
+    def test_link_post_adds_url_as_first_comment(self, monkeypatch):
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft()
+        draft.apply_rewrite(caption="Caption")
+        FacebookPublisher(_cfg()).publish(draft)
+        assert fake.comment == ("123_8", "https://atento.vn/blog/p")
+
+    def test_photo_post_adds_url_as_first_comment(self, monkeypatch):
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(image="https://img/x.jpg")
+        draft.apply_rewrite(caption="Caption")
+        FacebookPublisher(_cfg()).publish(draft)
+        assert fake.comment == ("123_9", "https://atento.vn/blog/p")
+
+    def test_no_url_skips_comment(self, monkeypatch):
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(url="")
+        draft.apply_rewrite(caption="Caption")
+        FacebookPublisher(_cfg()).publish(draft)
+        assert fake.comment is None
+
+    def test_comment_failure_does_not_fail_publish(self, monkeypatch):
+        from social_bot.api import ApiError
+
+        fake = FakeApi()
+
+        def failing_comment(post_id, message):
+            raise ApiError("comment failed", code=200)
+
+        fake.add_comment = failing_comment
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft()
+        draft.apply_rewrite(caption="Caption")
+        result = FacebookPublisher(_cfg()).publish(draft)
+        assert result["post_id"] == "123_8"
 
     def test_missing_page_id_raises(self):
         cfg = _cfg()

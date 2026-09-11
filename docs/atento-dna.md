@@ -237,8 +237,8 @@ dung. Ghép một format (§5.2) với một template — và luân phiên forma
 1. **Mở bài** — một format ở §5.2, chạm trong 2 dòng đầu (đừng lặp format bài trước).
 2. **Sting + turn** — nỗi đau của dev + góc nhìn của bài. (2–3 câu)
 3. **Payoff / teaser** — câu chốt đáng nhớ, không spoil hết.
-4. **CTA + link** — "Đọc đầy đủ tại: <link bài>" ở cuối caption (caption mới là
-   phần được đăng).
+4. **CTA + link** — "Đọc đầy đủ tại comment" ở cuối caption (caption mới là
+   phần được đăng). Link bài sẽ tự động được đăng ở comment đầu tiên.
 5. **Hashtag** — theo pillar.
 
 ### 6.2 Technical explainer — 120–250 từ
@@ -283,13 +283,14 @@ dung. Ghép một format (§5.2) với một template — và luân phiên forma
 
 ### 7.2 CTA và link
 **CTA phải nằm trong `caption`.** Bản đăng chỉ gồm `caption` + `hashtags`; trường
-`cta` là metadata cho người duyệt, **không được đăng**. Với bài blog, đặt **link
-đầy đủ ở cuối caption** (bài đăng dạng ảnh, pipeline không tự đăng comment), rồi
-nhắc lại câu đó trong `cta`.
+`cta` là metadata cho người duyệt, **không được đăng**. Với bài blog, đặt câu
+*"Đọc đầy đủ tại comment"* ở cuối caption — **link bài sẽ tự động được đăng ở
+comment đầu tiên** bởi pipeline (Facebook không thích link trong caption, nên
+chuyển sang comment), rồi nhắc lại câu đó trong `cta`.
 - Tuyển sinh: *"Đăng ký theo nhóm hoặc giới thiệu học viên để nhận ưu đãi nhoaaaa. 😊"*
 - Seminar: *"Ai còn quên chưa đăng ký thì nhanh tay để shop gửi email confirm lun nào. 📩"*
 - Cộng đồng (nhẹ, gây tương tác lành mạnh): *"Các bạn làm bài tập về nhà chưa? 😈"*
-- Blog: *"Đọc đầy đủ tại: <link bài>"* ở cuối caption.
+- Blog: *"Đọc đầy đủ tại comment"* ở cuối caption.
 - Tránh CTA kiểu engagement bait ("tag 3 người bạn", "share để nhận quà") — vi
   phạm chính sách Facebook và trái DNA.
 

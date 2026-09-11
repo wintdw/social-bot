@@ -212,3 +212,11 @@ class GraphApi:
         if not published:
             params["published"] = "false"
         return self.post(f"{page_id}/photos", params)
+
+    def add_comment(self, post_id: str, message: str) -> dict:
+        """Post a comment on an existing post.
+
+        Used to place the article link as the first comment after posting,
+        since Facebook deprioritizes posts with external URLs in the caption.
+        """
+        return self.post(f"{post_id}/comments", {"message": message})

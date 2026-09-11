@@ -359,13 +359,22 @@ def create_app(
         return _page(render_drafts_html(drafts, message=message, private=private))
 
     @app.get("/review/{draft_id}", response_class=HTMLResponse)
-    async def review_detail(draft_id: str, message: str = ""):
+    async def review_detail(draft_id: str, message: str = "", kind: str = "info"):
         draft = pipeline.get_draft(cfg, draft_id)
         if draft is None:
             return _page(render_message_html("Draft not found", f"No draft {draft_id!r}."), 404)
+        open_ids = [d.id for d in pipeline.list_drafts(cfg, pipeline.OPEN_STATES)]
+        next_id = None
+        if len(open_ids) > 1 and draft_id in open_ids:
+            next_id = open_ids[(open_ids.index(draft_id) + 1) % len(open_ids)]
         return _page(
             render_draft_html(
-                draft, dna=pipeline.dna_text(cfg), message=message, private=private
+                draft,
+                dna=pipeline.dna_text(cfg),
+                message=message,
+                message_kind=kind,
+                private=private,
+                next_id=next_id,
             )
         )
 
@@ -391,19 +400,23 @@ def create_app(
         if dry_run:
             suffix = " unpublished" if private else ""
             text = (
-                f"Dry run — would post{suffix} to "
+                f"Dry run: would post{suffix} to "
                 f"{[r['destination'] for r in result['results']]}."
             )
+            kind = "info"
         elif result["private"]:
             ids = [r.get("permalink") or r.get("post_id") for r in result["results"]]
             text = (
                 f"Posted privately (unpublished, admins only): {ids}. "
                 "Draft kept in the review queue."
             )
+            kind = "warning"
         else:
             text = f"Posted: {result['draft'].get('permalink') or result['draft'].get('post_id')}"
+            kind = "success"
         return RedirectResponse(
-            f"/review/{urllib.parse.quote(draft_id)}?message={urllib.parse.quote(text)}",
+            f"/review/{urllib.parse.quote(draft_id)}?message={urllib.parse.quote(text)}"
+            f"&kind={kind}",
             status_code=303,
         )
 
