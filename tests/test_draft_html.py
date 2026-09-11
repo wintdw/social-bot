@@ -45,6 +45,101 @@ class TestRenderDraftsHtml:
         assert "Private mode" not in out
 
 
+class TestReviewFilters:
+    def test_card_shows_source_and_dates(self):
+        draft = Draft(
+            id="p",
+            title="T",
+            source="atento-blog",
+            created_at="2026-09-10T07:28:25+00:00",
+            published="2026-08-17T11:15:38Z",
+        )
+        out = render_drafts_html([draft], generated_at=GENERATED)
+        assert "atento-blog" in out
+        assert "<time" in out and "published 2026-08-17" in out
+
+    def test_card_falls_back_to_queue_time_when_undated(self):
+        draft = Draft(id="p", title="T", created_at="2026-09-10T07:28:25+00:00")
+        out = render_drafts_html([draft], generated_at=GENERATED)
+        assert "queued 2026-09-10" in out
+        assert "published" not in out
+
+    def test_rfc822_source_date_is_formatted(self):
+        draft = Draft(id="p", title="T", published="Sun, 16 Aug 2026 00:00:00 GMT")
+        out = render_drafts_html([draft], generated_at=GENERATED)
+        # Formatted locally, so only the month is stable across timezones.
+        assert "published 2026-08-" in out
+        # The machine-readable attribute must be ISO 8601, never raw RFC 822.
+        assert 'datetime="2026-08-16T00:00:00+00:00"' in out
+        assert "GMT" not in out
+
+    def test_unparseable_date_uses_a_span_not_a_time(self):
+        draft = Draft(id="p", title="T", published="sometime")
+        out = render_drafts_html([draft], generated_at=GENERATED)
+        assert "<span>published sometime</span>" in out
+
+    def test_unparseable_date_is_shown_verbatim(self):
+        draft = Draft(id="p", title="T", published="sometime last week")
+        out = render_drafts_html([draft], generated_at=GENERATED)
+        assert "published sometime last week" in out
+
+    def test_filter_chips_show_counts_and_filtered_total(self):
+        out = render_drafts_html(
+            [Draft(id="p", state="ai_draft")],
+            sources=[("atento-blog", 3), ("seangoedecke", 9)],
+            statuses=[("extracted", 4), ("ai_draft", 8)],
+            total=12,
+            generated_at=GENERATED,
+        )
+        assert 'class="filter-row"' in out
+        assert "Extracted" in out and "AI draft" in out
+        assert "seangoedecke" in out
+        assert "1 of 12 open draft(s)" in out
+
+    def test_selected_filters_are_marked_and_linked(self):
+        out = render_drafts_html(
+            [Draft(id="p", state="ai_draft")],
+            sources=[("atento-blog", 3), ("seangoedecke", 9)],
+            statuses=[("extracted", 4), ("ai_draft", 8)],
+            selected_source="atento-blog",
+            selected_status="ai_draft",
+            total=12,
+            generated_at=GENERATED,
+        )
+        assert 'aria-current="true"' in out
+        assert "/review?source=atento-blog&amp;status=ai_draft" in out
+
+    def test_no_filter_bar_without_choices(self):
+        out = render_drafts_html([Draft(id="p", title="T")], generated_at=GENERATED)
+        assert 'class="filters"' not in out
+
+    def test_active_chip_survives_a_zero_count(self):
+        out = render_drafts_html(
+            [],
+            sources=[("atento-blog", 0), ("seangoedecke", 12)],
+            statuses=[("extracted", 0), ("ai_draft", 12)],
+            selected_source="atento-blog",
+            selected_status="extracted",
+            total=12,
+            source_total=0,
+            status_total=12,
+            generated_at=GENERATED,
+        )
+        assert "No drafts match this filter" in out
+        assert "/review?source=atento-blog&amp;status=extracted" in out
+
+    def test_filtered_empty_state_offers_a_clear_link(self):
+        out = render_drafts_html(
+            [],
+            total=5,
+            sources=[("a", 5)],
+            selected_source="zzz",
+            generated_at=GENERATED,
+        )
+        assert "No drafts match this filter" in out
+        assert 'href="/review"' in out
+
+
 class TestRenderDraftHtml:
     def test_has_editable_caption_and_actions(self):
         draft = Draft(id="p", title="T", url="https://x/blog/p", caption="Body <x>",
@@ -94,6 +189,49 @@ class TestRenderDraftHtml:
         draft = Draft(id="p", title="T", image='x" onerror="alert(1)')
         out = render_draft_html(draft)
         assert 'onerror="alert(1)"' not in out
+
+    def test_image_button_when_enabled(self):
+        out = render_draft_html(Draft(id="p", title="T"), image_enabled=True)
+        assert 'action="/review/p/image"' in out
+        assert "Generate image" in out
+
+    def test_image_button_regenerates_when_image_present(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", image="https://img/x.jpg"), image_enabled=True
+        )
+        assert "Regenerate image" in out
+
+    def test_no_image_button_unless_enabled(self):
+        out = render_draft_html(Draft(id="p", title="T"))
+        assert "/review/p/image" not in out
+
+    def test_image_running_note_when_missing(self):
+        out = render_draft_html(
+            Draft(id="p", title="T"), image_status={"status": "running"}
+        )
+        assert "Generating the image in the background" in out
+
+    def test_image_error_note_is_shown_and_escaped(self):
+        out = render_draft_html(
+            Draft(id="p", title="T"),
+            image_status={"status": "error", "error": "<b>HTTP 520</b>"},
+        )
+        assert "Image generation failed" in out
+        assert "&lt;b&gt;HTTP 520&lt;/b&gt;" in out
+
+    def test_image_note_when_not_started(self):
+        out = render_draft_html(Draft(id="p", title="T"), image_enabled=True)
+        assert "No image yet" in out
+        assert "Generate image” below" in out
+
+    def test_no_image_note_when_image_ready(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", image="https://img/x.jpg"),
+            image_status={"status": "error", "error": "stale"},
+        )
+        assert "Image generation failed" not in out
+        assert "No image yet" not in out
+        assert "Generating the image in the background" not in out
 
     def test_private_mode_notice(self):
         out = render_draft_html(Draft(id="p", title="T"), private=True)

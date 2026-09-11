@@ -9,6 +9,7 @@ import pytest
 from social_bot.web import (
     _parse_hhmm,
     current_slot,
+    image_jobs_view,
     next_run_at,
     seconds_until,
     seconds_until_any,
@@ -67,3 +68,53 @@ class TestCurrentSlot:
     def test_before_first_uses_yesterday(self):
         now = dt.datetime(2026, 9, 10, 6, 0)
         assert current_slot(["07:00", "19:00"], now) == "2026-09-09 19:00"
+
+
+class TestImageJobsView:
+    def test_empty(self):
+        assert image_jobs_view(True, {}) == {
+            "enabled": True,
+            "running": 0,
+            "failed": 0,
+            "jobs": [],
+        }
+
+    def test_serializes_running_and_failed(self):
+        started = dt.datetime(2026, 9, 11, 8, 0, 0)
+        finished = dt.datetime(2026, 9, 11, 8, 0, 30)
+        view = image_jobs_view(
+            True,
+            {
+                "a": {"status": "running", "started_at": started},
+                "b": {"status": "error", "error": "HTTP 520", "finished_at": finished},
+            },
+        )
+        assert view["enabled"] is True
+        assert view["running"] == 1
+        assert view["failed"] == 1
+        assert view["jobs"] == [
+            {
+                "draft_id": "a",
+                "status": "running",
+                "error": "",
+                "started_at": "2026-09-11 08:00:00",
+                "finished_at": None,
+            },
+            {
+                "draft_id": "b",
+                "status": "error",
+                "error": "HTTP 520",
+                "started_at": None,
+                "finished_at": "2026-09-11 08:00:30",
+            },
+        ]
+
+    def test_ok_and_unchanged_are_not_failures(self):
+        view = image_jobs_view(
+            True,
+            {"a": {"status": "ok"}, "b": {"status": "unchanged"}, "c": {"status": "skipped"}},
+        )
+        assert view["running"] == 0
+        assert view["failed"] == 0
+        assert [job["status"] for job in view["jobs"]] == ["ok", "unchanged", "skipped"]
+

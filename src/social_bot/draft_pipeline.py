@@ -21,8 +21,10 @@ from .drafts import (
     find,
     load_drafts,
     now_iso,
+    parse_when,
     save_drafts,
 )
+from .image_gen import DEFAULT_BASE_URL, ImageGenError, generate_for_draft
 from .publishers import publisher_for
 from .source import Source, parse_blog_posting, parse_source
 from .source_api import SourceClient, SourceError
@@ -74,9 +76,9 @@ def save_seen(cfg: dict, seen: set[str]) -> None:
     _write_json(seen_path(cfg), sorted(seen))
 
 
-def dna_text(cfg: dict) -> str:
-    """Contents of publish.dna_file, if configured and present."""
-    raw = str(cfg.get("publish", {}).get("dna_file") or "").strip()
+def _read_optional_file(raw) -> str:
+    """Contents of a configured file path (resolved against ROOT), or ''."""
+    raw = str(raw or "").strip()
     if not raw:
         return ""
     path = pathlib.Path(raw)
@@ -85,14 +87,174 @@ def dna_text(cfg: dict) -> str:
     return path.read_text(encoding="utf-8") if path.exists() else ""
 
 
+def dna_text(cfg: dict) -> str:
+    """Contents of publish.dna_file, if configured and present."""
+    return _read_optional_file(cfg.get("publish", {}).get("dna_file"))
+
+
+def image_style_text(cfg: dict) -> str:
+    """Contents of image_gen.style_file — the brand look prepended to prompts."""
+    return _read_optional_file(image_gen_config(cfg).get("style_file"))
+
+
+# -- AI image generation -------------------------------------------------
+
+
+def image_gen_config(cfg: dict) -> dict:
+    return dict(cfg.get("image_gen", {}) or {})
+
+
+def _generate_image(
+    cfg: dict,
+    *,
+    title: str,
+    excerpt: str,
+    style: str = "",
+    image_prompt: str = "",
+    errors: list[dict],
+    label: str,
+) -> str:
+    """Generate one image URL, or '' (recording the failure and carrying on)."""
+    ig = image_gen_config(cfg)
+    if not ig.get("enabled"):
+        return ""
+    try:
+        return generate_for_draft(
+            title,
+            excerpt,
+            style=style,
+            image_prompt=image_prompt,
+            base_url=str(ig.get("base_url") or "").strip() or DEFAULT_BASE_URL,
+            width=int(ig.get("width", 1080)),
+            height=int(ig.get("height", 1350)),
+            model=str(ig.get("model", "flux")),
+            timeout=float(ig.get("timeout_seconds", 60.0)),
+            api_key=str(ig.get("api_key", "") or ""),
+        )
+    except ImageGenError as exc:
+        errors.append({"source": label, "error": f"image {label}: {exc}"})
+        return ""
+
+
+def generate_images(
+    cfg: dict | None = None,
+    *,
+    draft_ids: list[str] | None = None,
+    states: tuple[str, ...] | None = OPEN_STATES,
+    limit: int | None = None,
+    overwrite: bool | None = None,
+) -> dict:
+    """Generate AI images for queued drafts and store them on the drafts.
+
+    Network-bound and opt-in (``image_gen.enabled``). Existing drafts keep their
+    image unless ``overwrite`` is on (config default); this is the way to
+    replace a source image with a generated one after a scan. Failures are
+    recorded and never raise — image generation is an enhancement.
+    """
+    cfg = cfg or load_config()
+    ig = image_gen_config(cfg)
+    if not ig.get("enabled"):
+        raise ValueError("image generation is disabled (image_gen.enabled is false)")
+    overwrite = bool(ig.get("overwrite", True)) if overwrite is None else overwrite
+
+    drafts = load_drafts(queue_path(cfg))
+    wanted = set(draft_ids) if draft_ids else None
+    selected = [
+        draft
+        for draft in drafts
+        if (wanted is None or draft.id in wanted)
+        and (states is None or draft.state in states)
+        and (overwrite or not draft.image)
+    ]
+    if wanted:
+        missing = wanted - {draft.id for draft in drafts}
+        if missing:
+            raise ValueError(f"no draft {sorted(missing)[0]!r}")
+    if limit is not None:
+        selected = selected[:limit]
+
+    errors: list[dict] = []
+    updated: list[Draft] = []
+    style = image_style_text(cfg)
+    for draft in selected:
+        url = _generate_image(
+            cfg,
+            title=draft.title,
+            excerpt=draft.excerpt,
+            style=style,
+            image_prompt=draft.image_prompt,
+            errors=errors,
+            label=draft.id,
+        )
+        if not url:
+            continue
+        draft.image = url
+        draft.touch()
+        updated.append(draft)
+
+    if updated:
+        save_drafts(queue_path(cfg), drafts)
+    return {
+        "generated": len(updated),
+        "candidates": len(selected),
+        "ids": [draft.id for draft in updated],
+        "errors": errors,
+    }
+
+
+def generate_missing_image(cfg: dict, draft_id: str) -> dict | None:
+    """Generate one just-rewritten draft's image, only if it has none.
+
+    This is the hook ``serve`` runs right after a rewrite lands — the point
+    where ``image_prompt`` first exists, which is the whole reason to illustrate
+    the rewrite rather than the raw title. Existing images (e.g. the blog's
+    cover) are kept, so re-submitting a rewrite never regenerates.
+
+    Best-effort: returns ``None`` when generation is off or the draft is gone,
+    and records provider failures in ``errors`` instead of raising — a missing
+    image must never fail the rewrite that triggered it.
+    """
+    if not image_gen_config(cfg).get("enabled"):
+        return None
+    if find(load_drafts(queue_path(cfg)), draft_id) is None:
+        return None
+    return generate_images(cfg, draft_ids=[draft_id], overwrite=False)
+
+
 # -- reading the queue ---------------------------------------------------
 
 
+_EPOCH = dt.datetime(1970, 1, 1, tzinfo=dt.timezone.utc)
+
+
+def _sort_key(draft: Draft) -> tuple[dt.datetime, dt.datetime]:
+    """Newest first by the item's own date, falling back to when it was queued.
+
+    Scanning queues a whole batch within seconds, so `created_at` orders a scan
+    almost arbitrarily; the source's `published` date is the one shown on the
+    review cards and the one an operator expects to sort by.
+    """
+    queued = parse_when(draft.created_at) or parse_when(draft.updated_at) or _EPOCH
+    return (parse_when(draft.published) or queued, queued)
+
+
 def list_drafts(cfg: dict, states: tuple[str, ...] | None = None) -> list[Draft]:
+    """Queue drafts, newest first (source publish date, then queue time)."""
     drafts = load_drafts(queue_path(cfg))
-    if states is None:
-        return drafts
-    return [d for d in drafts if d.state in states]
+    if states is not None:
+        drafts = [d for d in drafts if d.state in states]
+    return sorted(drafts, key=_sort_key, reverse=True)
+
+
+def filter_drafts(
+    drafts: list[Draft], *, source: str = "", state: str = ""
+) -> list[Draft]:
+    """Narrow a listing by source name and/or state ('' means no filter)."""
+    if source:
+        drafts = [d for d in drafts if d.source == source]
+    if state:
+        drafts = [d for d in drafts if d.state == state]
+    return drafts
 
 
 def get_draft(cfg: dict, draft_id: str) -> Draft | None:
@@ -227,6 +389,7 @@ def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
             cta=str(body.get("cta", "") or ""),
             alt_text=str(body.get("alt_text", "") or ""),
             commentary=str(body.get("commentary", "") or ""),
+            image_prompt=str(body.get("image_prompt", "") or ""),
         )
 
     return _save_one(cfg, draft_id, mutate)
@@ -328,6 +491,15 @@ def status(cfg: dict | None = None) -> dict:
             "destinations": list(cfg.get("publish", {}).get("destinations", [])),
             "max_per_day": int(cfg.get("publish", {}).get("max_per_day", 10)),
             "dna_file_set": bool(str(cfg.get("publish", {}).get("dna_file") or "").strip()),
+        },
+        "image_gen": {
+            "enabled": bool(image_gen_config(cfg).get("enabled")),
+            "provider": str(image_gen_config(cfg).get("provider", "")),
+            "base_url": str(image_gen_config(cfg).get("base_url", "")),
+            "overwrite": bool(image_gen_config(cfg).get("overwrite", True)),
+            "key_set": bool(str(image_gen_config(cfg).get("api_key") or "").strip()),
+            "style_file_set": bool(image_style_text(cfg).strip()),
+            "with_image": sum(1 for draft in drafts if draft.image),
         },
     }
 

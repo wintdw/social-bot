@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import datetime as dt
+from types import SimpleNamespace
+
 import pytest
 
-from social_bot.api import ApiError, GraphApi
+from social_bot.api import (
+    ApiError,
+    GraphApi,
+    check_token,
+    token_status_from_debug,
+)
 
 
 class TestGraphApiUrls:
@@ -169,3 +177,97 @@ def test_api_requires_token():
     assert cfg["graph"]["token"] == DEFAULTS["graph"]["token"] == ""
     with pytest.raises(ValueError):
         api_from_config(cfg, token=None)
+
+
+class TestDebugTokenEndpoint:
+    def test_targets_debug_token_with_input_token(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+
+        def fake_get(path, params=None):
+            captured["path"] = path
+            captured["params"] = params
+            return {"data": {"is_valid": True, "type": "PAGE"}}
+
+        monkeypatch.setattr(api, "get", fake_get)
+        data = api.debug_token()
+        assert captured["path"] == "debug_token"
+        assert captured["params"] == {"input_token": "tok"}
+        assert data == {"is_valid": True, "type": "PAGE"}
+
+
+class TestTokenStatusFromDebug:
+    def test_expiring_token(self):
+        now = dt.datetime(2026, 9, 11, tzinfo=dt.timezone.utc)
+        expires = dt.datetime.fromtimestamp(1794276741, tz=dt.timezone.utc)
+        out = token_status_from_debug(
+            {
+                "is_valid": True,
+                "type": "PAGE",
+                "expires_at": 1794276741,
+                "scopes": ["pages_read_engagement"],
+            },
+            now=now,
+        )
+        assert out["valid"] is True
+        assert out["type"] == "PAGE"
+        assert out["expires_at"] == expires.isoformat()
+        assert out["never_expires"] is False
+        assert out["expires_in_days"] == (expires - now).days
+        assert out["scopes"] == ["pages_read_engagement"]
+
+    def test_zero_expiry_means_never(self):
+        out = token_status_from_debug({"is_valid": True, "expires_at": 0})
+        assert out["never_expires"] is True
+        assert out["expires_at"] is None
+        assert out["expires_in_days"] is None
+
+    def test_invalid_payload_carries_error(self):
+        out = token_status_from_debug(
+            {"is_valid": False, "error": {"message": "Session has expired", "code": 190}}
+        )
+        assert out["valid"] is False
+        assert out["error"] == "Session has expired"
+
+
+class TestCheckToken:
+    CFG = {
+        "graph": {
+            "api_version": "v26.0",
+            "base_url": "https://graph.facebook.com",
+            "timeout_seconds": 30.0,
+            "token": "tok",
+        }
+    }
+
+    def _patch(self, monkeypatch, api):
+        monkeypatch.setattr("social_bot.api.api_from_config", lambda cfg, token=None: api)
+
+    def test_valid_token(self, monkeypatch):
+        self._patch(monkeypatch, SimpleNamespace(debug_token=lambda: {"is_valid": True, "expires_at": 0}))
+        out = check_token(self.CFG)
+        assert out["valid"] is True
+        assert out["never_expires"] is True
+
+    def test_oauth_error_reports_invalid(self, monkeypatch):
+        def boom():
+            raise ApiError("Session has expired", code=190, error_type="OAuthException")
+
+        self._patch(monkeypatch, SimpleNamespace(debug_token=boom))
+        out = check_token(self.CFG)
+        assert out["valid"] is False
+        assert "expired" in out["error"]
+
+    def test_network_error_leaves_validity_unknown(self, monkeypatch):
+        def boom():
+            raise ApiError("network error: timed out")
+
+        self._patch(monkeypatch, SimpleNamespace(debug_token=boom))
+        out = check_token(self.CFG)
+        assert out["valid"] is None
+        assert "timed out" in out["error"]
+
+    def test_no_token_raises(self):
+        cfg = {"graph": {**self.CFG["graph"], "token": ""}}
+        with pytest.raises(ValueError):
+            check_token(cfg)

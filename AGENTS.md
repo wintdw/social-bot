@@ -9,10 +9,11 @@ A Python CLI that reads and writes a **Facebook Page through the official
 Graph API** — no browser anywhere. `whoami` validates the access token and
 lists manageable pages, `feed` fetches the page's own feed, `post` creates a
 status/link/photo post, `refresh` caches the feed, `blog scan` queues new items
-from source feeds as drafts, and `serve` runs a long-lived feed dashboard + a
-draft review UI + scheduled refresh/scan. Skeleton cloned from the
-voz-bot/otofun-bot family (cli/config/tests/Docker layout); the crawl engine is
-replaced by `api.py`, a ~150-line urllib Graph client.
+from source feeds as drafts, `blog image` generates AI images for queued
+drafts, and `serve` runs a long-lived feed dashboard + a draft review UI +
+scheduled refresh/scan. Skeleton cloned from the voz-bot/otofun-bot family
+(cli/config/tests/Docker layout); the crawl engine is replaced by `api.py`, a
+~150-line urllib Graph client.
 
 **Detailed docs live in `docs/`** — read `docs/README.md` first (module map +
 "where to work"), then `content-pipeline.md`, `operations.md`, `development.md`.
@@ -21,7 +22,7 @@ replaced by `api.py`, a ~150-line urllib Graph client.
 
 ```
 src/social_bot/
-├── cli.py            # entry point (social-bot): whoami, feed, post, refresh, blog scan, serve
+├── cli.py            # entry point (social-bot): whoami, feed, post, refresh, blog scan/image, serve
 ├── config.py         # DEFAULTS + config.yaml + credentials.yaml; token resolution
 ├── api.py            # urllib Graph client: GET/POST + ApiError from FB payloads
 ├── feed.py           # pure parse/render of /{page}/feed JSON -> markdown
@@ -30,7 +31,8 @@ src/social_bot/
 ├── source.py         # pure parse of sitemap / RSS / Atom -> Item (no network)
 ├── source_api.py     # urllib source fetcher: retries + SourceError
 ├── drafts.py         # Draft model + state machine + atomic persistence
-├── draft_pipeline.py # scan sources -> drafts; receive rewrite; human-gated publish
+├── draft_pipeline.py # scan sources -> drafts; generate images; receive rewrite; publish
+├── image_gen.py      # urllib Pollinations client: prompt build + image generation
 ├── publishers.py     # destination adapters: Facebook (real), LinkedIn (stub)
 ├── ui.py             # shared operator-UI chrome: stylesheet, nav, layout
 ├── draft_html.py     # pure render of the /review queue + a draft detail page
@@ -58,7 +60,11 @@ web.py's time helpers are pure so tests need no fastapi/uvicorn.
 Content pipeline flow: `scan_sources` fetches each `sources[]` feed
 (`source_api.py`), parses it (`source.py`), and queues unseen items as
 `EXTRACTED` drafts under `data/review/` (dedupe via `seen.json`); it runs on the
-`--scan-at` schedule, on `POST /scan`, or via `blog scan`. An external
+`--scan-at` schedule, on `POST /scan`, or via `blog scan`. When
+`image_gen.enabled` is on, a rewrite landing (`POST /api/drafts/{id}/rewrite`)
+makes `serve` fill that draft's image **in the background** (only if it has
+none, so a re-submitted rewrite never regenerates); `blog image` regenerates on
+demand for drafts already queued. An external
 rewriter — Command Code, applying the Atento DNA (`docs/atento-dna.md`, wired
 via `publish.dna_file`) — reads `GET /api/drafts` and
 POSTs the caption back to `/api/drafts/{id}/rewrite` (`AI_DRAFT`). A human
@@ -97,6 +103,40 @@ happens solely on that explicit human approval — `serve` never auto-posts.**
   + `caption`, Graph fetches the image) precisely to avoid multipart. Uploading
   a local file would need multipart and may justify adding `requests` —
   revisit then, not before.
+- Pollinations has **two image endpoints and they are not interchangeable**.
+  `https://gen.pollinations.ai/image` (the default, `image_gen.base_url`) is the
+  live gateway: real model choice, no watermark, but it **requires** a valid
+  `image_gen.api_key` (401 otherwise) and the model names are
+  provider-qualified (list them from `GET gen.pollinations.ai/models`). The
+  legacy `https://image.pollinations.ai/prompt` needs no key but silently
+  serves the older `sana` model (it ignores `model=`) and watermarks every
+  image (`x-auth-status: unauthenticated`). Don't "simplify" to the legacy URL.
+- The image model matters more than the prompt. `flux.1-schnell` barely obeys
+  negatives — it renders literal buildings and stray lettering and ignores "no
+  text". **`openai/gpt-image-1-mini` is the default** because it follows the
+  style brief's negatives, and it is cheap. Verify a new model on a real draft
+  before switching.
+- **Image variety comes from `image_prompt`, not from the style brief.** The
+  rewriter supplies a concrete English visual concept per post (rewrite
+  contract §9.1). Illustrating a raw `title`/excerpt — an abstraction, and in
+  Vietnamese — made every image look the same: the model cannot picture
+  "Consumer Group", so it fell back to whatever composition the style brief
+  suggested, every time. Never build the subject from the title; ask for it.
+  Two related traps: translating the title to English alone is *worse* (it
+  yields literal cloud-and-arrow flowcharts and people), and the style brief
+  must not prescribe one composition.
+- Every post is a photo post, so images are generated **after** the rewrite,
+  never during scan — at scan time there is no `image_prompt` yet, which is the
+  whole problem. `serve` fills a draft's image in the background as its rewrite
+  arrives (only if missing); `blog image` is the on-demand catch-up.
+- **An existing image is never replaced by default** — only drafts with no image
+  get one, so a source post's own cover survives the rewrite job, `blog image`,
+  and the API. Replacement is opt-in: `blog image --overwrite`,
+  `?overwrite=true` on `POST /api/drafts/{id}/image`, the **Regenerate image**
+  button on `/review/{id}`, or `image_gen.overwrite: true`.
+- The API key must ride in the `Authorization` header, **never the URL**: the
+  URL is stored on the draft, shown in page HTML, and sent to Graph as the
+  photo `url`. The old `?token=` form leaked it into all three.
 - Feed error bodies are JSON `{"error": {code, message, type, ...}}`;
   `ApiError.from_payload` decodes them, including non-JSON/HTTP-only failures.
 - Page post ids come back as `"<page_id>_<post_id>"`; the underscore form is
@@ -133,6 +173,9 @@ happens solely on that explicit human approval — `serve` never auto-posts.**
 - Source scanning fetches only the configured official feeds (sitemap / RSS) —
   no HTML scraping. Stay within each site's robots.txt and rate limits; fetch
   politely (timeouts + bounded retries).
+- Image generation is an **enhancement, never a gate**: a failure is recorded
+  in the scan/summary `errors` and the draft keeps its existing image. It must
+  never block queueing or publishing, and it never publishes on its own.
 - Exit codes: 0 success, 1 Graph/network failure, 2 usage/config error.
   `_page_id` and token resolution raise `ValueError` (→ 2) and are caught
   inside each `_cmd_*`, never allowed to traceback.
@@ -147,8 +190,10 @@ Tests cover config defaults/deep-merge/validation, token precedence,
 Graph URL/error-payload handling, feed timestamp parsing, markdown + HTML
 rendering, the refresh cache writer, source parsing (sitemap/RSS/Atom/JSON-LD
 index), the draft model/persistence, the publisher adapters, the
-scan/rewrite/publish pipeline (stubbed clients), the operator pages
+scan/rewrite/publish pipeline (stubbed clients), image prompt building and
+URL construction (`image_gen.py`, stubbed `urlopen`), the operator pages
 (`ui.py` / `draft_html.py` / `dashboard_html.py`), and serve's pure scheduling
 helpers (no fastapi import needed). Live calls are manual: `whoami` first, then
 `feed --limit 3`, then `blog scan` (queues drafts, no token needed), then
-`post --dry-run` before the first real post.
+`blog image --limit 1` to verify the provider/key, then `post --dry-run` before
+the first real post.

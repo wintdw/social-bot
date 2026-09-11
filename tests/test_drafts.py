@@ -15,6 +15,7 @@ from social_bot.drafts import (
     append_audit,
     find,
     load_drafts,
+    parse_when,
     save_drafts,
 )
 
@@ -72,6 +73,28 @@ class TestState:
 
     def test_post_text_without_hashtags(self):
         assert _draft(title="Only title").post_text == "Only title"
+
+
+class TestParseWhen:
+    def test_iso_with_offset_and_z(self):
+        assert parse_when("2026-09-10T07:28:25+00:00") == parse_when("2026-09-10T07:28:25Z")
+
+    def test_fractional_seconds_and_z(self):
+        assert parse_when("2026-08-17T11:15:38.291Z").year == 2026
+
+    def test_rfc822(self):
+        parsed = parse_when("Sun, 16 Aug 2026 00:00:00 GMT")
+        assert (parsed.year, parsed.month, parsed.day) == (2026, 8, 16)
+
+    def test_naive_is_assumed_utc(self):
+        assert parse_when("2026-09-10T07:00:00").utcoffset().total_seconds() == 0
+
+    @pytest.mark.parametrize("bad", ["", "   ", "last Tuesday", None])
+    def test_unparseable_is_none(self, bad):
+        assert parse_when(bad) is None
+
+    def test_rfc822_and_iso_are_comparable(self):
+        assert parse_when("Mon, 10 Aug 2026 00:00:00 GMT") < parse_when("2026-09-01T00:00:00Z")
 
 
 class TestPersistence:

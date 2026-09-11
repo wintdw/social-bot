@@ -54,12 +54,118 @@ def _table(headers: list[str], rows: list[list[str]]) -> str:
     return f"<table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table>"
 
 
+def _days_phrase(days: int | None) -> str:
+    if days is None:
+        return ""
+    if days < 0:
+        return f"expired {-days} day(s) ago"
+    if days == 0:
+        return "expires today"
+    return f"in {days} day(s)"
+
+
+# Background image-job states (see web.image_jobs_view) -> the word shown.
+_IMAGE_STATUS_LABEL = {
+    "running": "running",
+    "ok": "done",
+    "unchanged": "no change",
+    "skipped": "skipped",
+    "error": "failed",
+}
+
+
+def _image_section(images: dict | None, *, limit: int = 10) -> str:
+    """The background image jobs: how the async post-rewrite work is going.
+
+    `images` is web.image_jobs_view()'s payload. Returns "" when it was not
+    supplied (older callers), so the section stays optional.
+    """
+    if images is None:
+        return ""
+    if not images.get("enabled"):
+        return (
+            "<h2>Image jobs</h2>"
+            '<p class="muted">Disabled — set <code>image_gen.enabled</code> to true '
+            "to generate an image for every rewrite.</p>"
+        )
+    jobs = list(images.get("jobs") or [])
+    if not jobs:
+        return (
+            "<h2>Image jobs</h2>"
+            '<p class="muted">No image jobs yet — one runs in the background after '
+            "each rewrite.</p>"
+        )
+    rows: list[list[str]] = []
+    for job in reversed(jobs[-limit:]):  # newest first
+        status = str(job.get("status", ""))
+        rows.append(
+            [
+                html.escape(str(job.get("draft_id", ""))),
+                badge(_IMAGE_STATUS_LABEL.get(status, status or "unknown")),
+                html.escape(str(job.get("error", "") or "")),
+                html.escape(str(job.get("started_at", "") or "—")),
+                html.escape(str(job.get("finished_at", "") or "—")),
+            ]
+        )
+    more = "" if len(jobs) <= limit else f" (showing the latest {limit})"
+    summary = (
+        f'<p class="muted">{len(jobs)} job(s) · {images.get("running", 0)} running · '
+        f'{images.get("failed", 0)} failed{more}</p>'
+    )
+    return (
+        "<h2>Image jobs</h2>"
+        + summary
+        + _table(["Draft", "Status", "Error", "Started", "Finished"], rows)
+    )
+
+
+def _token_section(token: dict | None) -> str:
+    """The token's validity and expiry, from /debug_token (see api.check_token)."""
+    token = token or {}
+    valid = token.get("valid")
+    checked = token.get("checked_at")
+    error = token.get("error")
+
+    if valid is None and checked is None and not error:
+        return '<h2>Token</h2><p class="muted">Not checked yet.</p>'
+
+    if valid is True:
+        state = badge("valid")
+    elif valid is False:
+        state = badge("invalid")
+    else:
+        state = badge("unknown")
+
+    expires = token.get("expires_at")
+    if expires:
+        phrase = _days_phrase(token.get("expires_in_days"))
+        expiry = _stamp(dt.datetime.fromisoformat(expires))
+        if phrase:
+            expiry += f" ({phrase})"
+    elif token.get("never_expires"):
+        expiry = "never"
+    else:
+        expiry = "—"
+
+    rows = [
+        ["Status", state],
+        ["Expires", html.escape(expiry)],
+        ["Checked", html.escape(str(checked or "—"))],
+        ["Type", html.escape(str(token.get("type") or "—"))],
+        ["Permissions", html.escape(f"{len(token.get('scopes') or [])} granted")],
+    ]
+    if error:
+        rows.append(["Error", html.escape(str(error))])
+    return "<h2>Token</h2>" + _table(["Field", "Value"], rows)
+
+
 def render_dashboard_html(
     *,
     items: list[FeedItem] | None,
     stats: dict,
     refresh: dict,
     scan: dict,
+    images: dict | None = None,
     page_id: str = "",
     message: str = "",
     private: bool = False,
@@ -103,7 +209,7 @@ def render_dashboard_html(
     )
     return layout(
         "social-bot — dashboard",
-        header + controls + cards + runs + feed,
+        header + controls + cards + runs + _image_section(images, limit=5) + feed,
         active="dashboard",
         message=message,
         private=private,
@@ -171,6 +277,8 @@ def render_status_html(
     *,
     refresh: dict,
     scan: dict,
+    token: dict | None = None,
+    images: dict | None = None,
     private: bool = False,
     generated_at: dt.datetime | None = None,
 ) -> str:
@@ -217,9 +325,11 @@ def render_status_html(
     body = (
         header
         + cards
+        + _token_section(token)
         + "<h2>Schedules</h2>"
         + _run_line("Feed refresh", refresh)
         + _run_line("Source scan", scan)
+        + _image_section(images)
         + "<h2>Sources</h2>"
         + _table(["Name", "Type", "URL", "Lang"], source_rows)
         + "<h2>Drafts by state</h2>"

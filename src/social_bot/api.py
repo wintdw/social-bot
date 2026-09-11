@@ -9,6 +9,7 @@ permissions.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 import urllib.error
 import urllib.parse
@@ -82,6 +83,54 @@ def api_from_config(cfg: dict, token: str | None = None) -> "GraphApi":
     )
 
 
+def token_status_from_debug(data: dict, *, now: dt.datetime | None = None) -> dict:
+    """Translate a /debug_token ``data`` payload into display-ready fields.
+
+    ``expires_at`` 0 means the token never expires (Graph's convention), so
+    ``never_expires`` is True and the rest of the expiry fields are None.
+    """
+    now = now or dt.datetime.now(dt.timezone.utc)
+    raw_expires = int(data.get("expires_at") or 0)
+    expires = (
+        dt.datetime.fromtimestamp(raw_expires, tz=dt.timezone.utc) if raw_expires else None
+    )
+    error = data.get("error")
+    return {
+        "valid": bool(data.get("is_valid")),
+        "type": str(data.get("type") or ""),
+        "expires_at": expires.isoformat() if expires else None,
+        "never_expires": expires is None,
+        "expires_in_days": (expires - now).days if expires else None,
+        "scopes": list(data.get("scopes") or []),
+        "error": (error or {}).get("message") if isinstance(error, dict) else error,
+    }
+
+
+def check_token(cfg: dict, token: str | None = None, *, now: dt.datetime | None = None) -> dict:
+    """Introspect the configured token via /debug_token.
+
+    Returns ``token_status_from_debug`` output. A rejected token (expired or
+    revoked OAuth) is reported as invalid rather than raised — that is the
+    thing being displayed. A network failure leaves ``valid`` unknown. Raises
+    ValueError when no token is configured at all.
+    """
+    api = api_from_config(cfg, token)
+    try:
+        data = api.debug_token()
+    except ApiError as exc:
+        oauth = exc.code == 190 or exc.error_type == "OAuthException"
+        return {
+            "valid": False if oauth else None,
+            "type": "",
+            "expires_at": None,
+            "never_expires": False,
+            "expires_in_days": None,
+            "scopes": [],
+            "error": str(exc),
+        }
+    return token_status_from_debug(data, now=now)
+
+
 class GraphApi:
     def __init__(
         self,
@@ -148,6 +197,16 @@ class GraphApi:
     def me(self) -> dict:
         """The token's owner (user or page)."""
         return self.get("me", {"fields": "id,name"})
+
+    def debug_token(self, input_token: str | None = None) -> dict:
+        """Metadata for a token (the configured one by default) from /debug_token.
+
+        The token doubles as the debugging token, which the endpoint accepts for
+        tokens issued by the same app — a Page token included. Returns the
+        ``data`` object (``is_valid``, ``expires_at``, ``type``, ``scopes``).
+        """
+        data = self.get("debug_token", {"input_token": input_token or self.token})
+        return data.get("data", {})
 
     def managed_pages(self) -> list[dict]:
         """Pages the token can manage.

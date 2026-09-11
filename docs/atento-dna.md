@@ -16,11 +16,13 @@ unchanged.
 1. Read the draft's `title`, `excerpt`, `url`, `image`, `lang` from `GET /api/drafts`.
 2. Pick the register (§3) that fits the item — technical essay, personal
    essay, or page announcement.
-3. Choose an **opening format** from the menu (§5) and rotate — don't repeat the
-   previous post's format. Write the caption in **Vietnamese** following §4–§7.
-   Keep technical terms in **English** (§4.3).
-4. Return JSON: `caption`, `hashtags`, `cta`, `alt_text`, `commentary` (§9).
-5. Self-check against §10 before submitting.
+3. Pick the **opening format** from the menu (§5) that fits this item best — the
+   format follows the content, not a rotation schedule. Write the caption in
+   **Vietnamese** following §4–§7. Keep technical terms in **English** (§4.3).
+4. If the item is an **external source** (anything other than `atento-blog`),
+   credit the original author and site in the caption (§7.3).
+5. Return JSON: `caption`, `hashtags`, `cta`, `alt_text`, `commentary` (§9).
+6. Self-check against §10 before submitting.
 
 Blog items (`sources: atento-blog`) are *Atento's own* articles — the caption's
 job is to sell the idea and send readers to the post. Event/recruit items are
@@ -154,10 +156,10 @@ bằng một **format** ở §5, chỉ khác liều drama.
 
 ---
 
-## 5. Hooks & formats — luân phiên, đừng "một màu"
+## 5. Hooks & formats — chọn format hợp bài
 
 Một tài khoản chỉ có **một kiểu mở bài** sẽ rất đơn điệu. Có nhiều cách để câu
-được người đọc; chọn theo **bản chất của bài**, và **luân phiên** giữa các bài.
+được người đọc; chọn theo **bản chất của bài**.
 
 **Nguyên tắc chung:** luận điểm (thesis) để dành làm **payoff ở cuối**, không mở
 bài. 2 dòng đầu phải chạm (Facebook cắt sau ~2 dòng — "Xem thêm"): không dạo
@@ -177,7 +179,7 @@ giỏi"), nhưng cảm ngay một khoảnh khắc ("đối tác hỏi một câu
 4. **Payoff** — câu chốt đáng nhớ (quote).
 5. **CTA + link.**
 
-### 5.2 Menu format mở bài (chọn theo bài, luân phiên)
+### 5.2 Menu format mở bài (chọn theo bản chất bài)
 
 | # | Format | Dùng khi | Cách mở | Ví dụ mở |
 |---|---|---|---|---|
@@ -194,9 +196,11 @@ giỏi"), nhưng cảm ngay một khoảnh khắc ("đối tác hỏi một câu
 | K | **Hướng dẫn / bắt tay làm** | bài có bước cụ thể | mục tiêu → các bước → kết quả | *"3 bước để bắt đầu nói tiếng Anh mỗi ngày."* |
 | L | **Phản biện lầm tưởng (myth-bust)** | bài đập một niềm tin sai | "Nhiều người nghĩ X. Không phải." → sự thật | *"Code tệ còn dễ nhận ra. Nguy hiểm hơn là code trông rất ổn."* |
 
-### 5.3 Luật luân phiên (tránh "một màu")
-- **Không** dùng cùng một format cho hai bài liền nhau.
-- Trong một batch nhiều bài: **mỗi bài một format**; mặc định **tối đa ~1/3** là scene.
+### 5.3 Chọn format theo bài (không gò cho khác nhau)
+- Chọn format **hợp nhất với nội dung bài** — đó là tiêu chí duy nhất.
+- Không cần **mỗi bài một format**, và **không** cần tránh format của bài liền
+  trước. Hai bài cùng bản chất thì dùng cùng format là đúng, không phải lỗi.
+- Chỉ tránh "một màu" khi các bài **thật sự khác nhau** mà vẫn mở y hệt nhau.
 - Chọn theo **bản chất bài**: có câu chuyện → A/J; có danh sách → I; có so sánh → E;
   có quote → H; có bước làm → K; có lầm tưởng → L; có trái ngược → B; khái niệm
   trừu tượng → G.
@@ -231,10 +235,10 @@ giỏi"), nhưng cảm ngay một khoảnh khắc ("đối tác hỏi một câu
 ## 6. Structure templates
 
 Format (§5) là **cách mở bài**; template dưới đây là **thân bài** theo loại nội
-dung. Ghép một format (§5.2) với một template — và luân phiên format.
+dung. Ghép một format (§5.2) với một template — chọn format hợp nhất với bài.
 
 ### 6.1 Blog promo (từ item `atento-blog`) — 80–150 từ
-1. **Mở bài** — một format ở §5.2, chạm trong 2 dòng đầu (đừng lặp format bài trước).
+1. **Mở bài** — một format ở §5.2, chạm trong 2 dòng đầu.
 2. **Sting + turn** — nỗi đau của dev + góc nhìn của bài. (2–3 câu)
 3. **Payoff / teaser** — câu chốt đáng nhớ, không spoil hết.
 4. **CTA + link** — "Đọc đầy đủ tại comment" ở cuối caption (caption mới là
@@ -294,20 +298,48 @@ chuyển sang comment), rồi nhắc lại câu đó trong `cta`.
 - Tránh CTA kiểu engagement bait ("tag 3 người bạn", "share để nhận quà") — vi
   phạm chính sách Facebook và trái DNA.
 
+### 7.3 Ghi công tác giả (nguồn ngoài)
+
+Có **hai loại item**, và cách ghi nguồn khác nhau:
+
+- **`atento-blog`** — bài của chính Atento. Không cần ghi công; CTA giữ
+  *"Đọc đầy đủ tại comment"*.
+- **Nguồn ngoài** — mọi `sources[]` khác (ví dụ blog của một tác giả khác).
+  Đây là bài của người khác, nên phải **ghi rõ tên tác giả và tên site** trong
+  `caption`, và đổi CTA thành *"Đọc bài gốc đầy đủ tại comment"* — bài gốc sẽ
+  được pipeline đăng ở comment đầu tiên.
+
+Đặt credit thành **một dòng riêng, ngay trước CTA**:
+
+> Nguồn: <Tác giả> — "<tiêu đề bài gốc>" (<tên site>).
+
+Ví dụ:
+
+> Nguồn: Sean Goedecke — "Automatically detecting AI text in my browser" (seangoedecke.com).
+
+- Xác định loại item qua trường `source` của draft (`atento-blog` = của Atento).
+- Lấy tên tác giả/site từ `url` + `title` của draft; **không bịa** tên người
+  hay tên site.
+- Không xác định được tác giả cá nhân thì ghi tên site (*"Nguồn: <tên site>"*)
+  — **không được bỏ** phần ghi nguồn.
+- Caption là phần **dẫn lại + bình luận**, không phải bản dịch nguyên văn của
+  bài gốc; luôn giữ tên tác giả, không lược đi cho gọn.
+
 ---
 
 ## 8. Do / Don't
 
 **Do**
-- Chọn một **format mở bài** hợp với bài và **luân phiên** giữa các post (§5.2–5.3).
+- Chọn **format mở bài** hợp nhất với nội dung bài (§5.2–5.3).
 - Mở bằng tình huống/nghịch lý/câu hỏi chạm trong 2 dòng đầu; luận điểm để ở cuối.
 - Nêu trade-off; nói cả mặt được và mặt mất.
 - Kết bằng một câu chốt đáng nhớ.
 - Viết hoa/viết đúng tên khóa học, thời gian, học phí, địa điểm nếu có.
+- Ghi công **tác giả + tên site** khi bài lấy từ nguồn ngoài (§7.3).
 - Giữ đúng vai: caption là **bản nháp cho người duyệt**, không phải bản cuối bắt buộc.
 
 **Don't**
-- ❌ Bài nào cũng mở cùng một kiểu — "một màu".
+- ❌ Mở mọi bài cùng một kiểu dù nội dung khác nhau — "một màu".
 - ❌ Hype rỗng: "cách mạng", "thay đổi mọi thứ", "tốt nhất Việt Nam".
 - ❌ Drama giả/clickbait: bịa tình huống, giật tít rỗng, thổi phồng hậu quả.
 - ❌ Engagement bait, spam, hứa hẹn lương/thu nhập cụ thể.
@@ -331,6 +363,39 @@ chuyển sang comment), rồi nhắc lại câu đó trong `cta`.
 | `cta` | string | Câu kêu gọi hành động — **chỉ để người duyệt đọc**, không được đăng; bản tương ứng phải có trong `caption`. |
 | `alt_text` | string | Mô tả ảnh bằng tiếng Việt, ngắn, phục vụ trợ năng. |
 | `commentary` | string | 2–4 câu cho người duyệt: register nào, **format/hook** là gì, mức drama, có gì cần xác nhận. |
+| `image_prompt` | string | **Tiếng Anh.** Một ý tưởng thị giác CỤ THỂ cho ảnh của riêng bài này (§9.1). |
+
+### 9.1 `image_prompt` — ảnh phải cụ thể, và phải khác nhau
+
+Ảnh được sinh tự động từ trường này. Nếu bỏ trống, hệ thống lấy `title` làm chủ
+đề — mà `title` là một khái niệm trừu tượng, nên các ảnh sẽ na ná nhau. Vì vậy
+**luôn điền `image_prompt`**.
+
+- **Viết bằng tiếng Anh.** Model vẽ ảnh hiểu tiếng Anh tốt hơn hẳn tiếng Việt;
+  tiếng Việt còn dễ bị vẽ thành chữ lên ảnh.
+- **Cụ thể và hình dung được**, không phải bản dịch của tiêu đề. Tả một *thứ nhìn
+  thấy được*, không tả một *khái niệm*.
+- **Mỗi bài một ẩn dụ thị giác khác nhau.** Đừng dùng lại cùng một khuôn cho
+  nhiều bài — đây là lỗi dễ mắc nhất.
+- **Không** để lộ chữ/số trong ảnh, không người/mặt, không icon cloud-mũi-tên,
+  không sơ đồ kiểu screenshot UI. Palette và chất liệu đã do
+  `docs/atento-image-style.md` lo — **không nhắc lại**, chỉ tập trung chủ thể và
+  bố cục.
+
+Ví dụ tốt (cụ thể, khác nhau, có ẩn dụ):
+
+| Bài | `image_prompt` |
+|---|---|
+| Consumer Group | `one long ledger unspooling into several parallel readers, each taking a different strip` |
+| Kiến thức nền tảng | `a tall building whose visible floors are few but whose foundation extends far underground` |
+| Sau AI | `a hand-drawn sketch beside a finished print, the sketch faintly visible under the print` |
+| Code giỏi chưa chắc làm việc giỏi | `a single sheet of paper with one diagram, passed along a row of empty desks` |
+
+Ví dụ kém (trừu tượng, dễ ra ảnh giống nhau):
+
+- `Consumer Group` ✗ (thuật ngữ, không hình dung được)
+- `software architecture, scalability` ✗ (không có chủ thể cụ thể)
+- `a diagram of microservices` ✗ (chung chung, dễ thành icon cliché)
 
 Ví dụ:
 
@@ -340,7 +405,8 @@ Ví dụ:
   "hashtags": ["#Atento", "#fromfoundationtoexcellence", "#systemdesign"],
   "cta": "Link khoá học System Design ở dưới comment nha. 🥰",
   "alt_text": "Giảng viên Atento trình bày về thiết kế hệ thống cho một triệu người dùng.",
-  "commentary": "Register technical (giọng Dũng), format D (đám đông rồi lật), drama vừa. Luận điểm để ở cuối. Cần xác nhận link đăng ký trước khi duyệt."
+  "commentary": "Register technical (giọng Dũng), format D (đám đông rồi lật), drama vừa. Luận điểm để ở cuối. Cần xác nhận link đăng ký trước khi duyệt.",
+  "image_prompt": "a wide drawing board holding one clean system sketch, surrounded by far larger discarded sketches crumpled on the floor"
 }
 ```
 
@@ -349,16 +415,18 @@ Ví dụ:
 ## 10. Checklist trước khi gửi rewrite
 
 - [ ] Đúng **một** register; xưng hô nhất quán.
-- [ ] Đã chọn một **format** (§5.2) hợp bài và **khác** format bài trước — không "một màu".
+- [ ] Đã chọn **format** (§5.2) hợp nhất với bài — không gò cho khác bài trước.
 - [ ] Mở bài chạm trong 2 dòng đầu; luận điểm để ở cuối.
 - [ ] Nội dung lấy từ bài gốc, không bịa; drama đúng liều theo register.
 - [ ] Tiếng Việt tự nhiên; thuật ngữ kỹ thuật giữ tiếng Anh.
 - [ ] Có trade-off hoặc góc nhìn hai chiều (bài technical).
 - [ ] Đủ `#Atento` + `#fromfoundationtoexcellence` + 1 topic; hashtag nằm ở trường riêng.
 - [ ] CTA đúng loại item (tuyển sinh / seminar / blog / cộng đồng).
+- [ ] Nguồn ngoài: đã ghi tên **tác giả + site** và CTA dùng *"Đọc bài gốc"* (§7.3).
 - [ ] Không hype, không bịa, không engagement bait / clickbait.
 - [ ] Emoji đúng liều theo register.
 - [ ] `alt_text` và `commentary` đã điền (commentary nêu rõ format + mức drama).
+- [ ] `image_prompt` đã điền: **tiếng Anh**, cụ thể, và **khác** ẩn dụ với các bài khác.
 
 ---
 

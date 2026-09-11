@@ -9,9 +9,19 @@ from __future__ import annotations
 
 import datetime as dt
 import html
+import urllib.parse
 
-from .drafts import Draft
+from .drafts import Draft, parse_when
 from .ui import badge, layout
+
+# Human labels for the status filter chips (the badge shows the raw state).
+_STATE_LABELS = {
+    "extracted": "Extracted",
+    "ai_draft": "AI draft",
+    "approved": "Approved",
+    "posted": "Posted",
+    "rejected": "Rejected",
+}
 
 # Client-side enhancement for the detail page: keeps the post preview and the
 # character count in sync while editing, blocks a double submit, and asks for
@@ -65,19 +75,148 @@ _DETAIL_SCRIPT = """<script>
 </script>"""
 
 
+def _fmt_date(value: str) -> str:
+    """An item timestamp as local 'YYYY-MM-DD HH:MM'.
+
+    Returns the raw text when unparseable — source feeds date their items in
+    several formats (RSS pubDate is RFC 822, Atom is ISO 8601).
+    """
+    parsed = parse_when(value)
+    if parsed is None:
+        return str(value or "").strip()
+    return parsed.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def _draft_card(draft: Draft) -> str:
+    """One queue entry: title, badges (state/source/date), and excerpt."""
+    url = html.escape(f"/review/{draft.id}")
+    title = html.escape(draft.title or draft.id)
+    meta = [badge(draft.state)]
+    if draft.source:
+        meta.append(html.escape(draft.source))
+    # Show the item's own date — the one the queue is sorted by — falling back
+    # to when it was queued (a source without dates still shows something).
+    stamp = draft.published or draft.created_at or draft.updated_at
+    label = "published" if draft.published else "queued"
+    shown = _fmt_date(stamp)
+    if shown:
+        machine = parse_when(stamp)
+        if machine:  # <time datetime> must be ISO 8601, not the raw RFC 822
+            meta.append(
+                f'<time datetime="{html.escape(machine.isoformat())}">'
+                f"{label} {html.escape(shown)}</time>"
+            )
+        else:
+            meta.append(f"<span>{label} {html.escape(shown)}</span>")
+    parts = [
+        f'<h2><a href="{url}">{title}</a></h2>',
+        f'<div class="meta">{" · ".join(meta)}</div>',
+    ]
+    if draft.excerpt:
+        parts.append(f'<p class="excerpt">{html.escape(draft.excerpt)}</p>')
+    return "".join(parts)
+
+
+def _review_query(source: str = "", status: str = "") -> str:
+    """The /review URL for a (source, status) filter pair, omitting empties."""
+    query = urllib.parse.urlencode(
+        {key: value for key, value in (("source", source), ("status", status)) if value}
+    )
+    return f"/review?{query}" if query else "/review"
+
+
+def _chip(label: str, href: str, *, active: bool, count: int | None = None) -> str:
+    current = ' aria-current="true"' if active else ""
+    cls = "chip chip-active" if active else "chip"
+    num = f'<span class="count">{count}</span>' if count is not None else ""
+    return f'<a class="{cls}" href="{html.escape(href)}"{current}>{html.escape(label)}{num}</a>'
+
+
+def _filter_bar(
+    sources: list[tuple[str, int]],
+    statuses: list[tuple[str, int]],
+    selected_source: str,
+    selected_status: str,
+    source_total: int,
+    status_total: int,
+) -> str:
+    """Source / Status filter chips (plain links, so they work without JS)."""
+    if not sources and not statuses:
+        return ""
+    rows: list[str] = []
+    if statuses:
+        chips = [
+            _chip("All", _review_query(selected_source), active=not selected_status, count=status_total)
+        ]
+        chips += [
+            _chip(
+                _STATE_LABELS.get(state, state),
+                _review_query(selected_source, state),
+                active=state == selected_status,
+                count=count,
+            )
+            for state, count in statuses
+        ]
+        rows.append(
+            '<div class="filter-row"><span class="filter-label">Status</span>'
+            + "".join(chips)
+            + "</div>"
+        )
+    if sources:
+        chips = [
+            _chip("All", _review_query(status=selected_status), active=not selected_source, count=source_total)
+        ]
+        chips += [
+            _chip(
+                name,
+                _review_query(name, selected_status),
+                active=name == selected_source,
+                count=count,
+            )
+            for name, count in sources
+        ]
+        rows.append(
+            '<div class="filter-row"><span class="filter-label">Source</span>'
+            + "".join(chips)
+            + "</div>"
+        )
+    return '<div class="filters">' + "".join(rows) + "</div>"
+
+
 def render_drafts_html(
     drafts: list[Draft],
     *,
     message: str = "",
     private: bool = False,
     generated_at: dt.datetime | None = None,
+    total: int | None = None,
+    sources: list[tuple[str, int]] = (),
+    statuses: list[tuple[str, int]] = (),
+    selected_source: str = "",
+    selected_status: str = "",
+    source_total: int | None = None,
+    status_total: int | None = None,
 ) -> str:
-    """Render the draft queue as a standalone HTML list page."""
+    """Render the draft queue as a standalone HTML list page.
+
+    ``drafts`` is the (already filtered, newest-first) list to show. ``sources``
+    and ``statuses`` are the ``(value, count)`` filter choices, computed by the
+    caller against the *other* active filter, with ``source_total`` /
+    ``status_total`` the count each row's "All" chip should show; ``total`` is
+    the unfiltered queue size, so the header can read "3 of 12 open draft(s)".
+    """
     generated_at = generated_at or dt.datetime.now()
+    total = len(drafts) if total is None else total
+    source_total = total if source_total is None else source_total
+    status_total = total if status_total is None else status_total
+    filtered = total != len(drafts)
+    count_text = (
+        f"{len(drafts)} of {total} open draft(s)" if filtered else f"{len(drafts)} open draft(s)"
+    )
     header = (
         "<header>"
         "<h1>Review</h1>"
-        f'<div class="meta">{len(drafts)} open draft(s) · generated '
+        f'<div class="meta">{count_text} · generated '
         f"{html.escape(generated_at.astimezone().strftime('%Y-%m-%d %H:%M %Z'))}</div>"
         '<form class="toolbar" method="post" action="/scan">'
         '<button type="submit">Scan sources now</button>'
@@ -85,30 +224,31 @@ def render_drafts_html(
         "</form>"
         "</header>"
     )
+    filters = _filter_bar(
+        sources,
+        statuses,
+        selected_source,
+        selected_status,
+        source_total,
+        status_total,
+    )
     if not drafts:
-        body = (
-            '<p class="muted">No open drafts. Click <strong>Scan sources now</strong> '
-            "(or wait for the scheduled scan).</p>"
-        )
-    else:
-        parts: list[str] = []
-        for draft in drafts:
-            url = html.escape(f"/review/{draft.id}")
-            title = html.escape(draft.title or draft.id)
-            parts.append("<article>")
-            parts.append(
-                f'<h2><a href="{url}">{title}</a></h2>'
-                f'<div class="meta">{badge(draft.state)} · '
-                f"{html.escape(draft.source)} · {html.escape(draft.published or '')}</div>"
+        if filtered:
+            body = (
+                '<p class="muted">No drafts match this filter. '
+                '<a href="/review">Clear filters</a>.</p>'
             )
-            if draft.excerpt:
-                parts.append(f'<p class="excerpt">{html.escape(draft.excerpt)}</p>')
-            parts.append("</article>")
-        body = "".join(parts)
+        else:
+            body = (
+                '<p class="muted">No open drafts. Click <strong>Scan sources now</strong> '
+                "(or wait for the scheduled scan).</p>"
+            )
+    else:
+        body = "".join(f"<article>{_draft_card(draft)}</article>" for draft in drafts)
 
     return layout(
         "social-bot — review",
-        header + body,
+        header + filters + body,
         active="review",
         message=message,
         private=private,
@@ -122,6 +262,8 @@ def render_draft_html(
     message: str = "",
     message_kind: str = "info",
     private: bool = False,
+    image_enabled: bool = False,
+    image_status: dict | None = None,
     generated_at: dt.datetime | None = None,
     next_id: str | None = None,
 ) -> str:
@@ -153,6 +295,31 @@ def render_draft_html(
             f'<img src="{html.escape(draft.image)}" alt="{alt}" loading="lazy">'
             "</figure>"
         )
+
+    # The image is generated in the background after a rewrite, so say whether
+    # it is still coming, failed, or was never started — "no image" alone is
+    # ambiguous. Only shown while the draft still has no image.
+    image_note = ""
+    if not draft.image:
+        status = (image_status or {}).get("status")
+        if status == "running":
+            image_note = (
+                '<p class="muted">Generating the image in the background… '
+                "reload in a moment.</p>"
+            )
+        elif status == "error":
+            detail = html.escape(str((image_status or {}).get("error") or "unknown error"))
+            image_note = (
+                '<div class="notice notice-error">'
+                f"Image generation failed: {detail}</div>"
+            )
+        else:
+            hint = (
+                ' Use “Generate image” below.'
+                if image_enabled
+                else " Run `blog image --missing-only`, or the scheduled rewrite will fill it."
+            )
+            image_note = f'<p class="muted">No image yet — every post is a photo post.{hint}</p>'
 
     caption = html.escape(draft.caption or "")
     tags = html.escape(" ".join(draft.hashtags))
@@ -188,11 +355,19 @@ def render_draft_html(
         if private
         else "This publishes to the Facebook Page."
     )
+    image_button = ""
+    if image_enabled:
+        label = "Regenerate image" if draft.image else "Generate image"
+        image_button = (
+            f'<form id="image-form" method="post" action="{action}/image">'
+            f'<button type="submit" class="btn-quiet">{label}</button></form>'
+        )
     action_bar = (
         '<div class="action-bar">'
         f'<button type="submit" form="publish-form" class="btn-primary">{primary}</button>'
         '<button type="submit" form="publish-form" name="dry_run" value="1" '
         'class="btn-quiet">Dry run</button>'
+        f"{image_button}"
         f'<span class="muted">{target}</span>'
         '<span class="spacer"></span>'
         f'<form id="reject-form" method="post" action="{action}/reject">'
@@ -210,6 +385,7 @@ def render_draft_html(
     post_panel = (
         '<main class="panel">'
         + media
+        + image_note
         + form
         + preview
         + action_bar

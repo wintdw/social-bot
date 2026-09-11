@@ -136,6 +136,70 @@ class TestBlogScanArgs:
         assert args.func is cli._cmd_blog_scan
 
 
+class TestBlogImageArgs:
+    def test_flags_parse(self):
+        args = cli._parse_args(
+            ["blog", "image", "--draft", "a", "--draft", "b", "--limit", "2", "--overwrite"]
+        )
+        assert args.draft == ["a", "b"]
+        assert args.limit == 2
+        assert args.overwrite is True
+        assert args.func is cli._cmd_blog_image
+
+    def test_defaults(self):
+        args = cli._parse_args(["blog", "image"])
+        assert args.draft is None
+        assert args.limit is None
+        assert args.overwrite is False
+
+
+class TestBlogImageCommand:
+    def _stub(self, monkeypatch, result):
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(cli, "generate_images", lambda cfg, **kw: result)
+
+    def test_reports_generated(self, monkeypatch, capsys):
+        self._stub(
+            monkeypatch,
+            {"generated": 1, "candidates": 1, "ids": ["post-one"], "errors": []},
+        )
+        assert cli._cmd_blog_image(cli._parse_args(["blog", "image"])) == 0
+        out = capsys.readouterr().out
+        assert "Generated 1 image(s)" in out and "post-one" in out
+
+    def test_default_defers_to_config(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(
+            cli,
+            "generate_images",
+            lambda cfg, **kw: captured.update(kw) or {"generated": 0, "candidates": 0, "ids": [], "errors": []},
+        )
+        cli._cmd_blog_image(cli._parse_args(["blog", "image"]))
+        assert captured["overwrite"] is None
+
+    def test_overwrite_flag_forces_replacement(self, monkeypatch):
+        captured = {}
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(
+            cli,
+            "generate_images",
+            lambda cfg, **kw: captured.update(kw) or {"generated": 0, "candidates": 0, "ids": [], "errors": []},
+        )
+        cli._cmd_blog_image(cli._parse_args(["blog", "image", "--overwrite"]))
+        assert captured["overwrite"] is True
+
+    def test_disabled_returns_usage_error(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+
+        def boom(cfg, **kw):
+            raise ValueError("image generation is disabled")
+
+        monkeypatch.setattr(cli, "generate_images", boom)
+        assert cli._cmd_blog_image(cli._parse_args(["blog", "image"])) == 2
+        assert "image generation is disabled" in capsys.readouterr().err
+
+
 class TestBlogScanCommand:
     def _stub(self, monkeypatch, result):
         monkeypatch.setattr(cli, "_load_config", lambda args: {})

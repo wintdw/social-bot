@@ -94,6 +94,17 @@ header { padding-bottom: .9rem; margin-bottom: 1.25rem;
             margin: 1rem 0 1.5rem; }
 .toolbar { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center;
            margin-top: .75rem; }
+.filters { display: flex; flex-direction: column; gap: .5rem; margin-bottom: 1.25rem; }
+.filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.filter-label { font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+                color: var(--muted); font-weight: 600; min-width: 3.6rem; }
+.chip { display: inline-flex; align-items: center; gap: .35rem; padding: .2rem .65rem;
+        border: 1px solid var(--border); border-radius: 999px; font-size: .82rem;
+        text-decoration: none; color: var(--fg); background: var(--surface); }
+.chip:hover { background: var(--surface-2); }
+.chip-active { background: var(--accent); border-color: var(--accent);
+               color: var(--accent-fg); font-weight: 600; }
+.chip .count { font-size: .72rem; opacity: .7; }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
          gap: .75rem; margin-bottom: 1.25rem; }
 .card { border: 1px solid var(--border); border-radius: var(--radius-lg);
@@ -135,6 +146,12 @@ a.permalink { font-size: .82rem; word-break: break-all; }
 .badge-posted, .badge-public { --badge: var(--ok); }
 .badge-rejected { --badge: var(--danger); }
 .badge-private { --badge: var(--warn); }
+.badge-valid { --badge: var(--ok); }
+.badge-invalid { --badge: var(--danger); }
+.badge-unknown { --badge: var(--warn); }
+.badge-running { --badge: var(--warn); }
+.badge-done { --badge: var(--ok); }
+.badge-failed { --badge: var(--danger); }
 table { border-collapse: collapse; width: 100%; font-size: .9rem; }
 th, td { text-align: left; padding: .45rem .5rem; vertical-align: top;
          border-bottom: 1px solid var(--border); }

@@ -83,6 +83,31 @@ DEFAULTS: dict[str, Any] = {
         "enrich": True,  # fetch each new post page for title/excerpt/image
         "user_agent": "social-bot/0.1 (+content pipeline)",
     },
+    # AI image generation for drafts (Pollinations.ai by default). Off by
+    # default: it makes outbound calls and slows a scan, so opt in per project.
+    # `overwrite` true replaces a source image with a generated one; false (the
+    # default) only fills drafts that have no image, keeping a source post's
+    # own cover. `base_url` is the prompt endpoint; the
+    # default is the modern gateway (clean flux output, needs image_gen.api_key
+    # in credentials.yaml). The legacy `https://image.pollinations.ai/prompt`
+    # needs no key but is watermarked and locked to the older `sana` model.
+    # `style_file` is a short brand-look brief prepended to every prompt.
+    # `model` must be one the endpoint serves: the gen.pollinations.ai gateway
+    # takes provider-qualified names (e.g. "openai/gpt-image-1-mini"); the
+    # legacy endpoint ignores it entirely. The default follows the negative
+    # instructions in the style brief far better than flux.1-schnell.
+    "image_gen": {
+        "enabled": False,
+        "provider": "pollinations",
+        "base_url": "https://gen.pollinations.ai/image",
+        "style_file": "",
+        "overwrite": False,
+        "model": "openai/gpt-image-1-mini",
+        "width": 1080,
+        "height": 1350,
+        "timeout_seconds": 60.0,
+        "api_key": "",  # populated by credentials.yaml, never config.yaml
+    },
 }
 
 
@@ -183,3 +208,15 @@ def validate(cfg: dict) -> None:
             raise ValueError(f"config: blog.scan_at has invalid time {slot!r}")
         if not (0 <= int(hh) <= 23 and 0 <= int(mm) <= 59):
             raise ValueError(f"config: blog.scan_at has invalid time {slot!r}")
+
+    image_gen = cfg.get("image_gen", {})
+    if image_gen.get("provider") not in ("pollinations",):
+        raise ValueError(
+            f"config: unknown image_gen.provider {image_gen.get('provider')!r}"
+        )
+    if not str(image_gen.get("base_url", "")).startswith("https://"):
+        raise ValueError("config: image_gen.base_url must be an https URL")
+    if float(image_gen.get("timeout_seconds", 60)) <= 0:
+        raise ValueError("config: image_gen.timeout_seconds must be positive")
+    if int(image_gen.get("width", 1080)) < 1 or int(image_gen.get("height", 1350)) < 1:
+        raise ValueError("config: image_gen.width/height must be >= 1")

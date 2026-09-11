@@ -11,6 +11,7 @@ import datetime as dt
 import json
 import pathlib
 from dataclasses import asdict, dataclass, field
+from email.utils import parsedate_to_datetime
 
 EXTRACTED = "extracted"
 AI_DRAFT = "ai_draft"
@@ -30,6 +31,30 @@ def now_iso() -> str:
     return dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def parse_when(value: str) -> dt.datetime | None:
+    """Parse an item timestamp into an aware datetime, or None.
+
+    Sources date their items several ways — Atom/JSON-LD use ISO 8601, RSS
+    pubDate uses RFC 822 — and some omit the date entirely. Naive timestamps are
+    assumed UTC so every result is comparable.
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        try:
+            parsed = parsedate_to_datetime(text)
+        except (TypeError, ValueError):
+            return None
+        if parsed is None:
+            return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+    return parsed
+
+
 @dataclass
 class Draft:
     id: str
@@ -47,6 +72,11 @@ class Draft:
     cta: str = ""
     alt_text: str = ""
     commentary: str = ""
+    # A concrete visual concept for the generated image. The rewriter knows the
+    # article, so it gives a far better subject than the raw title/excerpt
+    # (which is why every auto-prompt image looked alike). Optional: image_gen
+    # falls back to the title when this is empty.
+    image_prompt: str = ""
     # Publish bookkeeping.
     destinations: list[str] = field(default_factory=list)
     created_at: str = ""
@@ -79,6 +109,7 @@ class Draft:
         cta: str = "",
         alt_text: str = "",
         commentary: str = "",
+        image_prompt: str = "",
     ) -> None:
         if caption:
             self.caption = caption
@@ -90,6 +121,8 @@ class Draft:
             self.alt_text = alt_text
         if commentary:
             self.commentary = commentary
+        if image_prompt:
+            self.image_prompt = image_prompt
         self.state = AI_DRAFT
         self.touch()
 

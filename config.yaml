@@ -36,6 +36,22 @@ sources:
     url: https://atento.vn/blog
     path_prefix: /blog/       # only post URLs containing this are queued
     lang: vi
+  - name: seangoedecke
+    type: rss
+    url: https://www.seangoedecke.com/rss.xml
+    lang: en                  # RSS needs no path_prefix
+  - name: bytebytego
+    type: rss
+    url: https://blog.bytebytego.com/feed
+    lang: en
+  - name: martinfowler
+    type: rss                 # Atom is parsed by the `rss` reader too
+    url: https://martinfowler.com/feed.atom
+    lang: en
+  - name: stripe-dev
+    type: rss
+    url: https://stripe.dev/blog/feed
+    lang: en
 
 # Review queue (/review): queue.json is the list awaiting review; seen.json
 # dedupes scanned source items across runs.
@@ -65,3 +81,33 @@ blog:
   excerpt_chars: 240          # excerpt truncation for RSS items
   enrich: true                # fetch each new post page for title/excerpt/image
   user_agent: social-bot/0.1 (+content pipeline)
+
+# --- AI image generation ------------------------------------------------------
+# Generates an image from each draft's own title/excerpt (Pollinations.ai).
+# Only drafts WITHOUT an image get one: a post that already has an image (e.g.
+# the blog's cover) keeps it, wherever generation is triggered from. To
+# deliberately replace an existing image, pass `--overwrite` to `blog image`
+# (or `?overwrite=true` to POST /api/drafts/{id}/image, or the Regenerate
+# image button on /review/{id}).
+#
+# base_url is the prompt endpoint:
+#   https://gen.pollinations.ai/image  -> clean flux output, REQUIRES a valid
+#                                         image_gen.api_key (credentials.yaml);
+#                                         get one at enter.pollinations.ai/keys
+#   https://image.pollinations.ai/prompt -> no key needed, but ignores `model`
+#                                         (serves the older `sana`) and
+#                                         watermarks every image
+image_gen:
+  enabled: true
+  provider: pollinations
+  base_url: https://gen.pollinations.ai/image
+  style_file: docs/atento-image-style.md  # brand look; prepended to every prompt
+  overwrite: false            # only fill drafts with no image; keep covers
+  # Provider-qualified model on the gen.pollinations.ai gateway. gpt-image-1-mini
+  # follows the style brief's "no text / no people" negatives far better than
+  # flux.1-schnell (which draws literal buildings and stray words). List others
+  # with: curl -H "Authorization: Bearer $KEY" https://gen.pollinations.ai/models
+  model: openai/gpt-image-1-mini
+  width: 1080                 # portrait 1080x1350 = most feed real estate
+  height: 1350
+  timeout_seconds: 300.0      # gpt-image models are slow; be generous

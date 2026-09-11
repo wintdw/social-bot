@@ -22,6 +22,7 @@ next to it merged last.
 .venv/bin/social-bot whoami                       # token + manageable pages
 .venv/bin/social-bot feed --limit 5
 .venv/bin/social-bot blog scan                    # queue new drafts (no token needed)
+.venv/bin/social-bot blog image --limit 1         # generate AI images for drafts (needs image_gen.api_key)
 .venv/bin/social-bot serve --port 8083            # dashboard + review UI + schedulers
 .venv/bin/social-bot post --dry-run --message "…" # then drop --dry-run to post
 ```
@@ -85,10 +86,12 @@ same id.
 | `blog scan` adds 0 items | Dedupe working — those slugs are in `seen.json`. Normal. To re-import: `sudo rm data/review/seen.json data/review/queue.json` (loses rewrites/approvals too). |
 | Source errors (`scan_ok: false`) | The host is flaky (504s). `source_api` retries; re-run `/scan`. Use `curl …/scan` or the **Scan now** button. |
 | `/api/status` 404 | Old image — rebuild (`docker compose up -d --build`). |
-| OAuth error on post | The Page token expired — mint a fresh one, update `credentials.yaml`, `whoami` to verify. |
+| OAuth error on post | The Page token expired — check `/status` (validity + expiry), mint a fresh one, update `credentials.yaml`, `whoami` to verify. |
 | Approved but nothing shows on the Page | `publish.private: true` — the post is unpublished (page admins only). Set it to `false` to post publicly; a private send also leaves the draft in the queue, so re-approving later posts it publicly. |
 | Hashtags missing from a post | Ensure the image includes the `Draft.post_text` fix (rebuild). Hashtags are appended to the caption at publish time. |
 | Draft stuck `extracted` | No rewrite yet — the external agent must `POST /api/drafts/{id}/rewrite`. |
+| Draft has no image after a rewrite | `serve` generates it in the background; a restart (or a provider 5xx) can leave it empty. Check the **Image jobs** section on `/status` (or the dashboard, or `GET /api/status` → `images`), then run `social-bot blog image` or the **Generate image** button on `/review/{id}`. |
+| Image generation fails (`HTTP 401`) | `image_gen.api_key` missing/invalid. The default `gen.pollinations.ai/image` endpoint requires a key (see `credentials.example.yaml`). |
 
 ## Security
 

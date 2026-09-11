@@ -121,6 +121,81 @@ class TestDashboard:
         assert "Private mode" in out
 
 
+IMAGES = {
+    "enabled": True,
+    "running": 1,
+    "failed": 1,
+    "jobs": [
+        {
+            "draft_id": "post-one",
+            "status": "running",
+            "error": "",
+            "started_at": "2026-09-11 08:00:00",
+            "finished_at": None,
+        },
+        {
+            "draft_id": "post-two",
+            "status": "error",
+            "error": "HTTP 520 <upstream>",
+            "started_at": "2026-09-11 08:00:00",
+            "finished_at": "2026-09-11 08:00:30",
+        },
+    ],
+}
+
+
+class TestImageSection:
+    def test_dashboard_shows_image_jobs(self):
+        out = render_dashboard_html(
+            items=[], stats=STATS, refresh=REFRESH, scan=SCAN,
+            images=IMAGES, generated_at=GENERATED,
+        )
+        assert "Image jobs" in out
+        assert "post-two" in out
+        assert "badge-failed" in out and "badge-running" in out
+
+    def test_status_shows_image_jobs(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
+        )
+        assert "2 job(s) · 1 running · 1 failed" in out
+        assert "post-one" in out
+
+    def test_newest_job_first(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
+        )
+        assert out.index("post-two") < out.index("post-one")
+
+    def test_error_text_is_escaped(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
+        )
+        assert "<upstream>" not in out
+        assert "&lt;upstream&gt;" in out
+
+    def test_no_jobs_yet(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN,
+            images={"enabled": True, "running": 0, "failed": 0, "jobs": []},
+            generated_at=GENERATED,
+        )
+        assert "No image jobs yet" in out
+
+    def test_disabled(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN,
+            images={"enabled": False, "running": 0, "failed": 0, "jobs": []},
+            generated_at=GENERATED,
+        )
+        assert "Disabled" in out
+
+    def test_absent_images_renders_no_section(self):
+        out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
+        assert "Image jobs" not in out
+
+
+
 class TestPublish:
     def test_lists_records_newest_first(self):
         out = render_publish_html(RECORDS, generated_at=GENERATED)
@@ -161,3 +236,53 @@ class TestStatus:
         out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
         assert out.lstrip().startswith("<!doctype html>")
         assert out.rstrip().endswith("</html>")
+
+    def test_token_not_checked_yet(self):
+        out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
+        assert "Not checked yet." in out
+
+    def test_token_valid_with_expiry(self):
+        token = {
+            "valid": True,
+            "type": "PAGE",
+            "expires_at": "2026-11-09T21:12:21+00:00",
+            "never_expires": False,
+            "expires_in_days": 59,
+            "scopes": ["pages_read_engagement", "pages_manage_posts"],
+            "checked_at": "2026-09-11 08:00:00",
+        }
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, token=token, generated_at=GENERATED
+        )
+        assert "badge-valid" in out
+        assert "in 59 day" in out
+        assert "2 granted" in out
+        assert "2026-09-11 08:00:00" in out
+
+    def test_token_never_expires(self):
+        token = {"valid": True, "never_expires": True, "checked_at": "2026-09-11 08:00:00"}
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, token=token, generated_at=GENERATED
+        )
+        assert "badge-valid" in out
+        assert ">never<" in out
+
+    def test_token_invalid_shows_error(self):
+        token = {
+            "valid": False,
+            "error": "Session has expired",
+            "checked_at": "2026-09-11 08:00:00",
+        }
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, token=token, generated_at=GENERATED
+        )
+        assert "badge-invalid" in out
+        assert "Session has expired" in out
+
+    def test_token_error_is_escaped(self):
+        token = {"valid": False, "error": "<script>alert(1)</script>", "checked_at": "x"}
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, token=token, generated_at=GENERATED
+        )
+        assert "<script>" not in out
+        assert "&lt;script&gt;" in out

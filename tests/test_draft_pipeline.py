@@ -10,6 +10,7 @@ import pytest
 from social_bot import draft_pipeline as pipeline
 from social_bot.config import DEFAULTS
 from social_bot.drafts import AI_DRAFT, EXTRACTED, POSTED, REJECTED, Draft
+from social_bot.image_gen import DEFAULT_BASE_URL
 from social_bot.source_api import SourceError
 
 SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
@@ -195,6 +196,113 @@ class TestRewriteIntake:
             pipeline.receive_rewrite(_cfg(tmp_path), "nope", {"caption": "x"})
 
 
+class TestQueueListing:
+    def _seed(self, tmp_path, drafts):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(pipeline.queue_path(cfg), drafts)
+        return cfg
+
+    def test_list_drafts_is_newest_first(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="old", state=EXTRACTED, created_at="2026-09-01T07:00:00+00:00"),
+                Draft(id="new", state=EXTRACTED, created_at="2026-09-10T07:00:00+00:00"),
+                Draft(id="mid", state=EXTRACTED, created_at="2026-09-05T07:00:00+00:00"),
+            ],
+        )
+        assert [d.id for d in pipeline.list_drafts(cfg, pipeline.OPEN_STATES)] == [
+            "new",
+            "mid",
+            "old",
+        ]
+
+    def test_sorts_by_source_date_not_queue_time(self, tmp_path):
+        """A scan queues a batch within seconds — created_at is near-useless."""
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(
+                    id="old-post",
+                    state=EXTRACTED,
+                    published="2026-08-01T00:00:00Z",
+                    created_at="2026-09-11T15:20:10+00:00",
+                ),
+                Draft(
+                    id="new-post",
+                    state=EXTRACTED,
+                    published="2026-09-10T00:00:00Z",
+                    created_at="2026-09-11T15:20:00+00:00",
+                ),
+            ],
+        )
+        assert [d.id for d in pipeline.list_drafts(cfg, pipeline.OPEN_STATES)] == [
+            "new-post",
+            "old-post",
+        ]
+
+    def test_rfc822_source_dates_sort_correctly(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="aug", state=EXTRACTED, published="Sun, 16 Aug 2026 00:00:00 GMT"),
+                Draft(id="sep", state=EXTRACTED, published="Tue, 08 Sep 2026 00:00:00 GMT"),
+            ],
+        )
+        assert [d.id for d in pipeline.list_drafts(cfg, pipeline.OPEN_STATES)] == ["sep", "aug"]
+
+    def test_unparseable_date_falls_back_to_queue_time(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(
+                    id="bad-date",
+                    state=EXTRACTED,
+                    published="last Tuesday",
+                    created_at="2026-09-10T12:00:00+00:00",
+                ),
+                Draft(id="dated", state=EXTRACTED, published="2026-09-01T00:00:00Z"),
+            ],
+        )
+        # The undated item falls back to its (newer) queue time and sorts first.
+        assert [d.id for d in pipeline.list_drafts(cfg, pipeline.OPEN_STATES)] == [
+            "bad-date",
+            "dated",
+        ]
+
+    def test_updated_at_is_the_fallback_sort_key(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="a", state=EXTRACTED, updated_at="2026-09-02T00:00:00+00:00"),
+                Draft(id="b", state=EXTRACTED, updated_at="2026-09-03T00:00:00+00:00"),
+            ],
+        )
+        assert [d.id for d in pipeline.list_drafts(cfg, pipeline.OPEN_STATES)] == ["b", "a"]
+
+    def test_state_filter_still_applies(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                Draft(id="e", state=EXTRACTED, created_at="2026-09-02T00:00:00+00:00"),
+                Draft(id="p", state=POSTED, created_at="2026-09-03T00:00:00+00:00"),
+            ],
+        )
+        assert [d.id for d in pipeline.list_drafts(cfg, pipeline.OPEN_STATES)] == ["e"]
+
+    def test_filter_drafts_by_source_and_state(self):
+        drafts = [
+            Draft(id="1", source="a", state=EXTRACTED),
+            Draft(id="2", source="a", state=AI_DRAFT),
+            Draft(id="3", source="b", state=EXTRACTED),
+        ]
+        assert [d.id for d in pipeline.filter_drafts(drafts, source="a")] == ["1", "2"]
+        assert [d.id for d in pipeline.filter_drafts(drafts, state=EXTRACTED)] == ["1", "3"]
+        assert [d.id for d in pipeline.filter_drafts(drafts, source="a", state=AI_DRAFT)] == ["2"]
+        assert [d.id for d in pipeline.filter_drafts(drafts)] == ["1", "2", "3"]
+        assert pipeline.filter_drafts(drafts, source="nope") == []
+
+
 class TestPublish:
     def test_dry_run_does_not_publish(self, tmp_path, monkeypatch, capsys):
         cfg = _seed_draft(tmp_path, caption="Hello")
@@ -320,6 +428,263 @@ class TestDna:
 
     def test_unset_is_empty(self, tmp_path):
         assert pipeline.dna_text(_cfg(tmp_path)) == ""
+
+
+class TestGenerateImages:
+    def _cfg_with_gen(self, tmp_path, **overrides):
+        cfg = _seed_draft(tmp_path)
+        cfg["image_gen"] = {**DEFAULTS["image_gen"], "enabled": True, **overrides}
+        return cfg
+
+    def test_disabled_raises(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        with pytest.raises(ValueError):
+            pipeline.generate_images(cfg)
+
+    def test_generates_and_stores_image(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(tmp_path)
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/one.jpg"
+        )
+        result = pipeline.generate_images(cfg)
+        assert result["generated"] == 1
+        assert result["ids"] == ["post-one"]
+        assert pipeline.get_draft(cfg, "post-one").image == "https://gen/one.jpg"
+
+    def test_overwrite_replaces_existing_image(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(tmp_path)
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.image = "https://blog/cover.jpg"
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/new.jpg"
+        )
+        pipeline.generate_images(cfg, overwrite=True)
+        assert pipeline.get_draft(cfg, "post-one").image == "https://gen/new.jpg"
+
+    def test_missing_only_skips_existing(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(tmp_path)
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.image = "https://blog/cover.jpg"
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/new.jpg"
+        )
+        result = pipeline.generate_images(cfg, overwrite=False)
+        assert result["generated"] == 0
+        assert pipeline.get_draft(cfg, "post-one").image == "https://blog/cover.jpg"
+
+    def test_default_keeps_existing_image(self, tmp_path, monkeypatch):
+        """No explicit flag: an existing image is kept (config overwrite is off)."""
+        cfg = self._cfg_with_gen(tmp_path)
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.image = "https://blog/cover.jpg"
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        calls = []
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
+        )
+        result = pipeline.generate_images(cfg)
+        assert result["generated"] == 0
+        assert calls == []
+        assert pipeline.get_draft(cfg, "post-one").image == "https://blog/cover.jpg"
+
+    def test_failure_is_recorded_not_raised(self, tmp_path, monkeypatch):
+        from social_bot.image_gen import ImageGenError
+
+        def boom(*a, **kw):
+            raise ImageGenError("nope")
+
+        cfg = self._cfg_with_gen(tmp_path)
+        monkeypatch.setattr(pipeline, "generate_for_draft", boom)
+        result = pipeline.generate_images(cfg)
+        assert result["generated"] == 0
+        assert result["errors"][0]["error"].startswith("image post-one")
+
+    def test_unknown_draft_id_raises(self, tmp_path):
+        cfg = self._cfg_with_gen(tmp_path)
+        with pytest.raises(ValueError):
+            pipeline.generate_images(cfg, draft_ids=["nope"])
+
+    def test_key_and_config_are_passed_through(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(
+            tmp_path, model="turbo", api_key="sk_x", base_url="https://gen.example/image"
+        )
+        captured = {}
+
+        def fake(*args, **kwargs):
+            captured.update(kwargs)
+            return "https://gen/one.jpg"
+
+        monkeypatch.setattr(pipeline, "generate_for_draft", fake)
+        pipeline.generate_images(cfg)
+        assert captured["model"] == "turbo"
+        assert captured["api_key"] == "sk_x"
+        assert captured["base_url"] == "https://gen.example/image"
+
+    def test_blank_base_url_falls_back_to_default(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(tmp_path, base_url="")
+        captured = {}
+
+        def fake(*args, **kwargs):
+            captured.update(kwargs)
+            return "https://gen/one.jpg"
+
+        monkeypatch.setattr(pipeline, "generate_for_draft", fake)
+        pipeline.generate_images(cfg)
+        assert captured["base_url"] == DEFAULT_BASE_URL
+
+
+class TestImageStyle:
+    def test_reads_style_file(self, tmp_path):
+        style = tmp_path / "style.md"
+        style.write_text("Deep navy palette.", encoding="utf-8")
+        cfg = _cfg(tmp_path)
+        cfg["image_gen"]["style_file"] = str(style)
+        assert pipeline.image_style_text(cfg) == "Deep navy palette."
+
+    def test_absent_is_empty(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cfg["image_gen"]["style_file"] = str(tmp_path / "nope.md")
+        assert pipeline.image_style_text(cfg) == ""
+
+    def test_unset_is_empty(self, tmp_path):
+        assert pipeline.image_style_text(_cfg(tmp_path)) == ""
+
+    def test_style_is_passed_to_generation(self, tmp_path, monkeypatch):
+        style = tmp_path / "style.md"
+        style.write_text("Navy, amber accent.", encoding="utf-8")
+        cfg = _seed_draft(tmp_path)
+        cfg["image_gen"] = {
+            **DEFAULTS["image_gen"],
+            "enabled": True,
+            "style_file": str(style),
+        }
+        captured = {}
+
+        def fake(*args, **kwargs):
+            captured.update(kwargs)
+            return "https://gen/one.jpg"
+
+        monkeypatch.setattr(pipeline, "generate_for_draft", fake)
+        pipeline.generate_images(cfg)
+        assert captured["style"] == "Navy, amber accent."
+
+
+class TestScanImageGen:
+    def test_scan_does_not_generate_images(self, tmp_path, monkeypatch):
+        """Images are generated after the rewrite supplies an image_prompt."""
+        calls = []
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
+        )
+        cfg = _cfg(tmp_path)
+        cfg["image_gen"] = {**DEFAULTS["image_gen"], "enabled": True}
+        pipeline.scan_sources(cfg, client=FakeClient())
+        assert calls == []
+        # The source image from enrichment is kept untouched.
+        assert pipeline.get_draft(cfg, "post-one").image == "https://img/cover.jpg"
+
+
+class TestImagePrompt:
+    def _cfg_with_gen(self, tmp_path, **overrides):
+        cfg = _seed_draft(tmp_path)
+        cfg["image_gen"] = {**DEFAULTS["image_gen"], "enabled": True, **overrides}
+        return cfg
+
+    def test_receive_rewrite_stores_image_prompt(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "c", "image_prompt": "a long ledger"}
+        )
+        assert draft.image_prompt == "a long ledger"
+
+    def test_image_prompt_is_passed_to_generation(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(tmp_path)
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.image_prompt = "a long ledger unspooling"
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        captured = {}
+
+        def fake(*args, **kwargs):
+            captured.update(kwargs)
+            return "https://gen/one.jpg"
+
+        monkeypatch.setattr(pipeline, "generate_for_draft", fake)
+        pipeline.generate_images(cfg)
+        assert captured["image_prompt"] == "a long ledger unspooling"
+
+    def test_empty_image_prompt_falls_back_to_title(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(tmp_path)
+        captured = {}
+
+        def fake(title, excerpt, **kwargs):
+            captured["title"] = title
+            captured.update(kwargs)
+            return "https://gen/one.jpg"
+
+        monkeypatch.setattr(pipeline, "generate_for_draft", fake)
+        pipeline.generate_images(cfg)
+        # No image_prompt set, so image_gen must fall back to the title.
+        assert captured["image_prompt"] == ""
+        assert captured["title"] == "Title"
+
+
+class TestGenerateMissingImage:
+    """The serve hook: fill a just-rewritten draft's image, only if missing."""
+
+    def _cfg_with_gen(self, tmp_path, **overrides):
+        cfg = _seed_draft(tmp_path)
+        cfg["image_gen"] = {**DEFAULTS["image_gen"], "enabled": True, **overrides}
+        return cfg
+
+    def test_disabled_returns_none_without_generating(self, tmp_path, monkeypatch):
+        calls = []
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
+        )
+        cfg = _seed_draft(tmp_path)  # image_gen disabled by default
+        assert pipeline.generate_missing_image(cfg, "post-one") is None
+        assert calls == []
+
+    def test_unknown_draft_returns_none(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: "x")
+        assert pipeline.generate_missing_image(self._cfg_with_gen(tmp_path), "nope") is None
+
+    def test_generates_when_image_is_missing(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(tmp_path)
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/one.jpg"
+        )
+        result = pipeline.generate_missing_image(cfg, "post-one")
+        assert result["generated"] == 1
+        assert pipeline.get_draft(cfg, "post-one").image == "https://gen/one.jpg"
+
+    def test_keeps_existing_image(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(tmp_path)
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.image = "https://blog/cover.jpg"
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        calls = []
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
+        )
+        result = pipeline.generate_missing_image(cfg, "post-one")
+        assert result["generated"] == 0
+        assert calls == []  # a re-submitted rewrite must not regenerate
+        assert pipeline.get_draft(cfg, "post-one").image == "https://blog/cover.jpg"
+
+    def test_failure_is_recorded_not_raised(self, tmp_path, monkeypatch):
+        from social_bot.image_gen import ImageGenError
+
+        def boom(*a, **kw):
+            raise ImageGenError("nope")
+
+        cfg = self._cfg_with_gen(tmp_path)
+        monkeypatch.setattr(pipeline, "generate_for_draft", boom)
+        result = pipeline.generate_missing_image(cfg, "post-one")
+        assert result["generated"] == 0
+        assert result["errors"][0]["error"].startswith("image post-one")
 
 
 class TestStatus:

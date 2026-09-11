@@ -51,16 +51,66 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 ### 2. Rewrite (`draft_pipeline.receive_rewrite`)
 - The agent calls `GET /api/drafts` (returns open drafts + `publish.dna_file`
   contents as `dna`) and `POST /api/drafts/{id}/rewrite` with
-  `{caption, hashtags, cta, alt_text, commentary}`.
+  `{caption, hashtags, cta, alt_text, commentary, image_prompt}`.
 - Stored via `Draft.apply_rewrite`; the draft becomes `ai_draft`.
 
+### 2b. Images (`image_gen.py`, optional)
+- Images are generated **after** the rewrite, on demand via
+  `social-bot blog image`, the **Generate image** button on `/review/{id}`, or
+  `POST /api/drafts/{id}/image`. The rewriter supplies `image_prompt` — a
+  concrete English visual concept for that post — and that is what gets
+  illustrated. The button only appears when `image_gen.enabled` is true.
+- The review/API paths run synchronously (the request waits for the provider,
+  which can take minutes with `gpt-image` models); `blog image` batches.
+- **Every post is a photo post**, so `serve` also fills the image
+  automatically: when a rewrite lands (`POST /api/drafts/{id}/rewrite`) it
+  generates that draft's image **in the background**, only if the draft has
+  none, and returns the rewrite response immediately. A restart before the
+  background job finishes is caught by `blog image`.
+- **Knowing whether it worked** (the job is async, so the draft's `image` field
+  alone only says "present or not"):
+  - `GET /api/status` → `images` lists each job with `status`
+    (`running` / `ok` / `unchanged` / `skipped` / `error`), `error`, and
+    timestamps, plus `running` / `failed` counts. In-memory: a `serve` restart
+    clears the job list (the draft's `image` is still the durable truth).
+  - The **`/status`** page and the **dashboard (`/`)** both render an
+    **Image jobs** section from that payload.
+  - `/review/{id}` shows it in the UI: "Generating…" while running, the error
+    text on failure, and "No image yet" otherwise.
+  - Failures are also logged to the container (`docker logs social-bot`).
+- **Scanning does not generate images.** At scan time no rewrite exists, so the
+  only available subject would be the raw `title`; illustrating an abstract
+  Vietnamese title produced a near-identical picture for every draft. Generate
+  after the rewrite instead.
+- **An existing image is never replaced by default.** Generation only fills
+  drafts that have none, so a source post's own cover (e.g. the blog's image)
+  survives every trigger — the rewrite background job, `blog image`, and the
+  API. To deliberately replace one, opt in: `blog image --overwrite`,
+  `POST /api/drafts/{id}/image?overwrite=true`, the **Regenerate image** button
+  on `/review/{id}`, or `image_gen.overwrite: true` in config.
+- The prompt (`image_gen.build_prompt`) is the `image_gen.style_file` brand
+  look (palette/mood only) + `image_prompt` (subject + composition) + hard
+  negatives (no people, no text). `image_gen.base_url` selects the endpoint
+  (`gen.pollinations.ai/image` — clean output, needs `api_key`;
+  `image.pollinations.ai/prompt` — keyless but watermarked and `sana`-only).
+- A failure is recorded in the summary `errors` and the draft keeps its
+  existing image: image generation never blocks the pipeline.
+
 ### 3. Review (human)
-- `/review` lists open drafts; `/review/{id}` shows the extracted info, the
+- `/review` lists open drafts **newest first by the item's own date**
+  (`published`, falling back to when it was queued — a whole scan is queued
+  within seconds, so `created_at` alone orders a batch arbitrarily), with
+  **Source** and **Status** filter chips
+  (`?source=<name>&status=<state>`, plain links, no JS). A card shows the state
+  badge, the source, and the date it is sorted by (`published`, or `queued`
+  when the source gave none).
+  `/review/{id}` shows the extracted info, the
   editable caption + hashtags, and Approve / Reject. Rendered by
   `draft_html.render_draft_html`.
 - `/publish` lists the audit log (what has actually been posted); `/status`
-  shows sources, drafts by state, and publish settings. `/` is the dashboard
-  with the refresh/scan controls. All four share the nav from `ui.py`.
+  shows the token's validity and expiry, sources, drafts by state, and publish
+  settings. `/` is the dashboard with the refresh/scan controls. All four share
+  the nav from `ui.py`.
 
 ### 4. Publish (`draft_pipeline.publish_draft`)
 - Triggered only by `POST /review/{id}/publish` (the review page), parsed in
@@ -90,10 +140,10 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/` | Dashboard: controls, counts, scheduler state, cached feed. |
-| GET | `/review` | Review list (has the **Scan sources now** button). |
-| GET | `/review/{id}` | Review detail: editable caption, Dry run / Approve / Reject. |
+| GET | `/review` | Review list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters. |
+| GET | `/review/{id}` | Review detail: editable caption, Dry run / Approve / Reject (+ Generate image when enabled). |
 | GET | `/publish` | Publish audit log (public + private sends). |
-| GET | `/status` | Human-readable pipeline snapshot. |
+| GET | `/status` | Human-readable snapshot: token validity/expiry, schedules, sources. |
 | GET | `/drafts` | Redirect (307) to `/review` for old links. |
 | GET | `/health` | Liveness + last run info. |
 | GET | `/api/status` | Full pipeline snapshot (JSON). |
@@ -101,8 +151,10 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | POST | `/scan` | Scan sources now (JSON, or a 303 back to `/review` for browsers). |
 | POST | `/review/{id}/publish` | Publish (form; `dry_run=1` to preview). |
 | POST | `/review/{id}/reject` | Reject. |
+| POST | `/review/{id}/image` | Generate/regenerate a draft's image (form; redirects back). |
 | GET | `/api/drafts` | Open drafts + DNA, for the rewriter. |
 | POST | `/api/drafts/{id}/rewrite` | Store the rewrite. |
+| POST | `/api/drafts/{id}/image` | Generate an image for one draft (JSON), for the rewriter/operator. |
 
 ## Extending
 
@@ -125,6 +177,10 @@ LinkedIn Community Management API approval.
 **Changing the brand voice.** Edit `docs/atento-dna.md` (the brief the rewriter
 reads) and keep `publish.dna_file` pointed at it; the contents ride along in
 `GET /api/drafts`.
+
+**Changing the image look.** Edit `docs/atento-image-style.md` (the visual brief
+prepended to every image prompt) and keep `image_gen.style_file` pointed at it.
+Swap the image endpoint/provider with `image_gen.base_url` + `image_gen.model`.
 
 **Changing what a draft stores.** Edit the `Draft` dataclass in `drafts.py`;
 `from_dict` ignores unknown keys, so old `queue.json` files still load.

@@ -11,6 +11,8 @@ your task.
   add a command / config key / source / destination.
 - **[atento-dna.md](atento-dna.md)** — the Atento brand-voice playbook the
   rewriter agent applies (referenced by `publish.dna_file`).
+- **[atento-image-style.md](atento-image-style.md)** — the short visual brief
+  prepended to every generated image prompt (`image_gen.style_file`).
 
 `AGENTS.md` (repo root) is the short brief; these docs are the detail.
 
@@ -24,6 +26,8 @@ your task.
 | Change how a source is fetched (HTTP/retries) | `src/social_bot/source_api.py` |
 | Change the Draft model, states, or persistence | `src/social_bot/drafts.py`, `tests/test_drafts.py` |
 | Change scan / rewrite / publish orchestration | `src/social_bot/draft_pipeline.py`, `tests/test_draft_pipeline.py` |
+| Change AI image generation (prompt, endpoint, provider) | `src/social_bot/image_gen.py`, `tests/test_image_gen.py` |
+| Change the image look / brand style | `docs/atento-image-style.md`, then `image_gen.style_file` in `config.yaml` |
 | Add a social destination (LinkedIn, …) | `src/social_bot/publishers.py`, `tests/test_publishers.py` |
 | Change the review UI (HTML) | `src/social_bot/draft_html.py`, `tests/test_draft_html.py` |
 | Change the dashboard / published / status pages | `src/social_bot/dashboard_html.py`, `tests/test_dashboard_html.py` |

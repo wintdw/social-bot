@@ -108,6 +108,26 @@ def test_defaults_include_pipeline_sections(tmp_path):
     assert cfg["publish"]["log_name"] == "published.jsonl"
 
 
+def test_image_gen_disabled_by_default(tmp_path):
+    cfg = load_config(tmp_path / "missing.yaml")
+    assert cfg["image_gen"]["enabled"] is False
+    assert cfg["image_gen"]["overwrite"] is False
+    assert cfg["image_gen"]["base_url"] == "https://gen.pollinations.ai/image"
+    assert cfg["image_gen"]["model"] == "openai/gpt-image-1-mini"
+    assert cfg["image_gen"]["width"] == 1080 and cfg["image_gen"]["height"] == 1350
+
+
+def test_credentials_file_supplies_image_key(tmp_path):
+    conf = tmp_path / "config.yaml"
+    conf.write_text(yaml.safe_dump({"image_gen": {"enabled": True}}), encoding="utf-8")
+    (tmp_path / "credentials.yaml").write_text(
+        yaml.safe_dump({"image_gen": {"api_key": "sk_secret"}}), encoding="utf-8"
+    )
+    cfg = load_config(conf)
+    assert cfg["image_gen"]["api_key"] == "sk_secret"
+    assert cfg["image_gen"]["enabled"] is True
+
+
 @pytest.mark.parametrize(
     "override",
     [
@@ -122,6 +142,10 @@ def test_defaults_include_pipeline_sections(tmp_path):
         {"blog": {"scan_at": []}},
         {"blog": {"timeout_seconds": 0}},
         {"blog": {"max_scan": 0}},
+        {"image_gen": {"provider": "midjourney"}},
+        {"image_gen": {"timeout_seconds": 0}},
+        {"image_gen": {"width": 0}},
+        {"image_gen": {"base_url": "http://gen.pollinations.ai/image"}},
     ],
     ids=[
         "empty-sources",
@@ -135,6 +159,10 @@ def test_defaults_include_pipeline_sections(tmp_path):
         "empty-scan-at",
         "bad-blog-timeout",
         "zero-max-scan",
+        "unknown-image-provider",
+        "zero-image-timeout",
+        "zero-image-width",
+        "http-image-base-url",
     ],
 )
 def test_validate_rejects_bad_pipeline_config(override):

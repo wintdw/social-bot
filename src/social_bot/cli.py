@@ -10,7 +10,7 @@ import sys
 from . import __version__
 from .api import ApiError, api_from_config
 from .config import load_config, validate
-from .draft_pipeline import scan_sources
+from .draft_pipeline import generate_images, scan_sources
 from .feed import format_feed_md, parse_feed_response
 from .refresh import refresh_feed
 
@@ -73,6 +73,26 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="max new drafts per source (default: blog.max_scan)",
     )
     p_scan.set_defaults(func=_cmd_blog_scan)
+
+    p_image = blog_sub.add_parser(
+        "image", help="generate AI images for queued drafts (never posts)"
+    )
+    p_image.add_argument(
+        "--draft",
+        action="append",
+        metavar="ID",
+        help="only this draft id (repeatable; default: all open drafts)",
+    )
+    p_image.add_argument(
+        "--limit", type=int, default=None, help="max drafts to process"
+    )
+    p_image.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace existing images too (default: only fill drafts without one)",
+    )
+    p_image.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_image.set_defaults(func=_cmd_blog_image)
 
     p_serve = sub.add_parser(
         "serve", help="run the feed dashboard + draft review UI + scheduled refresh/scan"
@@ -251,6 +271,37 @@ def _cmd_blog_scan(args: argparse.Namespace) -> int:
         )
         for item in result["items"]:
             print(f"  - {item['id']}: {item['title'] or '(untitled)'}")
+    for err in result["errors"]:
+        print(f"  ! {err['source']}: {err['error']}", file=sys.stderr)
+    return 1 if result["errors"] else 0
+
+
+def _cmd_blog_image(args: argparse.Namespace) -> int:
+    cfg = _load_config(args)
+    try:
+        result = generate_images(
+            cfg,
+            draft_ids=args.draft,
+            limit=args.limit,
+            overwrite=True if args.overwrite else None,
+        )
+    except ValueError as exc:
+        print(f"blog image: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(f"blog image: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"Generated {result['generated']} image(s) "
+            f"({result['candidates']} candidate(s))."
+        )
+        for draft_id in result["ids"]:
+            print(f"  - {draft_id}")
     for err in result["errors"]:
         print(f"  ! {err['source']}: {err['error']}", file=sys.stderr)
     return 1 if result["errors"] else 0
