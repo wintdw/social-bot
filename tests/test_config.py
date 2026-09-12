@@ -120,6 +120,7 @@ def test_defaults_include_pipeline_sections(tmp_path):
     assert cfg["publish"]["post_per_slot"] == 1
     assert cfg["publish"]["interval_days"] == 0  # no minimum gap by default
     assert cfg["blog"]["scan_at"] == ["06:00"]
+    assert cfg["blog"]["max_age_days"] == 0  # no age window by default
     assert cfg["review"]["dir"] == "data/review"
     assert cfg["publish"]["log_name"] == "published.jsonl"
 
@@ -153,7 +154,6 @@ def test_credentials_file_supplies_image_key(tmp_path):
         {"sources": [{"name": "x", "type": "rss", "url": "http://x"}]},
         {"publish": {"destinations": []}},
         {"publish": {"destinations": ["mastodon"]}},
-        {"publish": {"max_per_day": 0}},
         {"publish": {"destinations": ["facebook"], "post_at": ["nope"]}},
         {"publish": {"destinations": ["facebook"], "post_at": ["24:00"]}},
         {"publish": {"destinations": ["facebook"], "post_at": ["19:30-21:00-22:00"]}},
@@ -165,6 +165,7 @@ def test_credentials_file_supplies_image_key(tmp_path):
         {"blog": {"scan_at": []}},
         {"blog": {"timeout_seconds": 0}},
         {"blog": {"max_scan": 0}},
+        {"blog": {**DEFAULTS["blog"], "max_age_days": -1}},
         {"image_gen": {"provider": "midjourney"}},
         {"image_gen": {"timeout_seconds": 0}},
         {"image_gen": {"width": 0}},
@@ -177,7 +178,6 @@ def test_credentials_file_supplies_image_key(tmp_path):
         "http-source-url",
         "no-destinations",
         "unknown-destination",
-        "zero-cap",
         "bad-post-at",
         "out-of-range-post-at",
         "post-at-window-triple",
@@ -189,6 +189,7 @@ def test_credentials_file_supplies_image_key(tmp_path):
         "empty-scan-at",
         "bad-blog-timeout",
         "zero-max-scan",
+        "negative-max-age-days",
         "unknown-image-provider",
         "zero-image-timeout",
         "zero-image-width",

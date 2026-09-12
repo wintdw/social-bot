@@ -12,6 +12,7 @@ import json
 import pathlib
 
 from .api import ApiError
+from .caption import display_title
 from .config import ROOT, load_config
 from .drafts import (
     AI_DRAFT,
@@ -187,6 +188,11 @@ def generate_images(
 
     drafts = load_drafts(queue_path(cfg))
     wanted = set(draft_ids) if draft_ids else None
+    # The state gate scopes a *batch* (which drafts it may touch). A caller who
+    # names a draft has already decided, so it must not silently drop one — an
+    # approved draft is still on /review/{id} with its Regenerate button.
+    if wanted is not None:
+        states = None
     selected = [
         draft
         for draft in drafts
@@ -305,14 +311,41 @@ def scheduled_queue(cfg: dict) -> list[Draft]:
 
 
 def filter_drafts(
-    drafts: list[Draft], *, source: str = "", state: str = ""
+    drafts: list[Draft], *, source: str = "", state: str = "", q: str = ""
 ) -> list[Draft]:
-    """Narrow a listing by source name and/or state ('' means no filter)."""
+    """Narrow a listing by source, state, and/or a free-text search ('' = off).
+
+    The search matches the title, the excerpt, or the caption, case-insensitively
+    — the caption because that is where a row's displayed title (its hook) lives
+    — so an operator can find one item in a long queue without paging through it.
+    """
     if source:
         drafts = [d for d in drafts if d.source == source]
     if state:
         drafts = [d for d in drafts if d.state == state]
+    if q:
+        needle = str(q).strip().lower()
+        if needle:
+            drafts = [
+                d
+                for d in drafts
+                if needle in (d.title or "").lower()
+                or needle in (d.excerpt or "").lower()
+                or needle in (d.caption or "").lower()
+            ]
     return drafts
+
+
+# The sort orders the review queue offers. "longest" is oldest-first, which is
+# how the backlog should be worked; the poster's own order is separate.
+SORTS = ("newest", "oldest")
+
+
+def sort_drafts(drafts: list[Draft], sort: str = "") -> list[Draft]:
+    """Order a listing for display: 'newest' (default) or 'oldest' first."""
+    if sort == "oldest":
+        return sorted(drafts, key=_sort_key)
+    return sorted(drafts, key=_sort_key, reverse=True)
 
 
 def paginate(
@@ -369,6 +402,32 @@ def _needs_enrich(item) -> bool:
     return not (item.title and item.excerpt and item.image)
 
 
+def _scan_cutoff(cfg: dict) -> dt.datetime | None:
+    """The oldest publish date a scan may queue, or None when uncapped.
+
+    ``blog.max_age_days`` (0 = off) stops a feed that exposes more entries than
+    one scan takes — martinfowler's Atom, notably — from being walked back one
+    ``max_scan`` batch per run long after the first scan.
+    """
+    days = int(cfg.get("blog", {}).get("max_age_days", 0) or 0)
+    if days <= 0:
+        return None
+    return dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+
+
+def _too_old(published: str, cutoff: dt.datetime | None) -> bool:
+    """True when an item's own date is before the cutoff.
+
+    Undated items are kept: a source that gives no date (an unenriched index
+    item, a sitemap entry with no ``lastmod``) can't be shown to be old, and
+    dropping it would silently lose a new post.
+    """
+    if cutoff is None:
+        return False
+    when = parse_when(published)
+    return when is not None and when < cutoff
+
+
 def _enrich(client, source, item, excerpt_chars: int, errors: list[dict]):
     """Fill title/excerpt/image from a post page. Failures keep the bare item."""
     try:
@@ -397,7 +456,8 @@ def scan_sources(
     """Fetch each source, queue unseen items as EXTRACTED drafts.
 
     Never raises on a single source failure — it records the error and keeps
-    going. Marks an id seen only after it is queued (durable dedupe).
+    going. Marks an id seen only after it is queued (durable dedupe). Items older
+    than ``blog.max_age_days`` are skipped (see ``_scan_cutoff``).
     """
     cfg = cfg or load_config()
     raw_sources = list(cfg.get("sources", []))
@@ -413,8 +473,10 @@ def scan_sources(
     excerpt_chars = int(cfg.get("blog", {}).get("excerpt_chars", 240))
     max_scan = int(limit if limit is not None else cfg.get("blog", {}).get("max_scan", 12))
     enrich = bool(cfg.get("blog", {}).get("enrich", True))
+    cutoff = _scan_cutoff(cfg)
 
     added: list[Draft] = []
+    skipped_old = 0
     errors: list[dict] = []
     for raw in raw_sources:
         source = Source.from_config(raw)
@@ -430,9 +492,19 @@ def scan_sources(
             for item in items
             if f"{source.name}:{item.id}" not in seen and item.id not in existing_ids
         ]
+        # Drop out-of-window items before the cap, so old entries can't consume
+        # it and the walk back through an archive feed stops at the cutoff.
+        if cutoff is not None:
+            in_window = [item for item in fresh if not _too_old(item.published, cutoff)]
+            skipped_old += len(fresh) - len(in_window)
+            fresh = in_window
         for item in fresh[:max_scan]:
             if enrich and _needs_enrich(item):
                 item = _enrich(client, source, item, excerpt_chars, errors)
+            # An index item carries no date until enrichment: check it again now.
+            if _too_old(item.published, cutoff):
+                skipped_old += 1
+                continue
             draft = Draft(
                 id=item.id,
                 source=source.name,
@@ -457,6 +529,7 @@ def scan_sources(
     return {
         "sources": len(raw_sources),
         "added": len(added),
+        "skipped_old": skipped_old,
         "total_drafts": len(drafts),
         "errors": errors,
         "items": [d.to_dict() for d in added],
@@ -521,7 +594,6 @@ def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
             ),
             hashtags=hashtags if hashtags is None else hashtags,
             cta=str(body.get("cta", "") or ""),
-            alt_text=str(body.get("alt_text", "") or ""),
             commentary=str(body.get("commentary", "") or ""),
             image_prompt=str(body.get("image_prompt", "") or ""),
         )
@@ -535,14 +607,17 @@ def edit_draft(
     *,
     caption: str | None = None,
     hashtags: str | None = None,
+    image_prompt: str | None = None,
 ) -> Draft:
-    """Human edits from the review page (caption textarea + hashtags field)."""
+    """Human edits from the review page (caption, hashtags, image prompt)."""
 
     def mutate(draft: Draft) -> None:
         if caption is not None:
             draft.caption = caption
         if hashtags is not None:
             draft.hashtags = _split_hashtags(hashtags)
+        if image_prompt is not None:
+            draft.image_prompt = image_prompt
         draft.touch()
 
     return _save_one(cfg, draft_id, mutate)
@@ -639,17 +714,6 @@ def list_published(cfg: dict) -> list[dict]:
     return list(records) if records else []
 
 
-def _published_today(cfg: dict) -> int:
-    """Public posts made today — private (unpublished) test sends don't count."""
-    today = dt.datetime.now().astimezone().date().isoformat()
-    return sum(
-        1
-        for record in list_published(cfg)
-        if not record.get("private")
-        and str(record.get("posted_at", "")).startswith(today)
-    )
-
-
 def interval_days(cfg: dict) -> int:
     """``publish.interval_days`` as an int (0 = no minimum gap)."""
     return int(cfg.get("publish", {}).get("interval_days", 0) or 0)
@@ -674,7 +738,7 @@ def _last_public_post_date(cfg: dict) -> dt.date | None:
     return latest
 
 
-def _interval_remaining(cfg: dict) -> int:
+def interval_remaining(cfg: dict) -> int:
     """Days still to wait before interval_days allows another public post.
 
     0 means posting is allowed now (no interval, or enough days have passed).
@@ -728,18 +792,17 @@ def status(cfg: dict | None = None) -> dict:
             "enabled": bool(cfg.get("publish", {}).get("enabled", True)),
             "private": bool(cfg.get("publish", {}).get("private", False)),
             "destinations": list(cfg.get("publish", {}).get("destinations", [])),
-            "max_per_day": int(cfg.get("publish", {}).get("max_per_day", 10)),
             "post_at": list(cfg.get("publish", {}).get("post_at", []) or []),
             "post_per_slot": int(cfg.get("publish", {}).get("post_per_slot", 1)),
             "interval_days": interval_days(cfg),
-            "interval_remaining": _interval_remaining(cfg),
+            "interval_remaining": interval_remaining(cfg),
             "approved": by_state.get(APPROVED, 0),
             # What the poster will actually send next (the oldest approved). None
             # when nothing is approved, so the UI can say so instead of guessing.
             "next_draft": (
                 {
                     "id": upcoming.id,
-                    "title": upcoming.title,
+                    "title": display_title(upcoming.caption, upcoming.title),
                     "source": upcoming.source,
                     "has_image": bool(upcoming.image),
                 }
@@ -793,10 +856,7 @@ def publish_draft(
 
     targets = [destination] if destination else (draft.destinations or cfg["publish"]["destinations"])
     if not dry_run:
-        cap = int(cfg.get("publish", {}).get("max_per_day", 10))
-        if _published_today(cfg) >= cap:
-            raise ValueError(f"daily publish cap reached ({cap}); not posting today")
-        remaining = _interval_remaining(cfg)
+        remaining = interval_remaining(cfg)
         if remaining > 0:
             raise ValueError(
                 f"publish interval not reached (last public post "
@@ -887,12 +947,12 @@ def publish_scheduled(
     Human-gated by construction: it only ever touches drafts in state
     ``approved`` (a person clicked Approve on /review/{id}); it never approves.
     Each draft goes through the ordinary ``publish_draft`` path, so the
-    ``publish.enabled`` kill-switch, the daily cap and the per-destination
+    ``publish.enabled`` kill-switch, the interval gate and the per-destination
     adapters all apply unchanged.
 
     ``limit`` overrides ``publish.post_per_slot`` for a manual run. A
-    ``ValueError`` (the daily cap, most likely) stops the batch; a publisher or
-    API error is recorded and the batch carries on.
+    ``ValueError`` (the interval gate, most likely) stops the batch; a publisher
+    or API error is recorded and the batch carries on.
     """
     cfg = cfg or load_config()
     if not cfg.get("publish", {}).get("enabled", True):
@@ -921,7 +981,7 @@ def publish_scheduled(
             )
         except ValueError as exc:
             skipped.append({"id": draft.id, "reason": str(exc)})
-            break  # cap reached / state changed: the rest would fail too
+            break  # interval/state unchanged: the rest would fail too
         except (PublisherError, ApiError) as exc:
             errors.append({"id": draft.id, "error": str(exc)})
             continue
@@ -943,9 +1003,5 @@ def publish_scheduled(
         "errors": errors,
         "batch": batch,
         "queued": len(queued),
-        "remaining_today": max(
-            0,
-            int(cfg.get("publish", {}).get("max_per_day", 10)) - _published_today(cfg),
-        ),
-        "interval_remaining": _interval_remaining(cfg),
+        "interval_remaining": interval_remaining(cfg),
     }

@@ -339,7 +339,6 @@ class TestBlogPublishCommand:
                 "errors": [],
                 "batch": 1,
                 "queued": 1,
-                "remaining_today": 9,
             },
         )
         assert cli._cmd_blog_publish(cli._parse_args(["blog", "publish"])) == 0
@@ -350,8 +349,7 @@ class TestBlogPublishCommand:
     def test_dry_run_verb(self, monkeypatch, capsys):
         self._stub(
             monkeypatch,
-            {"posted": [], "skipped": [], "errors": [], "batch": 1, "queued": 0,
-             "remaining_today": 10},
+            {"posted": [], "skipped": [], "errors": [], "batch": 1, "queued": 0},
         )
         assert cli._cmd_blog_publish(cli._parse_args(["blog", "publish", "--dry-run"])) == 0
         assert "Would post 0 draft(s)" in capsys.readouterr().out
@@ -365,7 +363,6 @@ class TestBlogPublishCommand:
                 "errors": [{"id": "a", "error": "boom"}],
                 "batch": 1,
                 "queued": 1,
-                "remaining_today": 10,
             },
         )
         assert cli._cmd_blog_publish(cli._parse_args(["blog", "publish"])) == 1

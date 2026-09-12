@@ -21,7 +21,7 @@ unchanged.
    **Vietnamese** following §4–§7. Keep technical terms in **English** (§4.3).
 4. If the item is an **external source** (anything other than `atento-blog`),
    credit the original author and site in the caption (§7.3).
-5. Return JSON: `caption`, `hashtags`, `cta`, `alt_text`, `commentary` (§9).
+5. Return JSON: `caption`, `hashtags`, `cta`, `commentary`, `image_prompt` (§9).
 6. Self-check against §10 before submitting.
 
 Blog items (`sources: atento-blog`) are *Atento's own* articles — the caption's
@@ -390,9 +390,8 @@ Ví dụ:
 | `caption` | string | Nội dung chính, tiếng Việt, **không** chứa hashtag. Mở bằng masthead hợp bài (§4.5), rồi tới một format (§5); CTA nằm ở cuối — đây là phần duy nhất được đăng. **Không** chứa URL hay tên miền (link bài do pipeline đăng ở comment, §7.2). |
 | `hashtags` | array[string] | 2–4 tag, **kèm dấu `#`**, gồm `#Atento` + `#fromfoundationtoexcellence` + 1 topic. |
 | `cta` | string | Câu kêu gọi hành động — **chỉ để người duyệt đọc**, không được đăng; bản tương ứng phải có trong `caption`. |
-| `alt_text` | string | Mô tả ảnh bằng tiếng Việt, ngắn, phục vụ trợ năng. |
 | `commentary` | string | 2–4 câu cho người duyệt: register nào, **format/hook** là gì, mức drama, có gì cần xác nhận. |
-| `image_prompt` | string | **Tiếng Anh.** Một ý tưởng thị giác CỤ THỂ cho ảnh của riêng bài này (§9.1). |
+| `image_prompt` | string | **Tiếng Anh.** Một ý tưởng thị giác CỤ THỂ cho ảnh của riêng bài này (§9.1). Cũng là alt text của ảnh — không cần bản dịch tiếng Việt. |
 
 ### 9.1 `image_prompt` — ảnh phải cụ thể, và phải khác nhau
 
@@ -433,7 +432,6 @@ Ví dụ:
   "caption": "Buổi phỏng vấn System Design. Ứng viên vẽ vanh vách Load Balancer, cache, cluster database.\n\nRồi interviewer hỏi một câu: \"Chi phí để chạy hệ thống này là bao nhiêu?\". Im lặng.\n\nThiết kế cho 1 triệu users không khó ở phần vẽ. Cái khó là những quyết định về architecture và trade-off phía sau — thứ quyết định hệ thống sống được hay không.\n\nĐó mới là lúc chúng ta thực sự phải \"design\".",
   "hashtags": ["#Atento", "#fromfoundationtoexcellence", "#systemdesign"],
   "cta": "Link khoá học System Design ở dưới comment nha. 🥰",
-  "alt_text": "Giảng viên Atento trình bày về thiết kế hệ thống cho một triệu người dùng.",
   "commentary": "Register technical (giọng Dũng), format D (đám đông rồi lật), drama vừa. Luận điểm để ở cuối. Cần xác nhận link đăng ký trước khi duyệt.",
   "image_prompt": "a wide drawing board holding one clean system sketch, surrounded by far larger discarded sketches crumpled on the floor"
 }
@@ -456,8 +454,8 @@ Ví dụ:
 - [ ] Caption **không** chứa URL hay tên miền (`seangoedecke.com`) — link bài ở comment (§7.2).
 - [ ] Không hype, không bịa, không engagement bait / clickbait.
 - [ ] Emoji đúng liều theo register.
-- [ ] `alt_text` và `commentary` đã điền (commentary nêu rõ format + mức drama).
-- [ ] `image_prompt` đã điền: **tiếng Anh**, cụ thể, và **khác** ẩn dụ với các bài khác.
+- [ ] `commentary` đã điền (nêu rõ format + mức drama).
+- [ ] `image_prompt` đã điền: **tiếng Anh**, cụ thể, và **khác** ẩn dụ với các bài khác (cũng là alt text của ảnh).
 
 ---
 

@@ -34,6 +34,30 @@ Tests never touch the network and never need the `[server]` extra. Conventions:
 - Prefix modules with the domain (`source_*`, `draft_*`) to keep related files
   grouped.
 
+## UI and the design system
+
+The operator UI is one system, not per-page styling. `ui.py` owns the
+stylesheet, the nav, and the `layout`/`badge`/`notice_html` primitives; page
+modules return fragments only and hand them to `layout()`. Read
+[design/design-system.md](design/design-system.md) before changing any markup.
+
+- Never put CSS in a page module or an inline `style="…"` in markup — add a
+  class to `ui._CSS` and reuse the existing tokens.
+- Compose from the shared components (`.panel`, `.stack`, `.cols`, `.cmdbar`,
+  `.btn`, `.badge`, `.pill`, `.qrow`, `.stepper`, …).
+- Keep the semantics: the accent is reserved for the primary action and the
+  focused stage, state is carried by colour **and** a dot **and** a label, and
+  every control stays at least 44px tall.
+
+## Recipe: change the UI
+
+1. Change `ui._CSS`, `ui.py`'s primitives, or the relevant page renderer.
+2. Regenerate the styleframe: `.venv/bin/python scripts/build_styleframe.py`.
+3. `.venv/bin/python -m pytest tests/test_design_system.py` — it fails on an
+   unstyled class, an undefined token, or a stale styleframe.
+4. If you added a component, show it on the styleframe's **Foundations** tab
+   (`styleframe.py`).
+
 ## Recipe: add a CLI command
 
 1. Add a subparser in `cli.py:_parse_args` and `set_defaults(func=_cmd_x)`.
@@ -88,7 +112,8 @@ Each `_cmd_*` returns the code; `main` never lets an exception traceback.
 1. `.venv/bin/python -m pytest`
 2. `.venv/bin/social-bot blog scan` (or `curl -X POST …/scan`) → drafts appear.
 3. `curl -s …/api/status` → counts look right.
-4. `serve` → `/review/{id}` renders; **Dry run** prints the exact text.
+4. `serve` → `/review/{id}` renders; **Save** persists edits, and the Preview
+   panel shows the exact text that would post.
 5. `publish.private: true` makes the real approve an **unpublished** post, so
    you can exercise the whole publish path (Graph call, audit, redirect) without
    going public.

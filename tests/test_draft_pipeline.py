@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import datetime as dt
 import json
+from email.utils import format_datetime
 
 import pytest
 
@@ -187,11 +188,115 @@ class TestScanSources:
         assert [i["id"] for i in result["items"]] == ["dated", "no-date"]
 
 
+class TestScanMaxAge:
+    """`blog.max_age_days` stops a long feed being walked back forever.
+
+    A feed exposing more entries than one scan takes (martinfowler's Atom is a
+    30-entry window against a cap of 12) hands the scanner every entry every
+    run; without a window each scan queues the next `max_scan` batch.
+    """
+
+    @staticmethod
+    def _ago(days: int) -> str:
+        when = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+        return when.isoformat()
+
+    @staticmethod
+    def _rfc822(days: int) -> str:
+        when = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+        return format_datetime(when)
+
+    @staticmethod
+    def _sitemap(entries) -> str:
+        rows = "".join(
+            f"<url><loc>https://atento.vn/blog/{slug}</loc>"
+            + (f"<lastmod>{lastmod}</lastmod>" if lastmod else "")
+            + "</url>"
+            for slug, lastmod in entries
+        )
+        return f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{rows}</urlset>'
+
+    def test_drops_items_older_than_the_window(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cfg["blog"]["max_age_days"] = 30
+        xml = self._sitemap([("recent", self._ago(5)), ("ancient", self._ago(120))])
+        result = pipeline.scan_sources(cfg, client=FakeClient({SOURCE_URL: xml}))
+        assert [i["id"] for i in result["items"]] == ["recent"]
+        assert result["skipped_old"] == 1
+        assert pipeline.get_draft(cfg, "ancient") is None
+        assert pipeline.get_draft(cfg, "recent") is not None
+
+    def test_zero_disables_the_window(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cfg["blog"]["max_age_days"] = 0
+        xml = self._sitemap([("ancient", self._ago(5000))])
+        result = pipeline.scan_sources(cfg, client=FakeClient({SOURCE_URL: xml}))
+        assert result["added"] == 1
+        assert result["skipped_old"] == 0
+
+    def test_undated_items_are_kept(self, tmp_path):
+        """No date is not evidence of age — dropping it would lose a new post."""
+        cfg = _cfg(tmp_path)
+        cfg["blog"]["max_age_days"] = 30
+        cfg["blog"]["enrich"] = False
+        xml = self._sitemap([("no-date", None)])
+        result = pipeline.scan_sources(cfg, client=FakeClient({SOURCE_URL: xml}))
+        assert result["added"] == 1
+        assert result["skipped_old"] == 0
+
+    def test_index_item_is_dropped_once_enrichment_dates_it(self, tmp_path):
+        """An index listing carries no date: the window applies after enriching."""
+        cfg = _cfg(tmp_path)
+        cfg["blog"]["max_age_days"] = 30
+        index_url = "https://atento.vn/blog"
+        cfg["sources"][0] = {
+            "name": "atento-blog",
+            "type": "index",
+            "url": index_url,
+            "path_prefix": "/blog/",
+            "lang": "vi",
+        }
+        index_html = (
+            '<html><head><script type="application/ld+json">'
+            '{"@type":"CollectionPage","mainEntity":{"@type":"ItemList",'
+            '"itemListElement":[{"@type":"ListItem","name":"Old post",'
+            '"url":"https://atento.vn/blog/old-post"}]}}</script></head></html>'
+        )
+        post_html = (
+            "<html><head><script type=\"application/ld+json\">"
+            '{"@type":"BlogPosting","headline":"Old post","datePublished":"'
+            + self._ago(200)
+            + '"}</script></head></html>'
+        )
+        client = FakeClient({index_url: index_html, "https://atento.vn/blog/old-post": post_html})
+        result = pipeline.scan_sources(cfg, client=client)
+        assert result["added"] == 0
+        assert result["skipped_old"] == 1
+        assert pipeline.get_draft(cfg, "old-post") is None
+
+    def test_old_items_do_not_consume_the_cap(self, tmp_path):
+        """The window is applied before max_scan, so old entries can't eat the batch."""
+        cfg = _cfg(tmp_path)
+        cfg["blog"]["max_age_days"] = 30
+        rss_url = "https://example.com/feed"
+        cfg["sources"][0] = {"name": "blog", "type": "rss", "url": rss_url, "lang": "en"}
+        rss = (
+            '<rss version="2.0"><channel>'
+            "<item><title>Ancient</title><link>https://example.com/ancient</link>"
+            f"<pubDate>{self._rfc822(400)}</pubDate></item>"
+            "<item><title>Fresh</title><link>https://example.com/fresh</link>"
+            f"<pubDate>{self._rfc822(1)}</pubDate></item>"
+            "</channel></rss>"
+        )
+        result = pipeline.scan_sources(cfg, client=FakeClient({rss_url: rss}), limit=1)
+        assert [i["id"] for i in result["items"]] == ["fresh"]
+
+
 class TestRewriteIntake:
     def test_receive_rewrite(self, tmp_path):
         cfg = _seed_draft(tmp_path)
         draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "Hello", "hashtags": ["#a"], "alt_text": "alt"}
+            cfg, "post-one", {"caption": "Hello", "hashtags": ["#a"]}
         )
         assert draft.state == AI_DRAFT
         assert draft.caption == "Hello"
@@ -225,6 +330,20 @@ class TestRewriteIntake:
         draft = pipeline.edit_draft(cfg, "post-one", caption="edited", hashtags="#a, #b")
         assert draft.caption == "edited"
         assert draft.hashtags == ["#a", "#b"]
+
+    def test_edit_sets_the_image_prompt(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c"})
+        draft = pipeline.edit_draft(cfg, "post-one", image_prompt="a lone tree")
+        assert draft.image_prompt == "a lone tree"
+
+    def test_edit_leaves_the_image_prompt_when_omitted(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "c", "image_prompt": "a lone tree"}
+        )
+        draft = pipeline.edit_draft(cfg, "post-one", caption="edited")
+        assert draft.image_prompt == "a lone tree"
 
     def test_reject(self, tmp_path):
         cfg = _seed_draft(tmp_path)
@@ -454,6 +573,56 @@ class TestQueueListing:
         assert [d.id for d in pipeline.filter_drafts(drafts)] == ["1", "2", "3"]
         assert pipeline.filter_drafts(drafts, source="nope") == []
 
+    def test_filter_drafts_by_search(self):
+        drafts = [
+            Draft(id="1", title="Kafka Consumer Group", excerpt="rebalancing"),
+            Draft(id="2", title="Database Indexing", excerpt="B-tree internals"),
+            Draft(id="3", title="", excerpt="a note about KAFKA"),
+        ]
+        # Case-insensitive, and matches the excerpt as well as the title.
+        assert [d.id for d in pipeline.filter_drafts(drafts, q="kafka")] == ["1", "3"]
+        assert [d.id for d in pipeline.filter_drafts(drafts, q="B-TREE")] == ["2"]
+        # Combines with the other filters.
+        assert [d.id for d in pipeline.filter_drafts(drafts, q="kafka", source="")] == ["1", "3"]
+        assert pipeline.filter_drafts(drafts, q="nothing here") == []
+        # A blank search is not a filter.
+        assert [d.id for d in pipeline.filter_drafts(drafts, q="   ")] == ["1", "2", "3"]
+
+    def test_filter_drafts_searches_the_caption(self):
+        # The row's displayed title is the caption's hook, so it must be
+        # searchable — otherwise an operator can't find what they can see.
+        drafts = [
+            Draft(id="1", title="Source headline",
+                  caption="[Học cùng Atento]\n\nConsumer Group là gì?"),
+            Draft(id="2", title="Consumer Group"),
+        ]
+        assert [d.id for d in pipeline.filter_drafts(drafts, q="consumer group")] == ["1", "2"]
+        assert [d.id for d in pipeline.filter_drafts(drafts, q="học cùng")] == ["1"]
+
+
+class TestSortDrafts:
+    def test_newest_is_the_default(self):
+        drafts = [
+            Draft(id="old", published="2026-09-01T00:00:00+00:00"),
+            Draft(id="new", published="2026-09-09T00:00:00+00:00"),
+        ]
+        assert [d.id for d in pipeline.sort_drafts(drafts)] == ["new", "old"]
+        assert [d.id for d in pipeline.sort_drafts(drafts, "newest")] == ["new", "old"]
+
+    def test_oldest_first(self):
+        drafts = [
+            Draft(id="old", published="2026-09-01T00:00:00+00:00"),
+            Draft(id="new", published="2026-09-09T00:00:00+00:00"),
+        ]
+        assert [d.id for d in pipeline.sort_drafts(drafts, "oldest")] == ["old", "new"]
+
+    def test_unknown_sort_falls_back_to_newest(self):
+        drafts = [
+            Draft(id="old", published="2026-09-01T00:00:00+00:00"),
+            Draft(id="new", published="2026-09-09T00:00:00+00:00"),
+        ]
+        assert [d.id for d in pipeline.sort_drafts(drafts, "sideways")] == ["new", "old"]
+
 
 class TestPaginate:
     def test_no_per_page_returns_everything(self):
@@ -551,19 +720,6 @@ class TestPublish:
         with pytest.raises(ValueError):
             pipeline.publish_draft(cfg, "post-one")
 
-    def test_daily_cap(self, tmp_path, monkeypatch):
-        cfg = _seed_draft(tmp_path, caption="Hello")
-        cfg["publish"]["max_per_day"] = 1
-        fake = FakePublisher()
-        monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: fake)
-        pipeline.publish_draft(cfg, "post-one")  # hits the cap
-        pipeline.save_drafts(
-            pipeline.queue_path(cfg), [Draft(id="post-two", state=AI_DRAFT, caption="x",
-                                             destinations=["facebook"])]
-        )
-        with pytest.raises(ValueError):
-            pipeline.publish_draft(cfg, "post-two")
-
     def _audit_public(self, cfg, days_ago=0):
         day = (dt.datetime.now().astimezone().date() - dt.timedelta(days=days_ago)).isoformat()
         pipeline.append_audit(
@@ -636,9 +792,9 @@ class TestPublishPrivate:
         assert record["private"] is True
         assert record["post_id"] == "123_77"
 
-    def test_private_sends_do_not_consume_the_daily_cap(self, tmp_path, monkeypatch):
+    def test_private_sends_are_not_gated_by_the_interval(self, tmp_path, monkeypatch):
         cfg = _seed_draft(tmp_path, caption="Hello")
-        cfg["publish"]["max_per_day"] = 1
+        cfg["publish"]["interval_days"] = 2
         fake = PrivatePublisher()
         monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: fake)
         pipeline.publish_draft(cfg, "post-one")
@@ -761,11 +917,11 @@ class TestPublishScheduled:
         assert len(result["posted"]) == 2
         assert fake.published == ["d0", "d1"]
 
-    def test_stops_at_the_daily_cap(self, tmp_path, monkeypatch):
+    def test_stops_at_the_interval_gate(self, tmp_path, monkeypatch):
         cfg = self._seed(
             tmp_path, [Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"])]
         )
-        cfg["publish"]["max_per_day"] = 1
+        cfg["publish"]["interval_days"] = 1
         cfg["publish"]["post_per_slot"] = 5
         self._stub(monkeypatch)
         pipeline.publish_scheduled(cfg)  # consumes the only slot
@@ -776,7 +932,7 @@ class TestPublishScheduled:
         result = pipeline.publish_scheduled(cfg)
         assert result["posted"] == []
         assert result["skipped"][0]["id"] == "b"
-        assert "cap" in result["skipped"][0]["reason"]
+        assert "interval" in result["skipped"][0]["reason"]
 
     def test_dry_run_sends_nothing(self, tmp_path, monkeypatch):
         cfg = self._seed(
@@ -879,6 +1035,33 @@ class TestGenerateImages:
         assert result["generated"] == 1
         assert result["ids"] == ["post-one"]
         assert pipeline.get_draft(cfg, "post-one").image == "https://gen/one.jpg"
+
+    def test_named_draft_bypasses_the_state_gate(self, tmp_path, monkeypatch):
+        """An approved draft is still regenerable from /review/{id}."""
+        cfg = self._cfg_with_gen(tmp_path)
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.state = APPROVED
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/new.jpg"
+        )
+        result = pipeline.generate_images(cfg, draft_ids=["post-one"], overwrite=True)
+        assert result["generated"] == 1
+        assert pipeline.get_draft(cfg, "post-one").image == "https://gen/new.jpg"
+
+    def test_batch_still_skips_approved_drafts(self, tmp_path, monkeypatch):
+        """The rewrite backlog is the limit only for a batch, not a named draft."""
+        cfg = self._cfg_with_gen(tmp_path)
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.state = APPROVED
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        calls = []
+        monkeypatch.setattr(
+            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
+        )
+        result = pipeline.generate_images(cfg, overwrite=True)
+        assert result["generated"] == 0
+        assert calls == []
 
     def test_overwrite_replaces_existing_image(self, tmp_path, monkeypatch):
         cfg = self._cfg_with_gen(tmp_path)
@@ -1158,9 +1341,11 @@ class TestStatus:
         pipeline.save_drafts(
             pipeline.queue_path(cfg),
             [
-                Draft(id="new", state=APPROVED, title="Newest", caption="c",
+                Draft(id="new", state=APPROVED, title="Newest",
+                      caption="[Học cùng Atento]\n\nBài mới",
                       destinations=["facebook"], published="2026-09-10T00:00:00+00:00"),
-                Draft(id="old", state=APPROVED, title="Oldest", caption="c",
+                Draft(id="old", state=APPROVED, title="Oldest",
+                      caption="[Học cùng Atento]\n\nBài cũ",
                       destinations=["facebook"], published="2026-09-01T00:00:00+00:00"),
                 Draft(id="drafting", state=AI_DRAFT, title="Not approved",
                       destinations=["facebook"]),
@@ -1169,7 +1354,9 @@ class TestStatus:
         publish = pipeline.status(cfg)["publish"]
         assert publish["approved"] == 2
         assert publish["next_draft"]["id"] == "old"
-        assert publish["next_draft"]["title"] == "Oldest"
+        # The card labels the draft by what the post says (the hook), not the
+        # source's own title.
+        assert publish["next_draft"]["title"] == "Bài cũ"
         assert publish["next_draft"]["has_image"] is False
 
     def test_next_draft_is_none_without_approvals(self, tmp_path):

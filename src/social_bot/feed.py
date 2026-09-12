@@ -39,6 +39,7 @@ class FeedItem:
     status_type: str = ""
     permalink_url: str = ""
     from_name: str = ""
+    image: str = ""
 
     @property
     def text(self) -> str:
@@ -60,6 +61,7 @@ def parse_feed_response(payload: dict) -> list[FeedItem]:
                 status_type=str(raw.get("status_type", "") or ""),
                 permalink_url=str(raw.get("permalink_url", "") or ""),
                 from_name=str(source.get("name", "") or ""),
+                image=str(raw.get("full_picture", "") or ""),
             )
         )
     return items

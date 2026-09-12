@@ -310,10 +310,16 @@ def _cmd_blog_scan(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
+        skipped_old = int(result.get("skipped_old", 0))
         print(
             f"Queued {result['added']} new draft(s) from {result['sources']} source(s); "
             f"{result['total_drafts']} total."
         )
+        if skipped_old:
+            print(
+                f"Skipped {skipped_old} item(s) older than "
+                f"blog.max_age_days."
+            )
         for item in result["items"]:
             print(f"  - {item['id']}: {item['title'] or '(untitled)'}")
     for err in result["errors"]:

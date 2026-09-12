@@ -63,7 +63,6 @@ DEFAULTS: dict[str, Any] = {
     "publish": {
         "enabled": True,
         "destinations": ["facebook"],
-        "max_per_day": 10,
         # Timed posting: a list of container-local "HH:MM" slots. The serve
         # scheduler posts *human-approved* drafts at each slot (oldest first,
         # up to `post_per_slot`), never approving anything itself. Empty (the
@@ -74,12 +73,13 @@ DEFAULTS: dict[str, Any] = {
         "post_at": [],
         "post_per_slot": 1,
         # Minimum days between *public* posts (0 = no minimum). Enforced by
-        # publish_draft alongside the daily cap, so it paces the scheduler and a
-        # manual "Post now" alike; private (unpublished) sends don't count.
+        # publish_draft, so it paces the scheduler and a manual "Post now"
+        # alike; private (unpublished) sends don't count. 1 = at most one post
+        # per day.
         "interval_days": 0,
         # Real sends but unpublished (visible to page admins only): the Graph
         # API's way to test posting without going public. Private sends are
-        # audited but don't consume drafts or the daily cap.
+        # audited but don't consume drafts or count toward interval_days.
         "private": False,
         # Series masthead on line 1 of every caption (see the DNA §4.5). The
         # label is a content judgment, not a source default: the rewriter picks
@@ -92,12 +92,16 @@ DEFAULTS: dict[str, Any] = {
         "log_name": "published.jsonl",
     },
     # Scanning: how often `serve` looks for new source items, and how it fetches
-    # them. `scan_at` is a list of container-local "HH:MM" slots.
+    # them. `scan_at` is a list of container-local "HH:MM" slots. `max_age_days`
+    # drops items published more than that many days ago (0 = no limit): a feed
+    # that exposes more entries than one scan takes (martinfowler's Atom, say)
+    # is otherwise walked back one `max_scan` batch per run.
     "blog": {
         "scan_at": ["06:00"],
         "timeout_seconds": 30.0,
         "retries": 2,
         "max_scan": 12,
+        "max_age_days": 0,
         "excerpt_chars": 240,
         "enrich": True,  # fetch each new post page for title/excerpt/image
         "user_agent": "social-bot/0.1 (+content pipeline)",
@@ -221,8 +225,6 @@ def validate(cfg: dict) -> None:
     for destination in destinations:
         if destination not in ("facebook", "linkedin"):
             raise ValueError(f"config: unknown publish destination {destination!r}")
-    if int(publish.get("max_per_day", 10)) < 1:
-        raise ValueError("config: publish.max_per_day must be >= 1")
     if int(publish.get("post_per_slot", 1)) < 1:
         raise ValueError("config: publish.post_per_slot must be >= 1")
     if int(publish.get("interval_days", 0)) < 0:
@@ -248,6 +250,8 @@ def validate(cfg: dict) -> None:
         raise ValueError("config: blog.timeout_seconds must be positive")
     if int(blog.get("max_scan", 12)) < 1:
         raise ValueError("config: blog.max_scan must be >= 1")
+    if int(blog.get("max_age_days", 0)) < 0:
+        raise ValueError("config: blog.max_age_days must be >= 0")
     scan_at = blog.get("scan_at")
     if not isinstance(scan_at, list) or not scan_at:
         raise ValueError("config: blog.scan_at must be a non-empty list of HH:MM")

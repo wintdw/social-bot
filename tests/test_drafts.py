@@ -30,11 +30,13 @@ def _draft(**kw):
 class TestState:
     def test_apply_rewrite_moves_to_ai_draft(self):
         draft = _draft()
-        draft.apply_rewrite(caption="Hello", hashtags=["#a", "#b"], alt_text="alt")
+        draft.apply_rewrite(
+            caption="Hello", hashtags=["#a", "#b"], image_prompt="a long ledger"
+        )
         assert draft.state == AI_DRAFT
         assert draft.caption == "Hello"
         assert draft.hashtags == ["#a", "#b"]
-        assert draft.alt_text == "alt"
+        assert draft.image_prompt == "a long ledger"
         assert draft.updated_at  # touched
 
     def test_cannot_approve_from_extracted(self):

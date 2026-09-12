@@ -32,7 +32,9 @@ next to it merged last.
 `--scan-at HH:MM …` (source scan, default from `blog.scan_at`),
 `--publish-at HH:MM …` (post approved drafts, default from `publish.post_at`; a
 slot may also be a window `HH:MM-HH:MM`), `--boot-refresh`, `--boot-scan`. There
-is deliberately no `--boot-publish`: posting never starts on boot.
+is deliberately no `--boot-publish`: posting never starts on boot. A posting run
+that actually sent something also refreshes the feed cache, so the new post is
+on the dashboard without waiting for the next `--refresh-at`.
 
 ## Deploy (Docker)
 
@@ -109,7 +111,7 @@ same id.
 | `/api/status` 404 | Old image — rebuild (`docker compose up -d --build`). |
 | OAuth error on post | The Page token expired — check `/status` (validity + expiry), mint a fresh one, update `credentials.yaml`, `whoami` to verify. |
 | Approved but nothing shows on the Page | First, the posting schedule: an `approved` draft waits for the next `publish.post_at` slot. Drain it now with **Post approved now** / `POST /publish/run` / `blog publish`, or check `publish.private: true` — a private post is unpublished (page admins only) and stays in the queue. Set `private: false` to post publicly. |
-| Approved drafts never post on schedule | `publish.post_at` is empty (timed posting off), `publish.enabled: false`, `publish.max_per_day` is reached, or `publish.interval_days` hasn't elapsed (a `2` means it skips until two days after the last public post). The dashboard **Next post** card and the `/status` **Timed posting** line both name the draft (`publish.next_draft`; `publish.interval_remaining` counts the days still to wait). |
+| Approved drafts never post on schedule | `publish.post_at` is empty (timed posting off), `publish.enabled: false`, or `publish.interval_days` hasn't elapsed (a `2` means it skips until two days after the last public post). The dashboard **Next post** card and the `/status` **Post schedule** line both name the draft (`publish.next_draft`; `publish.interval_remaining` counts the days still to wait), and the **Next post** card's time is the first slot that can actually send — so `in 1 day(s)` means today's wake will be skipped, not that it posts later today. |
 | Hashtags missing from a post | Ensure the image includes the `Draft.post_text` fix (rebuild). Hashtags are appended to the caption at publish time. |
 | Draft stuck `extracted` | No rewrite yet — the external agent must `POST /api/drafts/{id}/rewrite`. |
 | Draft has no image after a rewrite | `serve` generates it in the background; a restart (or a provider 5xx) can leave it empty. Check the **Image jobs** section on `/status` (or the dashboard, or `GET /api/status` → `images`), then run `social-bot blog image` or the **Generate image** button on `/review/{id}`. |
@@ -124,15 +126,15 @@ or a shared-secret middleware you add in `web.py`).
 
 ## Guardrails recap
 
-- The scan/refresh loops only refresh and scan. Posting only happens for drafts a
-  human approved: the posting loop posts `approved` drafts at the `publish.post_at`
-  slots (or on demand via **Post approved now** / `blog publish`). It never
-  approves or rewrites anything. `publish.post_at: []` disables timed posting.
-- `publish.enabled: false` disables publishing; `publish.max_per_day` caps it,
-  and `publish.interval_days` enforces a minimum gap between public posts.
+- The scan/refresh loops only refresh and scan, and the posting loop only posts.
+  Posting only happens for drafts a human approved: the posting loop posts
+  `approved` drafts at the `publish.post_at` slots (or on demand via **Post
+  approved now** / `blog publish`). It never approves or rewrites anything.
+  `publish.post_at: []` disables timed posting.
+- `publish.enabled: false` disables publishing; `publish.interval_days`
+  enforces a minimum gap between public posts (`1` = at most one per day).
 - `publish.private: true` sends every post **unpublished** (page admins only).
   It is a real Graph write, not a dry run — but it never goes public, it leaves
-  the draft in the queue, and it doesn't count toward `max_per_day` or
-  `interval_days`. This is
+  the draft in the queue, and it doesn't count toward `interval_days`. This is
   the safe way to exercise the publish path end to end.
 - Keep `--dry-run` working on every publish path.

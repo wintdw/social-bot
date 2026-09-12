@@ -28,6 +28,22 @@ class TestRenderDraftsHtml:
         assert "No open drafts" in out
         assert out.lstrip().startswith("<!doctype html>")
 
+    def test_row_is_titled_by_the_caption_hook(self):
+        draft = Draft(
+            id="p",
+            title="Source headline",
+            caption="[Học cùng Atento]\n\nCâu hook mở bài\n\nPhần thân.",
+        )
+        out = render_drafts_html([draft], generated_at=GENERATED)
+        assert 'class="qtitle">Câu hook mở bài</span>' in out
+        assert "Source headline" not in out
+        assert '<span class="pill">[Học cùng Atento]</span>' in out
+
+    def test_row_falls_back_to_the_source_title_when_unwritten(self):
+        draft = Draft(id="p", title="Source headline", state="extracted")
+        out = render_drafts_html([draft], generated_at=GENERATED)
+        assert 'class="qtitle">Source headline</span>' in out
+
     def test_has_scan_button(self):
         out = render_drafts_html([], generated_at=GENERATED)
         assert 'action="/scan"' in out
@@ -197,6 +213,57 @@ class TestReviewPagination:
         assert "5 of 12 open draft(s)" in out
 
 
+class TestReviewSearch:
+    def test_search_form_is_a_get_form(self):
+        out = render_drafts_html([Draft(id="p", title="T")], generated_at=GENERATED)
+        assert 'method="get" action="/review"' in out
+        assert 'name="q"' in out and 'name="sort"' in out
+        assert "Newest first" in out and "Oldest first" in out
+
+    def test_search_form_preserves_the_active_filters(self):
+        out = render_drafts_html(
+            [Draft(id="p", title="T")],
+            sources=[("a", 5)],
+            statuses=[("ai_draft", 5)],
+            selected_source="a",
+            selected_status="ai_draft",
+            q="kafka",
+            generated_at=GENERATED,
+        )
+        assert '<input type="hidden" name="source" value="a">' in out
+        assert '<input type="hidden" name="status" value="ai_draft">' in out
+        assert 'value="kafka"' in out
+
+    def test_search_term_is_escaped(self):
+        out = render_drafts_html(
+            [Draft(id="p", title="T")], q='"><script>', generated_at=GENERATED
+        )
+        assert "<script>" not in out
+
+    def test_search_narrows_the_header_count(self):
+        out = render_drafts_html(
+            [Draft(id="p", title="T")], total=61, matched=2, q="kafka", generated_at=GENERATED
+        )
+        assert "2 of 61 open draft(s)" in out
+
+    def test_filter_links_keep_the_search(self):
+        out = render_drafts_html(
+            [Draft(id="p", title="T")],
+            sources=[("a", 5)],
+            selected_source="a",
+            q="kafka",
+            generated_at=GENERATED,
+        )
+        assert "q=kafka" in out
+
+    def test_selected_sort_is_marked(self):
+        out = render_drafts_html(
+            [Draft(id="p", title="T")], sort="oldest", generated_at=GENERATED
+        )
+        assert '<option value="oldest" selected>' in out
+        assert '<option value="newest">' in out
+
+
 class TestRenderDraftHtml:
     def test_has_editable_caption_and_actions(self):
         draft = Draft(id="p", title="T", url="https://x/blog/p", caption="Body <x>",
@@ -208,6 +275,43 @@ class TestRenderDraftHtml:
         assert "/review/p/publish" in out
         assert "/review/p/reject" in out
         assert "Atento voice" in out
+
+    def test_image_prompt_is_editable_in_english(self):
+        draft = Draft(
+            id="p", title="T", image_prompt="a lone tree", state="ai_draft"
+        )
+        out = render_draft_html(draft)
+        assert 'id="image_prompt"' in out and 'name="image_prompt"' in out
+        assert 'value="a lone tree"' in out
+
+    def test_image_prompt_is_the_image_alt(self):
+        draft = Draft(
+            id="p", title="T", image="https://img/x.jpg", image_prompt="a lone tree"
+        )
+        out = render_draft_html(draft)
+        assert 'alt="a lone tree"' in out
+
+    def test_alt_falls_back_to_the_title_without_a_prompt(self):
+        out = render_draft_html(Draft(id="p", title="Title", image="https://img/x.jpg"))
+        assert 'alt="Title"' in out
+
+    def test_image_prompt_field_is_escaped(self):
+        draft = Draft(id="p", title="T", image_prompt='x" onfocus="alert(1)')
+        out = render_draft_html(draft)
+        assert 'onfocus="alert(1)"' not in out
+
+    def test_detail_titles_the_hook_and_keeps_the_source_title_in_the_rail(self):
+        draft = Draft(
+            id="p",
+            title="Source headline",
+            url="https://x/blog/p",
+            caption="[Học cùng Atento]\n\nCâu hook mở bài\n\nPhần thân.",
+            state="ai_draft",
+        )
+        out = render_draft_html(draft, generated_at=GENERATED)
+        assert "<h1>Câu hook mở bài</h1>" in out
+        # The source's own title stays visible, as provenance.
+        assert "<p>Source headline</p>" in out
 
     def test_shows_the_composed_post_text(self):
         draft = Draft(id="p", title="T", caption="Hello", hashtags=["#Atento"],
@@ -230,9 +334,27 @@ class TestRenderDraftHtml:
         assert "visible to page admins only." in out
         assert 'data-private="true"' in out
 
+    def test_save_button_saves_without_posting(self):
+        out = render_draft_html(Draft(id="p", title="T", caption="Hi"))
+        assert 'formaction="/review/p/save"' in out
+        assert 'name="save"' in out
+        assert ">Save</button>" in out
+
+    def test_no_dry_run_button(self):
+        out = render_draft_html(Draft(id="p", title="T", caption="Hi"))
+        assert "Dry run" not in out
+
     def test_next_draft_link(self):
         out = render_draft_html(Draft(id="p", title="T"), next_id="other")
         assert 'href="/review/other"' in out
+
+    def test_source_date_is_formatted_not_raw(self):
+        # RSS pubDate is RFC 822; the header must not leak the raw string.
+        out = render_draft_html(
+            Draft(id="p", title="T", published="Thu, 10 Sep 2026 00:00:00 GMT")
+        )
+        assert "GMT" not in out
+        assert "published 2026-09-10" in out
 
     def test_state_badge_is_colour_coded(self):
         out = render_draft_html(Draft(id="p", title="T", state="ai_draft"))

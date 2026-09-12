@@ -29,6 +29,7 @@ src/social_bot/
 ├── api.py            # urllib Graph client: GET/POST + ApiError from FB payloads
 ├── feed.py           # pure parse/render of /{page}/feed JSON -> markdown
 ├── feed_html.py      # pure render of feed items -> HTML (section + standalone page)
+├── caption.py        # pure caption text rule: series masthead + hook row title
 ├── refresh.py        # fetch feed -> data/feed/latest.{json,html}; cache reader (refresh/serve)
 ├── source.py         # pure parse of sitemap / RSS / Atom -> Item (no network)
 ├── source_api.py     # urllib source fetcher: retries + SourceError
@@ -37,6 +38,7 @@ src/social_bot/
 ├── image_gen.py      # urllib Pollinations client: prompt build + image generation
 ├── publishers.py     # destination adapters: Facebook (real), LinkedIn (stub)
 ├── ui.py             # shared operator-UI chrome: stylesheet, nav, layout
+├── styleframe.py     # generated design-system preview (docs/design/styleframe.html)
 ├── draft_html.py     # pure render of the /review queue + a draft detail page
 ├── dashboard_html.py # pure render of / (dashboard), /publish, /status
 ├── web.py            # FastAPI operator UI + JSON API + refresh/scan/posting schedulers
@@ -55,7 +57,9 @@ loop calls `refresh.py:refresh_feed` (via `asyncio.to_thread`) at the
 `data/feed/latest.{json,html}`, the scan loop calls
 `draft_pipeline.py:scan_sources` at the `--scan-at` slots, and the posting loop
 calls `draft_pipeline.py:publish_scheduled` at the `--publish-at` slots (from
-`publish.post_at`; empty disables it). The operator UI is
+`publish.post_at`; empty disables it), following any slot that actually posted
+with a feed refresh so the new post shows up without waiting for the next
+`--refresh-at`. The operator UI is
 four HTML pages sharing the `ui.py` nav: `/` (dashboard — controls, counts,
 scheduler state, and the cached feed rendered live from `latest.json`), `/review`
 (the queue + a detail page), `/publish` (the audit log), and `/status`.
@@ -105,6 +109,14 @@ entirely, leaving approval as the only publish path.**
   order/dedupe by date. `sitemap` and `rss` source types exist for other
   feeds. The host is intermittently flaky (504s), hence the retry/backoff in
   `source_api.py`.
+- **A scan has no date window of its own — only `blog.max_scan`.** It queues the
+  newest unseen items, so a feed exposing more entries than one scan takes
+  (martinfowler's Atom is a 30-entry window against a cap of 12) is walked back
+  another batch every scan: the draft count climbs daily long after the first
+  run. `blog.max_age_days` (90 in `config.yaml`, `0` = off) is the window,
+  applied **before** the cap so old entries can't consume the batch. A
+  `published` date the scanner can't parse is kept, not dropped — an `index`
+  item has none until enrichment, and an undated post can't be shown old.
 - urllib, not `requests`: keeps the dependency footprint at PyYAML only, like
   the parent bots. Photo posts are **by URL** (`POST /{page}/photos` with `url`
   + `caption`, Graph fetches the image) precisely to avoid multipart. Uploading
@@ -129,6 +141,9 @@ entirely, leaving approval as the only publish path.**
   Vietnamese — made every image look the same: the model cannot picture
   "Consumer Group", so it fell back to whatever composition the style brief
   suggested, every time. Never build the subject from the title; ask for it.
+  `image_prompt` is also the image's alt text (no separate Vietnamese `alt_text`
+  exists) and is **editable on `/review/{id}`**; the `/review` form saves it via
+  `edit_draft`, so edit it before regenerating.
   Two related traps: translating the title to English alone is *worse* (it
   yields literal cloud-and-arrow flowcharts and people), and the style brief
   must not prescribe one composition.
@@ -154,6 +169,18 @@ entirely, leaving approval as the only publish path.**
   `caption`, so the review preview, the character count, and the posted text all
   agree (a human can still edit it out on `/review/{id}`). Captions that predate
   the setting get the default filled in once with `blog masthead`.
+- **A Facebook post has no title field**, so a post's title can only be the
+  caption's leading line: the **hook under the series masthead** (the masthead is
+  a standing label, not a title). Every feed row and every review row is titled
+  that way, falling back to the caption's own first line when there is no
+  masthead, to the source's title while a draft is still unwritten, and to a
+  neutral `(no text — … post)` placeholder for a bare photo — so rows read
+  consistently whatever the post's provenance. Since the Graph API cannot edit an
+  already-published post, consistency comes from the renderer, including for
+  posts already live. That one rule lives in `caption.py` (`split_title` /
+  `display_title` / `leading_masthead`); the masthead itself rides along as a
+  pill in the row, and `/review/{id}` keeps the source's own title in its Source
+  rail as provenance.
 - Feed error bodies are JSON `{"error": {code, message, type, ...}}`;
   `ApiError.from_payload` decodes them, including non-JSON/HTTP-only failures.
 - Page post ids come back as `"<page_id>_<post_id>"`; the underscore form is
@@ -170,8 +197,8 @@ entirely, leaving approval as the only publish path.**
   by date+slot so it stays stable across restarts); `serve` runs a posting loop
   (`draft_pipeline.publish_scheduled`) that, at each slot, posts the **oldest**
   in-state `approved` drafts first (FIFO), up to `publish.post_per_slot` per
-  slot, `publish.max_per_day` overall, and only if `publish.interval_days` (a
-  minimum gap between public posts, 0 = off) has elapsed. It never rewrites,
+  slot, and only if `publish.interval_days` (a minimum gap between public posts,
+  0 = off) has elapsed. It never rewrites,
   approves, or
   touches `extracted`/`ai_draft` drafts. `publish.post_at: []` (the built-in
   default) disables the loop; the same drain is available on demand via
@@ -182,8 +209,15 @@ entirely, leaving approval as the only publish path.**
   `draft_pipeline.scheduled_queue` (oldest `approved`, FIFO) is the one ordering
   the poster drains; `status()` derives `publish.next_draft` from the same rule
   (and `publish.approved` / `publish.interval_remaining`). The dashboard
-  **Next post** card, the `/status` **Timed posting** line, and `GET /api/status`
+  **Next post** card, the `/status` **Post schedule** line, and `GET /api/status`
   all render that, so don't re-derive "next" anywhere else.
+- **A scheduled wake is not a post.** The posting loop wakes at every
+  `publish.post_at` slot, but the interval gate makes it skip the ones before the
+  gap elapses — so the next *wake* is usually **not** the next *post*. The post
+  runtime's `next` is the wake; its `next_post` (`web.next_post_at`) is the first
+  slot that can actually send. The dashboard **Next post** card and `/review`
+  render `next_post`; the **Post schedule** row keeps the raw wake. Never show a
+  wake as if it were a post time.
 - `serve` needs the `[server]` extra (fastapi/uvicorn) and stays web-free
   otherwise. Docker: host port **8083** (voz-bot 8080, otofun-bot 8081,
   linkin-bot 8082), `./data` bind-mounted for the feed cache, and
@@ -200,8 +234,7 @@ entirely, leaving approval as the only publish path.**
 - `publish.private: true` (config.yaml) makes every approval a **real but
   unpublished** Graph post (`published=false`) — visible to page admins only.
   It is not a dry run. Private sends are audited with `"private": true`, leave
-  the draft in the review queue, and are excluded from `publish.max_per_day` and
-  `publish.interval_days`;
+  the draft in the review queue, and are excluded from `publish.interval_days`;
   only a *public* send calls `mark_posted`. Flip it to `false` to post publicly.
 - API posts must stay within Facebook platform policies (no engagement bait,
   spam, inauthentic behavior). The content pipeline keeps its human review
@@ -221,6 +254,29 @@ entirely, leaving approval as the only publish path.**
   `_page_id` and token resolution raise `ValueError` (→ 2) and are caught
   inside each `_cmd_*`, never allowed to traceback.
 
+## UI design system (do not weaken)
+
+The operator UI is one system, and `tests/test_design_system.py` enforces it.
+Read `docs/design/design-system.md` before changing any markup or the stylesheet.
+
+- All styling lives in `src/social_bot/ui.py` (`_CSS` plus the `layout` /
+  `nav_html` / `badge` / `notice_html` primitives). Page modules
+  (`draft_html.py`, `dashboard_html.py`, `feed_html.py`) render **fragments
+  only**: no `<style>`, no `style="…"` attribute, no colour or size literals.
+  Add a class to `_CSS` instead of styling a page.
+- Compose from the shared components and tokens (`.panel`, `.stack`, `.cols`,
+  `.cmdbar`, `.btn`, `.badge`, `.pill`, `.qrow`, `.stepper`, `.dot`, …). Never
+  invent a class without adding its rule to `_CSS`.
+- Keep the semantics: the accent is reserved for the primary action and the
+  focused stage; state is carried by colour **and** a dot **and** a label; every
+  control stays at least 44px tall; every page returns through `layout()`.
+- After any UI change, run `tests/test_design_system.py` and regenerate the
+  preview with `.venv/bin/python scripts/build_styleframe.py`. The suite fails
+  on an undefined token, a class with no rule, a badge state with no colour,
+  malformed markup, or a stale styleframe — never weaken, skip, or delete those
+  tests. `docs/design/styleframe.html` is generated; edit `styleframe.py`, not
+  the HTML.
+
 ## Testing
 
 ```
@@ -234,7 +290,9 @@ index), the draft model/persistence, the publisher adapters, the
 scan/rewrite/publish pipeline (stubbed clients), the scheduled drain
 (`publish_scheduled`, `approve_draft`), image prompt building and
 URL construction (`image_gen.py`, stubbed `urlopen`), the operator pages
-(`ui.py` / `draft_html.py` / `dashboard_html.py`), and serve's pure scheduling
+(`ui.py` / `draft_html.py` / `dashboard_html.py`), the design-system contracts
+(undefined tokens, unstyled classes, badge coverage, and styleframe freshness in
+`test_design_system.py`), and serve's pure scheduling
 helpers (no fastapi import needed). Live calls are manual: `whoami` first, then
 `feed --limit 3`, then `blog scan` (queues drafts, no token needed), then
 `blog image --limit 1` to verify the provider/key, then `post --dry-run` before

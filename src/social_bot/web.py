@@ -139,6 +139,29 @@ def next_run_at(times: list[str], now: dt.datetime | None = None) -> dt.datetime
     return min(_next_occurrence(t, now) for t in times)
 
 
+def next_post_at(
+    times: list[str],
+    *,
+    interval_remaining: int = 0,
+    now: dt.datetime | None = None,
+) -> dt.datetime | None:
+    """The first slot that can actually post, honoring ``publish.interval_days``.
+
+    The scheduler wakes at every slot, but the interval gate makes it skip the
+    ones before the gap has elapsed — so the next *wake* is often not the next
+    *post*. ``interval_remaining`` days out is the first day the gate lifts, and
+    that day's earliest slot is the one that sends. None when there is no
+    schedule.
+    """
+    if not times:
+        return None
+    now = now or dt.datetime.now()
+    if interval_remaining <= 0:
+        return next_run_at(times, now)
+    day = now.date() + dt.timedelta(days=int(interval_remaining))
+    return min(_slot_time(slot, day) for slot in times)
+
+
 def current_slot(times: list[str], now: dt.datetime | None = None) -> str | None:
     """The most recent scheduled occurrence at/before now, as 'YYYY-MM-DD HH:MM'."""
     now = now or dt.datetime.now()
@@ -549,6 +572,12 @@ def create_app(
                         file=sys.stderr,
                         flush=True,
                     )
+                if result.get("skipped_old"):
+                    print(
+                        f"[web] scan skipped {result['skipped_old']} item(s) older "
+                        f"than blog.max_age_days",
+                        flush=True,
+                    )
             except Exception as exc:  # a failed scan must never kill the app
                 state["scan_ok"] = False
                 state["scan_error"] = str(exc)
@@ -579,6 +608,7 @@ def create_app(
 
     async def _post_job(reason: str) -> None:
         """Post a slot's worth of human-approved drafts. Never approves."""
+        posted = 0
         async with state["post_lock"]:
             if state["post_busy"]:
                 return
@@ -589,9 +619,10 @@ def create_app(
                 result = await _run_publish(pipeline.publish_scheduled, cfg)
                 state["post_ok"] = True
                 state["post_error"] = None
-                state["last_posted"] = len(result["posted"])
+                posted = len(result["posted"])
+                state["last_posted"] = posted
                 print(
-                    f"[web] posting finished (reason={reason}, posted={state['last_posted']})",
+                    f"[web] posting finished (reason={reason}, posted={posted})",
                     flush=True,
                 )
                 for skip in result.get("skipped", []):
@@ -613,6 +644,10 @@ def create_app(
             finally:
                 state["post_finished"] = dt.datetime.now()
                 state["post_busy"] = False
+        # A post lands in the feed, so refresh the cache right away instead of
+        # waiting for the next --refresh-at slot: the dashboard shows it now.
+        if posted and not state["shutting_down"]:
+            await _refresh_job(f"after posting ({reason})")
 
     async def _posting_loop() -> None:
         await asyncio.sleep(1)  # let the server bind
@@ -771,6 +806,11 @@ def create_app(
         return status
 
     def _post_runtime() -> dict:
+        # `next` is the next scheduler wake; `next_post` is the slot that can
+        # actually send (the interval gate may skip several wakes first).
+        next_post = next_post_at(
+            post_times, interval_remaining=pipeline.interval_remaining(cfg)
+        )
         return {
             "busy": state["post_busy"],
             "ok": state["post_ok"],
@@ -779,13 +819,12 @@ def create_app(
             "last_finished": _iso(state["post_finished"]),
             "schedule": post_times,
             "next": next_run_at(post_times).strftime("%Y-%m-%d %H:%M") if post_times else "",
+            "next_post": next_post.strftime("%Y-%m-%d %H:%M") if next_post else "",
         }
 
     def _next_post_label() -> str:
-        """When the next scheduled slot fires, or '' when posting is disabled."""
-        if not post_times:
-            return ""
-        return next_run_at(post_times).strftime("%Y-%m-%d %H:%M")
+        """When the next post actually goes out, or '' when posting is disabled."""
+        return str(_post_runtime().get("next_post") or "")
 
     def _image_runtime() -> dict:
         """Background image jobs, newest last — how /api/status reports them."""
@@ -811,6 +850,7 @@ def create_app(
                 scan=_scan_runtime(),
                 post=_post_runtime(),
                 images=_image_runtime(),
+                token=_token_runtime(),
                 message=message,
                 private=private,
             )
@@ -974,19 +1014,22 @@ def create_app(
         message: str = "",
         source: str = "",
         status: str = "",
+        q: str = "",
+        sort: str = "",
         page: int = 1,
         per_page: int = REVIEW_PER_PAGE,
     ):
         per_page = _clamp(per_page, 1, REVIEW_MAX_PER_PAGE, REVIEW_PER_PAGE)
         base = await asyncio.to_thread(pipeline.list_drafts, cfg, pipeline.REVIEW_STATES)
-        drafts = pipeline.filter_drafts(base, source=source, state=status)
+        drafts = pipeline.filter_drafts(base, source=source, state=status, q=q)
+        drafts = pipeline.sort_drafts(drafts, sort)
         # Keep every option visible (so the active chip never disappears) but
-        # count each row within the other row's selection, so the numbers add up
-        # to what clicking each chip would actually show.
+        # count each row within the other row's selection and the active search,
+        # so the numbers add up to what clicking each chip would actually show.
         names = sorted({d.source for d in base if d.source})
         states = [s for s in pipeline.REVIEW_STATES if any(d.state == s for d in base)]
-        source_scope = pipeline.filter_drafts(base, state=status)
-        state_scope = pipeline.filter_drafts(base, source=source)
+        source_scope = pipeline.filter_drafts(base, state=status, q=q)
+        state_scope = pipeline.filter_drafts(base, source=source, q=q)
         source_counts = Counter(d.source for d in source_scope if d.source)
         state_counts = Counter(d.state for d in state_scope)
         page_drafts, page_info = pipeline.paginate(drafts, page=page, per_page=per_page)
@@ -1005,6 +1048,8 @@ def create_app(
                 status_total=len(state_scope),
                 page=page_info,
                 scheduling=bool(post_times),
+                q=q,
+                sort=sort,
             )
         )
 
@@ -1051,6 +1096,7 @@ def create_app(
                 draft_id,
                 caption=str(form.get("caption", "") or ""),
                 hashtags=None if hashtags is None else str(hashtags),
+                image_prompt=str(form.get("image_prompt", "") or ""),
             )
             if approve:
                 # Approve & schedule: save the edits, then queue for the poster.
@@ -1100,6 +1146,28 @@ def create_app(
         return RedirectResponse(
             f"/review/{urllib.parse.quote(draft_id)}?message={urllib.parse.quote(text)}"
             f"&kind={kind}",
+            status_code=303,
+        )
+
+    @app.post("/review/{draft_id}/save")
+    async def review_save(draft_id: str, request: Request):
+        """Save the compose edits (caption, hashtags, image prompt). Never posts."""
+        form = await request.form()
+        hashtags = form.get("hashtags")
+        try:
+            await asyncio.to_thread(
+                pipeline.edit_draft,
+                cfg,
+                draft_id,
+                caption=str(form.get("caption", "") or ""),
+                hashtags=None if hashtags is None else str(hashtags),
+                image_prompt=str(form.get("image_prompt", "") or ""),
+            )
+        except ValueError as exc:
+            return _page(render_message_html("Cannot save", str(exc)), 400)
+        return RedirectResponse(
+            f"/review/{urllib.parse.quote(draft_id)}"
+            f"?message={urllib.parse.quote('Saved. Your edits are live.')}&kind=success",
             status_code=303,
         )
 

@@ -24,7 +24,6 @@ STATS = {
         "enabled": True,
         "private": False,
         "destinations": ["facebook"],
-        "max_per_day": 10,
         "post_at": ["09:00", "20:00"],
         "post_per_slot": 1,
         "interval_days": 2,
@@ -65,6 +64,7 @@ POST = {
     "last_finished": None,
     "schedule": ["09:00", "20:00"],
     "next": "2026-09-11 09:00",
+    "next_post": "2026-09-11 09:00",
 }
 
 RECORDS = [
@@ -235,13 +235,14 @@ class TestImageSection:
 class TestPublish:
     def test_lists_records_newest_first(self):
         out = render_publish_html(RECORDS, generated_at=GENERATED)
-        assert "2 post(s) · 1 public · 1 private" in out
+        assert "2 post(s)" in out
         assert out.index("2026-09-10T09:07:15") < out.index("2026-09-09T10:00:00")
 
-    def test_links_permalink_and_marks_visibility(self):
+    def test_links_permalink_without_a_visibility_column(self):
         out = render_publish_html(RECORDS, generated_at=GENERATED)
         assert "https://www.facebook.com/1_2" in out
-        assert "public" in out and "private" in out
+        assert "Visibility" not in out
+        assert '<div class="sub">2 post(s) · generated' in out
 
     def test_no_permalink_shows_no_post_id(self):
         # A private/unpublished send returns no post — don't render a bare id.
@@ -265,7 +266,7 @@ class TestStatus:
         out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
         assert "atento-blog" in out
         assert "ai_draft" in out
-        assert "max per day" in out
+        assert "min interval" in out
         assert "2026-09-10 07:00:00" in out  # last refresh run
 
     def test_document_shape(self):
@@ -332,7 +333,7 @@ class TestTimedPosting:
         )
         assert "Next post" in out
         assert "2026-09-11 09:00" in out
-        assert "Timed posting" in out
+        assert "Post schedule" in out
         assert 'action="/publish/run"' in out
 
     def test_dashboard_hides_posting_without_a_schedule(self):
@@ -340,14 +341,14 @@ class TestTimedPosting:
             items=[], stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
         )
         assert "Next post" not in out
-        assert "Timed posting" not in out
+        assert "Post schedule" not in out
         assert 'action="/publish/run"' not in out
 
     def test_status_shows_schedule_and_settings(self):
         out = render_status_html(
             STATS, refresh=REFRESH, scan=SCAN, post=POST, generated_at=GENERATED
         )
-        assert "Timed posting" in out
+        assert "Post schedule" in out
         assert "post at" in out
         assert "09:00, 20:00" in out
         assert "min interval (days)" in out
@@ -387,6 +388,19 @@ class TestTimedPosting:
         )
         assert "in 2 day(s)" in out
 
+    def test_dashboard_next_post_shows_the_interval_aware_time(self):
+        # The scheduler wakes tomorrow, but the interval holds the post back:
+        # the Next post row shows the slot that can send, not the next wake.
+        stats = {**STATS, "publish": {**STATS["publish"], "interval_remaining": 1}}
+        post = {**POST, "next": "2026-09-12 19:51", "next_post": "2026-09-13 20:14"}
+        out = render_dashboard_html(
+            items=[], stats=stats, refresh=REFRESH, scan=SCAN, post=post,
+            generated_at=GENERATED,
+        )
+        assert '<span class="sched-when">2026-09-13 20:14</span>' in out
+        # the scheduler wake stays, but only on the Post schedule row
+        assert '<span class="sched-when">next 2026-09-12 19:51</span>' in out
+
     def test_status_lists_the_next_draft_and_interval(self):
         out = render_status_html(
             STATS, refresh=REFRESH, scan=SCAN, post=POST, generated_at=GENERATED
@@ -422,5 +436,5 @@ class TestTimedPosting:
 
     def test_status_hides_posting_without_a_schedule(self):
         out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
-        assert "Timed posting" not in out
+        assert "Post schedule" not in out
         assert "post at" in out  # the setting row still renders, as "—"

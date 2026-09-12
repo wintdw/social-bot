@@ -1,966 +1,496 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Social Content Factory — styleframe</title>
 <style>
 :root {
-  color-scheme: light;
+  color-scheme: light dark;
   --bg: #f6f3ed;
-  --bg-2: #efeae0;
   --surface: #ffffff;
   --surface-2: #f1ece2;
-  --ink: #171a19;
+  --fg: #171a19;
   --ink-2: #39423e;
-  --muted: #6b736e;
-  --line: #e1dacd;
-  --line-strong: #cbc2b1;
+  --muted: #616963;
+  --border: #e1dacd;
+  --border-strong: #cbc2b1;
   --accent: #0e6b64;
   --accent-2: #0b5852;
   --accent-soft: #dcece9;
-  --on-accent: #ffffff;
+  --accent-fg: #ffffff;
+  --badge-ink-base: #171a19;
+  --badge-ink-mix: 86%;
+  --danger: #b03628;
   --ok: #2c7a4b;
   --warn: #9c6200;
-  --danger: #b03628;
-  --r-sm: 4px;
-  --r: 7px;
-  --r-lg: 12px;
-  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --radius: 7px;
+  --radius-sm: 4px;
+  --radius-lg: 12px;
   --shadow: 0 1px 2px rgba(23, 26, 25, .05);
-  --shadow-lg: 0 10px 30px rgba(23, 26, 25, .10);
-  --fs-xs: 11.5px; --fs-sm: 13px; --fs-base: 14.5px; --fs-md: 16px;
-  --fs-lg: 20px; --fs-xl: 26px; --fs-2xl: 34px;
 }
-html[data-theme="dark"] {
-  color-scheme: dark;
-  --bg: #0f1312;
-  --bg-2: #141918;
-  --surface: #171c1b;
-  --surface-2: #1e2524;
-  --ink: #e9e6df;
-  --ink-2: #c6cbc7;
-  --muted: #969e99;
-  --line: #28302e;
-  --line-strong: #3a4541;
-  --accent: #46b3a6;
-  --accent-2: #6ac7bb;
-  --accent-soft: #16302c;
-  --on-accent: #06201d;
-  --ok: #58be7c;
-  --warn: #d9a63f;
-  --danger: #e6756a;
-  --shadow: none;
-  --shadow-lg: 0 10px 30px rgba(0, 0, 0, .45);
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0f1312;
+    --surface: #171c1b;
+    --surface-2: #1e2524;
+    --fg: #e9e6df;
+    --ink-2: #c6cbc7;
+    --muted: #969e99;
+    --border: #28302e;
+    --border-strong: #3a4541;
+    --accent: #46b3a6;
+    --accent-2: #6ac7bb;
+    --accent-soft: #16302c;
+    --accent-fg: #06201d;
+    --badge-ink-mix: 100%;
+    --danger: #e6756a;
+    --ok: #58be7c;
+    --warn: #d9a63f;
+    --shadow: none;
+  }
 }
 * { box-sizing: border-box; }
-html { scroll-behavior: smooth; }
-body {
-  margin: 0;
-  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: var(--fs-base);
-  line-height: 1.5;
-  color: var(--ink);
-  background:
-    radial-gradient(1200px 600px at 100% -10%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%),
-    var(--bg);
-  -webkit-font-smoothing: antialiased;
-}
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+       background: radial-gradient(1200px 600px at 100% -10%,
+                     color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%),
+                   var(--bg);
+       color: var(--fg); margin: 0 auto; padding: 0 1rem 4rem;
+       max-width: 78rem; line-height: 1.5; -webkit-font-smoothing: antialiased; }
 a { color: var(--accent); }
 :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
-h1, h2, h3 { margin: 0; line-height: 1.25; letter-spacing: -.01em; }
-h1 { font-size: var(--fs-xl); font-weight: 650; }
-h2 { font-size: var(--fs-md); font-weight: 650; }
-h3 { font-size: var(--fs-base); font-weight: 650; }
+h1 { font-size: 1.6rem; margin: 0; line-height: 1.25; letter-spacing: -.02em; font-weight: 650; }
+h2 { font-size: 1rem; margin: 0; line-height: 1.3; font-weight: 650; }
+h3 { font-size: .9rem; margin: .75rem 0 0; font-weight: 650; }
 p { margin: 0; }
-.wrap { max-width: 78rem; margin: 0 auto; padding: 0 var(--s5); }
 
 /* ---------- top bar ---------- */
-.topbar {
-  position: sticky; top: 0; z-index: 30;
-  background: color-mix(in srgb, var(--bg) 82%, transparent);
-  backdrop-filter: saturate(140%) blur(10px);
-  border-bottom: 1px solid var(--line);
-}
-.topbar-inner { display: flex; align-items: center; gap: var(--s5); min-height: 62px; }
-.brand { display: flex; align-items: center; gap: var(--s3); text-decoration: none; color: inherit; }
-.brand-mark {
-  width: 34px; height: 34px; border-radius: var(--r); display: grid; place-items: center;
-  background: var(--accent); color: var(--on-accent); font-weight: 800; font-size: var(--fs-md);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--on-accent) 18%, transparent);
-}
-.brand-text { display: flex; flex-direction: column; line-height: 1.15; }
-.brand-eyebrow { font-size: var(--fs-xs); letter-spacing: .14em; text-transform: uppercase;
-  color: var(--muted); font-weight: 650; }
-.brand-name { font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
-.nav { display: flex; gap: var(--s1); margin-left: auto; flex-wrap: wrap; }
-.navtab {
-  appearance: none; border: 0; background: transparent; color: var(--ink-2);
-  font: inherit; font-weight: 550; padding: 10px 14px; min-height: 44px; cursor: pointer;
-  border-radius: var(--r); position: relative;
-}
-.navtab:hover { background: var(--surface-2); color: var(--ink); }
-.navtab[aria-current="true"] { color: var(--accent); font-weight: 700; }
-.navtab[aria-current="true"]::after {
-  content: ""; position: absolute; left: 14px; right: 14px; bottom: 2px; height: 2px;
-  background: var(--accent); border-radius: 2px;
-}
-.topbar-tools { display: flex; align-items: center; gap: var(--s2); }
-.pill {
-  display: inline-flex; align-items: center; gap: var(--s2); font-size: var(--fs-sm);
-  border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
-  padding: 7px 11px; border-radius: 999px; white-space: nowrap;
-}
-.pill .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
-.dot-ok { background: var(--ok) !important; }
-.dot-warn { background: var(--warn) !important; }
-.dot-danger { background: var(--danger) !important; }
-.dot-live { box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 60%, transparent);
-  animation: pulse 2.4s ease-out infinite; }
-@keyframes pulse { 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
-.icon-btn {
-  appearance: none; border: 1px solid var(--line); background: var(--surface); color: var(--ink-2);
-  width: 40px; height: 40px; border-radius: var(--r); cursor: pointer; font-size: var(--fs-md);
-  display: grid; place-items: center;
-}
-.icon-btn:hover { background: var(--surface-2); color: var(--ink); }
+nav { display: flex; flex-wrap: wrap; align-items: center; gap: 1.25rem;
+      min-height: 62px; padding: .6rem 0; margin-bottom: 1.5rem;
+      border-bottom: 1px solid var(--border); }
+nav .brand { display: flex; align-items: center; gap: .75rem; text-decoration: none;
+             color: inherit; }
+nav .brand-mark { width: 34px; height: 34px; border-radius: var(--radius); display: grid;
+                  place-items: center; background: var(--accent); color: var(--accent-fg);
+                  font-weight: 800; font-size: 1rem; flex: 0 0 auto;
+                  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-fg) 18%, transparent); }
+nav .brand-text { display: flex; flex-direction: column; line-height: 1.15; }
+nav .brand-eyebrow { font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+                     color: var(--muted); font-weight: 650; }
+nav .brand-name { font-weight: 700; letter-spacing: -.02em; white-space: nowrap; }
+nav .links { display: flex; flex-wrap: wrap; gap: .25rem; margin-left: auto; }
+nav a.tab { padding: .6rem .85rem; min-height: 44px; display: inline-flex; align-items: center;
+            border-radius: var(--radius); text-decoration: none; color: var(--ink-2);
+            font-weight: 550; position: relative; }
+nav a.tab:hover { background: var(--surface-2); color: var(--fg); }
+nav a[aria-current="page"] { color: var(--accent); font-weight: 700; }
+nav a[aria-current="page"]::after { content: ""; position: absolute; left: .85rem;
+            right: .85rem; bottom: .3rem; height: 2px; background: var(--accent);
+            border-radius: 2px; }
 
-/* ---------- views ---------- */
-.view { display: none; padding: var(--s6) 0 var(--s7); }
-.view.is-active { display: block; animation: rise .28s cubic-bezier(.2, .7, .2, 1) both; }
-@keyframes rise { from { opacity: 0; transform: translateY(6px); } }
-@media (prefers-reduced-motion: reduce) { .view.is-active { animation: none; } .dot-live { animation: none; } }
+/* ---------- status dots + pills ---------- */
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
+       display: inline-block; flex: 0 0 auto; }
+.dot-ok { background: var(--ok); }
+.dot-warn { background: var(--warn); }
+.dot-danger { background: var(--danger); }
+.pill { display: inline-flex; align-items: center; gap: .4rem; font-size: .78rem;
+        border: 1px solid var(--border); background: var(--surface); color: var(--ink-2);
+        padding: .2rem .6rem; border-radius: 999px; white-space: nowrap;
+        font-variant-numeric: tabular-nums; }
 
-.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: var(--s4);
-  flex-wrap: wrap; margin-bottom: var(--s5); }
-.page-head .sub { color: var(--muted); font-size: var(--fs-sm); margin-top: var(--s1); }
-.crumbs { font-size: var(--fs-sm); color: var(--muted); margin-bottom: var(--s2); display: block; text-decoration: none; }
-.crumbs:hover { color: var(--ink); }
+/* ---------- page header ---------- */
+header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
+         gap: 1rem; margin-bottom: 1.5rem; }
+header .sub, .meta { color: var(--muted); font-size: .85rem; margin-top: .25rem;
+                     font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); font-size: .85rem; }
+.empty { color: var(--muted); }
+.excerpt { color: var(--ink-2); font-size: .85rem; }
+.head-meta { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin-top: .4rem; }
+.head-meta .next { margin-left: auto; font-size: .85rem; text-decoration: none; }
+.head-meta .next:hover { text-decoration: underline; }
+.back, .crumbs { display: inline-block; margin-bottom: .5rem; font-size: .85rem;
+                 color: var(--muted); text-decoration: none; }
+.back:hover, .crumbs:hover { color: var(--fg); }
+
+/* ---------- notices ---------- */
+.notice { padding: .7rem .9rem; margin-bottom: 1rem; border: 1px solid var(--border);
+          border-left: 4px solid var(--muted); border-radius: var(--radius);
+          background: var(--surface); }
+.notice-ok { border-left-color: var(--ok); }
+.notice-warn { border-left-color: var(--warn); }
+.notice-error { border-left-color: var(--danger); }
 
 /* ---------- pipeline strip ---------- */
-.pipeline {
-  display: grid; grid-template-columns: repeat(4, 1fr);
-  border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden;
-  background: var(--surface); box-shadow: var(--shadow); margin-bottom: var(--s5);
-}
-.stage { padding: var(--s4) var(--s4) var(--s3); position: relative; border-right: 1px solid var(--line); }
+.pipeline { display: grid; grid-template-columns: repeat(4, 1fr);
+            border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
+            background: var(--surface); box-shadow: var(--shadow); margin-bottom: 1.5rem; }
+.stage { padding: 1rem 1rem .85rem; position: relative; border-right: 1px solid var(--border); }
 .stage:last-child { border-right: 0; }
-.stage .stage-name { font-size: var(--fs-xs); letter-spacing: .12em; text-transform: uppercase;
-  color: var(--muted); font-weight: 700; display: flex; align-items: center; gap: var(--s2); }
-.stage .stage-num { font-size: var(--fs-2xl); font-weight: 750; letter-spacing: -.03em;
-  margin-top: var(--s2); font-variant-numeric: tabular-nums; }
-.stage .stage-sub { font-size: var(--fs-sm); color: var(--muted); margin-top: var(--s1); }
+.stage-name { font-size: .7rem; letter-spacing: .12em; text-transform: uppercase;
+              color: var(--muted); font-weight: 700; display: flex; align-items: center;
+              gap: .4rem; }
+.stage-num { font-size: 2.1rem; font-weight: 750; letter-spacing: -.03em; line-height: 1.15;
+             margin-top: .4rem; font-variant-numeric: tabular-nums; }
+.stage-sub { font-size: .8rem; color: var(--muted); margin-top: .15rem;
+             font-variant-numeric: tabular-nums; }
 .stage.is-focus { background: var(--accent-soft); }
 .stage.is-focus .stage-num, .stage.is-focus .stage-name { color: var(--accent); }
-.stage.is-focus .stage-sub { color: color-mix(in srgb, var(--accent) 72%, var(--ink)); }
-.stage + .stage::before {
-  content: ""; position: absolute; left: -5px; top: 50%; width: 8px; height: 8px;
-  border-top: 1.5px solid var(--line-strong); border-right: 1.5px solid var(--line-strong);
-  transform: translateY(-50%) rotate(45deg); background: var(--surface);
-}
+.stage.is-focus .stage-sub { color: color-mix(in srgb, var(--accent) 72%, var(--fg)); }
+.stage + .stage::before { content: ""; position: absolute; left: -5px; top: 50%; width: 8px;
+              height: 8px; border-top: 1.5px solid var(--border-strong);
+              border-right: 1.5px solid var(--border-strong);
+              transform: translateY(-50%) rotate(45deg); background: var(--surface); }
 
 /* ---------- layout ---------- */
-.cols { display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr); gap: var(--s5); align-items: start; }
-.stack { display: flex; flex-direction: column; gap: var(--s5); }
-.panel { border: 1px solid var(--line); border-radius: var(--r-lg); background: var(--surface); box-shadow: var(--shadow); }
-.panel-head { display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
-  padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); }
-.panel-head .label { font-size: var(--fs-xs); letter-spacing: .12em; text-transform: uppercase;
-  color: var(--muted); font-weight: 700; }
-.panel-body { padding: var(--s4); }
-.section-label { font-size: var(--fs-xs); letter-spacing: .12em; text-transform: uppercase;
-  color: var(--muted); font-weight: 700; margin-bottom: var(--s3); }
+.cols { display: grid; grid-template-columns: minmax(0, 1.85fr) minmax(0, 1fr);
+        gap: 1.5rem; align-items: start; }
+.stack { display: flex; flex-direction: column; gap: 1.5rem; min-width: 0; }
+.panel { border: 1px solid var(--border); border-radius: var(--radius-lg);
+         background: var(--surface); box-shadow: var(--shadow); min-width: 0; }
+.panel-head { display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+              padding: .75rem 1rem; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.panel-head .label, .section-label { font-size: .7rem; letter-spacing: .12em;
+              text-transform: uppercase; color: var(--muted); font-weight: 700; }
+.panel-body { padding: 1rem; }
+.section-label { display: block; margin-bottom: .75rem; }
 
-/* ---------- attention ---------- */
+/* ---------- stat cards (status) ---------- */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+         gap: .75rem; margin-bottom: 1.5rem; }
+.card { border: 1px solid var(--border); border-radius: var(--radius-lg); padding: .7rem .9rem;
+        background: var(--surface); box-shadow: var(--shadow); }
+.card .num { font-size: 1.6rem; font-weight: 750; line-height: 1.2; letter-spacing: -.02em;
+             font-variant-numeric: tabular-nums; }
+.card .label { font-size: .8rem; color: var(--muted); }
+.card .sub { font-size: .78rem; color: var(--muted); margin-top: .15rem; }
+
+/* ---------- attention list ---------- */
 .attn { display: flex; flex-direction: column; }
-.attn-row { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4);
-  border-bottom: 1px solid var(--line); }
+.attn-row { display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem;
+            border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .attn-row:last-child { border-bottom: 0; }
 .attn-ico { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
-  flex: 0 0 auto; font-size: var(--fs-sm); font-weight: 800;
-  background: var(--surface-2); color: var(--ink-2); }
-.attn-ico.act { background: var(--accent); color: var(--on-accent); }
-.attn-ico.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
-.attn-text { flex: 1 1 auto; min-width: 0; }
+            flex: 0 0 auto; font-size: .8rem; font-weight: 800;
+            background: var(--surface-2); color: var(--ink-2); }
+.attn-ico.act { background: var(--accent); color: var(--accent-fg); }
+.attn-ico.warn { background: color-mix(in srgb, var(--warn) 18%, transparent);
+                 color: var(--warn); }
+.attn-text { flex: 1 1 14rem; min-width: 0; }
 .attn-text strong { font-weight: 650; }
-.attn-text .small { display: block; color: var(--muted); font-size: var(--fs-sm); }
+.attn-text .small { display: block; color: var(--muted); font-size: .8rem; }
 
-/* ---------- buttons ---------- */
-.btn {
-  appearance: none; font: inherit; font-weight: 600; cursor: pointer;
-  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
-  min-height: 44px; padding: 10px 16px; border-radius: var(--r);
-  border: 1px solid var(--line-strong); background: var(--surface); color: var(--ink);
-  transition: background .14s ease, border-color .14s ease, transform .06s ease;
-  text-decoration: none;
-}
-.btn:hover { background: var(--surface-2); }
-.btn:active { transform: translateY(1px); }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.btn-primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
-.btn-quiet { border-color: transparent; background: transparent; color: var(--ink-2); font-weight: 550; }
-.btn-quiet:hover { background: var(--surface-2); color: var(--ink); }
-.btn-danger { border-color: color-mix(in srgb, var(--danger) 42%, var(--line)); color: var(--danger); background: transparent; }
-.btn-danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
-.btn-sm { min-height: 36px; padding: 6px 12px; font-size: var(--fs-sm); }
-.cmdbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); }
-.cmdbar .note { color: var(--muted); font-size: var(--fs-sm); margin-left: var(--s2); }
-
-/* ---------- scheduLers / kv ---------- */
-.sched { display: flex; flex-direction: column; }
-.sched-row { display: grid; grid-template-columns: 14px 1fr auto; align-items: center; gap: var(--s3);
-  padding: 11px var(--s4); border-bottom: 1px solid var(--line); }
+/* ---------- scheduler rows + key/value ---------- */
+.sched, .kv { display: flex; flex-direction: column; }
+.sched-row { display: grid; grid-template-columns: 12px 1fr auto; align-items: center;
+             gap: .75rem; padding: .7rem 1rem; border-bottom: 1px solid var(--border); }
 .sched-row:last-child { border-bottom: 0; }
-.sched-name { font-weight: 600; }
-.sched-name .small { display: block; font-weight: 400; color: var(--muted); font-size: var(--fs-sm); }
-.sched-when { font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; text-align: right; }
-.kv { display: flex; flex-direction: column; }
-.kv-row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
-  padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.sched-name { font-weight: 600; min-width: 0; }
+.sched-name .small { display: block; font-weight: 400; color: var(--muted); font-size: .8rem; }
+.sched-when { font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums;
+              text-align: right; white-space: nowrap; }
+.kv-row { display: flex; align-items: baseline; justify-content: space-between; gap: .75rem;
+          padding: .5rem 0; border-bottom: 1px dashed var(--border); }
 .kv-row:last-child { border-bottom: 0; }
-.kv-row dt { color: var(--muted); font-size: var(--fs-sm); }
-.kv-row dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.kv-row dt { color: var(--muted); font-size: .85rem; }
+.kv-row dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums;
+             text-align: right; }
 
-/* ---------- toolbar ---------- */
-.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s3); margin-bottom: var(--s4); }
-.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; background: var(--surface); padding: 3px; }
-.seg-btn { appearance: none; border: 0; background: transparent; font: inherit; font-weight: 600;
-  color: var(--ink-2); padding: 7px 14px; min-height: 36px; border-radius: 999px; cursor: pointer;
-  display: inline-flex; align-items: center; gap: var(--s2); }
-.seg-btn:hover { color: var(--ink); }
-.seg-btn[aria-pressed="true"] { background: var(--accent); color: var(--on-accent); }
-.seg-btn .n { font-variant-numeric: tabular-nums; opacity: .75; font-size: var(--fs-sm); }
-.field { display: inline-flex; align-items: center; gap: var(--s2); }
-.control {
-  font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--r); padding: 9px 12px; min-height: 44px;
-}
-.control::placeholder { color: var(--muted); }
-.search { min-width: 15rem; }
-.spacer { margin-left: auto; }
+/* ---------- controls ---------- */
+.controls, .cmdbar, .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+.controls { margin-bottom: 1.5rem; }
+.toolbar { margin-bottom: 1rem; }
+.toolbar .spacer { margin-left: auto; }
+button, .btn { font: inherit; display: inline-flex; align-items: center; justify-content: center;
+               gap: .4rem; min-height: 2.75rem; padding: .5rem 1rem; border-radius: var(--radius);
+               border: 1px solid var(--border-strong); background: var(--surface); color: var(--fg);
+               cursor: pointer; text-decoration: none; font-weight: 600;
+               transition: background .14s ease, border-color .14s ease; }
+button:hover, .btn:hover { background: var(--surface-2); }
+button:disabled { opacity: .55; cursor: not-allowed; }
+.btn-primary, button.btn-primary { background: var(--accent); border-color: var(--accent);
+               color: var(--accent-fg); }
+.btn-primary:hover, button.btn-primary:hover { background: var(--accent-2);
+               border-color: var(--accent-2); }
+.btn-quiet { background: transparent; border-color: transparent; color: var(--ink-2);
+             font-weight: 550; }
+.btn-quiet:hover { background: var(--surface-2); color: var(--fg); }
+.btn-danger { background: transparent; color: var(--danger);
+              border-color: color-mix(in srgb, var(--danger) 42%, var(--border)); }
+.btn-danger:hover { background: color-mix(in srgb, var(--danger) 10%, transparent); }
+.btn-sm { min-height: 2.25rem; padding: .35rem .75rem; font-size: .85rem; }
+form { display: inline; }
+.form-block { display: block; }
 
-/* ---------- review rows ---------- */
-.qlist { display: flex; flex-direction: column; }
-.qrow { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: var(--s4);
-  align-items: center; padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line);
-  text-decoration: none; color: inherit; transition: background .12s ease; }
-.qrow:last-child { border-bottom: 0; }
-.qrow:hover { background: var(--surface-2); }
-.qthumb { width: 76px; height: 57px; border-radius: var(--r-sm); overflow: hidden; position: relative;
-  background: linear-gradient(135deg, var(--surface-2), color-mix(in srgb, var(--accent) 16%, var(--surface-2))); }
-.qthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.qthumb.is-empty::after {
-  content: "no image"; position: absolute; inset: 0; display: grid; place-items: center;
-  font-size: 10.5px; letter-spacing: .04em; color: var(--muted); font-weight: 600;
-  background: repeating-linear-gradient(45deg, transparent, transparent 7px,
-    color-mix(in srgb, var(--line) 55%, transparent) 7px, color-mix(in srgb, var(--line) 55%, transparent) 8px);
-}
-.qtitle { font-weight: 650; letter-spacing: -.01em; }
-.qmeta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); color: var(--muted);
-  font-size: var(--fs-sm); margin-top: 5px; }
-.qpreview { color: var(--ink-2); font-size: var(--fs-sm); margin-top: 6px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.qgo { color: var(--muted); font-size: var(--fs-md); }
-.qrow:hover .qgo { color: var(--accent); }
-.pager { display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
-  padding: var(--s3) var(--s4); color: var(--muted); font-size: var(--fs-sm); }
+/* ---------- filters: status as a segmented control, source as chips ---------- */
+.filters { display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1.25rem; }
+.filter-row { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; }
+.filter-label { font-size: .7rem; text-transform: uppercase; letter-spacing: .1em;
+                color: var(--muted); font-weight: 700; min-width: 3.6rem; }
+.seg { display: inline-flex; max-width: 100%; border: 1px solid var(--border);
+       border-radius: 999px; background: var(--surface); padding: 3px;
+       overflow-x: auto; scrollbar-width: none; }
+.seg::-webkit-scrollbar { display: none; }
+.seg-item { display: inline-flex; align-items: center; gap: .4rem; padding: .4rem .9rem;
+            min-height: 2.25rem; border-radius: 999px; font-size: .85rem; font-weight: 600;
+            text-decoration: none; color: var(--ink-2); background: transparent;
+            white-space: nowrap; flex: 0 0 auto; }
+.seg-item:hover { background: var(--surface-2); color: var(--fg); }
+.seg-item[aria-current="true"] { background: var(--accent); color: var(--accent-fg); }
+.seg-item .count { font-variant-numeric: tabular-nums; opacity: .75; font-size: .8rem; }
+.seg-item[aria-current="true"] .count { opacity: .88; }
+.chip { display: inline-flex; align-items: center; gap: .35rem; padding: .25rem .7rem;
+        min-height: 2.75rem; border: 1px solid var(--border); border-radius: 999px;
+        font-size: .82rem; text-decoration: none; color: var(--ink-2);
+        background: var(--surface); }
+.chip:hover { background: var(--surface-2); color: var(--fg); }
+.chip-active { background: var(--accent); border-color: var(--accent); color: var(--accent-fg);
+               font-weight: 600; }
+.chip .count { font-size: .72rem; opacity: .75; font-variant-numeric: tabular-nums; }
+.chip-active .count { opacity: .88; }
+.search-form { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
+               margin-bottom: 1rem; }
+.field-inline { display: inline-flex; align-items: center; gap: .5rem; }
 
-/* ---------- badges ---------- */
-.badge {
-  display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); font-weight: 700;
-  letter-spacing: .04em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--badge, var(--muted)) 42%, transparent);
-  background: color-mix(in srgb, var(--badge, var(--muted)) 12%, transparent);
-  color: var(--badge, var(--muted));
-}
-.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
-.badge-ai_draft { --badge: var(--accent); }
-.badge-approved { --badge: var(--ok); }
+/* ---------- form controls ---------- */
+.field { margin: .85rem 0; }
+.field label, .field-label { display: block; font-size: .7rem; font-weight: 700;
+        letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+        margin-bottom: .4rem; }
+textarea, input[type=text], input[type=search], select {
+        font: inherit; width: 100%; padding: .55rem .6rem; color: var(--fg);
+        border-radius: var(--radius); border: 1px solid var(--border);
+        background: var(--surface-2); }
+input[type=search], select { min-height: 2.75rem; }
+textarea { min-height: 14rem; resize: vertical; line-height: 1.6; }
+.field-hint { font-size: .78rem; color: var(--muted); margin-top: .3rem; }
+.countbar { display: flex; align-items: center; gap: .75rem; margin-top: .4rem;
+            font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums;
+            flex-wrap: wrap; }
+img.preview { max-width: 100%; border-radius: var(--radius-lg); }
+
+/* ---------- badges: state carried by colour AND a dot AND the label ---------- */
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: .7rem;
+         text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
+         padding: .15rem .5rem; border-radius: 999px;
+         border: 1px solid color-mix(in srgb, var(--badge, var(--muted)) 42%, transparent);
+         background: color-mix(in srgb, var(--badge, var(--muted)) 12%, transparent);
+         color: var(--badge, var(--muted));
+         color: color-mix(in srgb, var(--badge, var(--muted)) var(--badge-ink-mix),
+                          var(--badge-ink-base)); }
+.badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%;
+                 background: currentColor; flex: 0 0 auto; }
 .badge-extracted { --badge: var(--warn); }
+.badge-ai-draft, .badge-approved { --badge: var(--accent); }
 .badge-posted, .badge-public { --badge: var(--ok); }
 .badge-rejected { --badge: var(--danger); }
-.badge-source { --badge: var(--muted); text-transform: none; letter-spacing: 0; }
+.badge-private { --badge: var(--warn); }
+.badge-valid { --badge: var(--ok); }
+.badge-invalid { --badge: var(--danger); }
+.badge-unknown, .badge-running, .badge-skipped { --badge: var(--warn); }
+.badge-done, .badge-no-change { --badge: var(--ok); }
+.badge-failed { --badge: var(--danger); }
+.badge-source { --badge: var(--muted); text-transform: none; letter-spacing: 0; font-weight: 600; }
 .badge-source::before { display: none; }
 
+/* ---------- tables ---------- */
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: .5rem; vertical-align: top;
+         border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+th { font-size: .75rem; color: var(--muted); font-weight: 700;
+     text-transform: uppercase; letter-spacing: .08em; }
+td { font-variant-numeric: tabular-nums; }
+td a, .permalink { word-break: break-all; }
+a.permalink { font-size: .82rem; }
+
+/* ---------- queue + feed rows (shared) ---------- */
+.qlist { display: flex; flex-direction: column; }
+.qrow { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 1rem;
+        align-items: center; padding: .75rem 1rem; border-bottom: 1px solid var(--border);
+        text-decoration: none; color: inherit; }
+.qrow:last-child { border-bottom: 0; }
+.qrow:hover { background: var(--surface-2); }
+.qthumb { width: 76px; height: 57px; border-radius: var(--radius-sm); overflow: hidden;
+          position: relative; background: linear-gradient(135deg, var(--surface-2),
+                      color-mix(in srgb, var(--accent) 16%, var(--surface-2))); }
+.qthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.qthumb.empty { background: repeating-linear-gradient(45deg, transparent, transparent 7px,
+                      color-mix(in srgb, var(--border) 55%, transparent) 7px,
+                      color-mix(in srgb, var(--border) 55%, transparent) 8px); }
+.qthumb.empty::after { content: "no image"; position: absolute; inset: 0; display: grid;
+        place-items: center; font-size: .62rem; letter-spacing: .04em; color: var(--muted);
+        font-weight: 600; }
+.qbody { min-width: 0; }
+.qtitle { display: block; font-weight: 650; letter-spacing: -.01em; }
+.qmeta { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem; color: var(--muted);
+         font-size: .8rem; margin-top: .3rem; }
+.qpreview { display: block; color: var(--ink-2); font-size: .85rem; margin-top: .35rem;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qgo { color: var(--muted); font-size: 1rem; text-decoration: none; }
+.qrow:hover .qgo { color: var(--accent); }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: .75rem;
+         padding: .75rem 1rem; color: var(--muted); font-size: .85rem; flex-wrap: wrap;
+         border-top: 1px solid var(--border); }
 /* ---------- draft detail ---------- */
-.detail { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: var(--s5); align-items: start; }
-.hero { border-radius: var(--r-lg); overflow: hidden; border: 1px solid var(--line); background: var(--surface-2); }
+.detail-grid, .detail { display: grid;
+        grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 1.5rem;
+        align-items: start; }
+.hero { border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--border);
+        background: var(--surface-2); margin-bottom: 1.5rem; }
 .hero img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
-.composer { padding: var(--s4); display: flex; flex-direction: column; gap: var(--s4); }
-.masthead { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
-.masthead-chip { background: var(--accent-soft); color: var(--accent); font-weight: 700;
-  border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent); border-radius: 999px;
-  padding: 4px 11px; font-size: var(--fs-sm); }
-.field-label { display: block; font-size: var(--fs-xs); letter-spacing: .1em; text-transform: uppercase;
-  color: var(--muted); font-weight: 700; margin-bottom: var(--s2); }
-textarea, input[type="text"] {
-  width: 100%; font: inherit; color: var(--ink); background: var(--surface-2);
-  border: 1px solid var(--line); border-radius: var(--r); padding: var(--s3);
-}
-textarea { min-height: 15rem; resize: vertical; line-height: 1.6; }
-.countbar { display: flex; align-items: center; gap: var(--s3); margin-top: var(--s2);
-  font-size: var(--fs-sm); color: var(--muted); font-variant-numeric: tabular-nums; }
-.meter { flex: 1 1 auto; height: 5px; border-radius: 999px; background: var(--surface-2); overflow: hidden; }
-.meter span { display: block; height: 100%; width: 58%; background: var(--accent); }
-.fbcard { border: 1px solid var(--line); border-radius: var(--r-lg); overflow: hidden; background: var(--surface); }
-.fbcard-head { display: flex; align-items: center; gap: var(--s3); padding: var(--s3) var(--s4); }
-.fb-avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent); color: var(--on-accent);
-  display: grid; place-items: center; font-weight: 800; }
-.fb-name { font-weight: 700; }
-.fb-sub { color: var(--muted); font-size: var(--fs-sm); }
-.fb-body { padding: 0 var(--s4) var(--s4); white-space: pre-wrap; line-height: 1.55;
-  max-height: 9.5rem; overflow: hidden; position: relative; }
-.fb-body::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3rem;
-  background: linear-gradient(transparent, var(--surface)); }
-.fb-img { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block; border-top: 1px solid var(--line); }
-.fb-foot { padding: var(--s2) var(--s4) var(--s3); color: var(--accent); font-weight: 600; font-size: var(--fs-sm);
-  border-top: 1px solid var(--line); }
-.actionbar { position: sticky; bottom: 0; display: flex; flex-wrap: wrap; gap: var(--s2); align-items: center;
-  padding: var(--s3) 0; margin-top: var(--s4); border-top: 1px solid var(--line);
-  background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(8px); }
-.actionbar .hint { color: var(--muted); font-size: var(--fs-sm); }
+.composer { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+.masthead { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
+.rail-block { padding: 1rem; border-bottom: 1px solid var(--border); }
+.rail-block:last-child { border-bottom: 0; }
+.rail-block p { margin: .4rem 0; }
+.notes { background: var(--surface-2); border-radius: var(--radius); padding: .75rem;
+         font-size: .85rem; color: var(--ink-2); }
+details.dna { border: 1px solid var(--border); border-radius: var(--radius); padding: .6rem .9rem; }
+details.dna summary { cursor: pointer; font-size: .85rem; font-weight: 650; }
+details.dna pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem;
+        overflow: auto; margin: .6rem 0 0; font-size: .78rem; line-height: 1.55;
+        color: var(--fg); }
+.fb-preview { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
+              background: var(--surface); }
+.fb-preview .head { display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem; }
+.fb-preview .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent);
+              color: var(--accent-fg); display: grid; place-items: center; font-weight: 800;
+              flex: 0 0 auto; }
+.fb-preview .meta { display: grid; gap: .15rem; }
+.fb-preview .name { font-weight: 700; }
+.fb-preview .when { color: var(--muted); font-size: .8rem; }
+.fb-preview .body { padding: 0 1rem .5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.fb-preview .tags { padding: .5rem 1rem .75rem; color: var(--accent); overflow-wrap: anywhere;
+              border-top: 1px solid var(--border); font-size: .85rem; font-weight: 600; }
+.fb-preview .media { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block;
+              border-top: 1px solid var(--border); }
+.action-bar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap;
+              gap: .5rem; align-items: center; margin-top: 1.5rem; padding: .8rem .2rem;
+              background: color-mix(in srgb, var(--bg) 88%, transparent);
+              border-top: 1px solid var(--border); backdrop-filter: blur(8px); }
+.action-bar .spacer { margin-left: auto; }
+.action-bar .hint { color: var(--muted); font-size: .8rem; }
 
 /* ---------- stepper ---------- */
-.stepper { display: flex; flex-direction: column; gap: 0; }
-.step { display: grid; grid-template-columns: 20px 1fr; gap: var(--s3); padding-bottom: var(--s3); position: relative; }
+.stepper { display: flex; flex-direction: column; }
+.step { display: grid; grid-template-columns: 20px 1fr; gap: .75rem; padding-bottom: .75rem;
+        position: relative; }
 .step:last-child { padding-bottom: 0; }
-.step::before { content: ""; position: absolute; left: 9px; top: 20px; bottom: -2px; width: 1.5px; background: var(--line); }
+.step::before { content: ""; position: absolute; left: 9px; top: 20px; bottom: -2px; width: 1.5px;
+        background: var(--border); }
 .step:last-child::before { display: none; }
 .step-dot { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
-  border: 1.5px solid var(--line-strong); background: var(--surface); font-size: 11px; color: transparent; z-index: 1; }
+        border: 1.5px solid var(--border-strong); background: var(--surface); font-size: .65rem;
+        color: transparent; z-index: 1; }
 .step.is-done .step-dot { background: var(--ok); border-color: var(--ok); color: var(--surface); }
-.step.is-now .step-dot { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
-.step-name { font-weight: 600; font-size: var(--fs-sm); }
-.step-name .small { display: block; font-weight: 400; color: var(--muted); }
+.step.is-now .step-dot { background: var(--accent); border-color: var(--accent);
+        color: var(--accent-fg); }
+.step-name { font-weight: 600; font-size: .85rem; }
+.step-name .small { display: block; font-weight: 400; color: var(--muted); font-size: .8rem; }
 .step.is-now .step-name { color: var(--accent); }
 
-/* ---------- rail blocks ---------- */
-.rail-block { padding: var(--s4); border-bottom: 1px solid var(--line); }
-.rail-block:last-child { border-bottom: 0; }
-.rail-block .excerpt { color: var(--ink-2); font-size: var(--fs-sm); }
-.notes { background: var(--surface-2); border-radius: var(--r); padding: var(--s3);
-  font-size: var(--fs-sm); color: var(--ink-2); }
-details.dna summary { cursor: pointer; font-weight: 650; font-size: var(--fs-sm); }
-details.dna pre { white-space: pre-wrap; font-size: var(--fs-xs); color: var(--muted); margin: var(--s3) 0 0;
-  max-height: 12rem; overflow: auto; }
-
-/* ---------- feed ---------- */
-.feed { display: flex; flex-direction: column; }
-.feed-item { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: var(--s3);
-  padding: var(--s3) var(--s4); border-bottom: 1px solid var(--line); }
-.feed-item:last-child { border-bottom: 0; }
-.feed-when { color: var(--muted); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
-.feed-caption { font-size: var(--fs-sm); color: var(--ink-2); margin-top: 5px;
-  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
-.feed-mast { color: var(--accent); font-weight: 700; font-size: var(--fs-sm); }
-
-.frame-note { font-size: var(--fs-sm); color: var(--muted); text-align: center; padding: var(--s6) 0 0; }
-.frame-note code { background: var(--surface-2); padding: 2px 6px; border-radius: var(--r-sm); }
-
+/* ---------- responsive ---------- */
 @media (max-width: 1040px) {
   .pipeline { grid-template-columns: repeat(2, 1fr); }
   .stage:nth-child(2) { border-right: 0; }
-  .stage:nth-child(3), .stage:nth-child(4) { border-top: 1px solid var(--line); }
+  .stage:nth-child(3), .stage:nth-child(4) { border-top: 1px solid var(--border); }
   .stage + .stage::before { display: none; }
-  .cols, .detail { grid-template-columns: 1fr; }
+  .cols, .detail-grid, .detail { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
-  .wrap { padding: 0 var(--s4); }
-  .topbar-inner { flex-wrap: wrap; gap: var(--s3); padding: var(--s2) 0; }
-  .nav { order: 3; width: 100%; margin-left: 0; overflow-x: auto; }
-  .topbar-tools { margin-left: auto; }
+  body { padding: 0 .75rem 3rem; }
+  nav .links { order: 3; width: 100%; margin-left: 0; overflow-x: auto; }
+  h1 { font-size: 1.3rem; }
   .pipeline { grid-template-columns: 1fr; }
-  .stage { border-right: 0; border-top: 1px solid var(--line); }
+  .stage { border-right: 0; border-top: 1px solid var(--border); }
   .stage:first-child { border-top: 0; }
-  h1 { font-size: var(--fs-lg); }
-  .stage .stage-num { font-size: var(--fs-xl); }
+  .stage-num { font-size: 1.7rem; }
   .qrow { grid-template-columns: 56px minmax(0, 1fr); }
   .qthumb { width: 56px; height: 44px; }
   .qgo { display: none; }
-  .feed-item { grid-template-columns: 1fr; }
-  .search { min-width: 0; width: 100%; }
+
+  .toolbar { align-items: stretch; }
+  .seg { width: 100%; }
+  .field-inline { flex: 1 1 100%; }
+  input[type=search], select { width: 100%; }
+  .toolbar .spacer { margin-left: 0; }
+  .action-bar .spacer { margin-left: 0; }
 }
+
+/* ---------- styleframe chrome (docs only) ---------- */
+.sf-note { color: var(--muted); font-size: .85rem; margin: .25rem 0 1rem; }
+.sf-note code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  background: var(--surface-2); padding: .1rem .35rem; border-radius: var(--radius-sm); }
+.sf-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .25rem;
+  margin-bottom: 1.5rem; border-bottom: 1px solid var(--border); }
+.sf-tab { font: inherit; font-weight: 600; color: var(--ink-2); background: transparent;
+  border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: .6rem .85rem;
+  min-height: 44px; cursor: pointer; }
+.sf-tab:hover { color: var(--fg); background: var(--surface-2); }
+.sf-tab[aria-current="true"] { color: var(--accent); border-bottom-color: var(--accent); }
+.sf-view { display: none; }
+.sf-view.is-active { display: block; }
+.sf-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem;
+  align-items: start; }
+.sf-swatches { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr));
+  gap: .75rem; }
+.sf-swatch { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.sf-chip { width: 34px; height: 34px; border-radius: var(--radius); flex: 0 0 auto;
+  border: 1px solid var(--border-strong); }
+.sf-swatch-text { display: flex; flex-direction: column; min-width: 0; }
+.sf-token { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .78rem; }
+.sf-desc { color: var(--muted); font-size: .78rem; }
+.sf-row { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
+@media (max-width: 1040px) { .sf-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
+<nav><a class="brand" href="/"><span class="brand-mark" aria-hidden="true">A</span><span class="brand-text"><span class="brand-eyebrow">Atento Education</span><span class="brand-name">Social Content Factory</span></span></a><span class="links"><a class="tab" href="/">Factory</a><a class="tab" href="/review">Review</a><a class="tab" href="/publish">Published</a><a class="tab" href="/status">Status</a></span></nav>
+<p class="sf-note">Styleframe — every operator page rendered by the app's own code, plus the design foundations. Generated by <code>scripts/build_styleframe.py</code>; do not edit by hand.</p>
+<nav class="sf-bar" aria-label="Styleframe sections"><button class="sf-tab" type="button" data-view="factory" aria-current="true">Factory</button><button class="sf-tab" type="button" data-view="review" aria-current="false">Review</button><button class="sf-tab" type="button" data-view="draft" aria-current="false">Draft</button><button class="sf-tab" type="button" data-view="published" aria-current="false">Published</button><button class="sf-tab" type="button" data-view="status" aria-current="false">Status</button><button class="sf-tab" type="button" data-view="feed" aria-current="false">Feed</button><button class="sf-tab" type="button" data-view="foundations" aria-current="false">Foundations</button></nav>
+<section class="sf-view is-active" id="sf-factory"><header><div><h1>Factory</h1><div class="sub">Page Atento Education · generated 2026-09-10 12:00 +07</div></div><div class="cmdbar"><form method="post" action="/refresh"><button type="submit">Refresh feed</button></form><form method="post" action="/scan"><button type="submit">Scan sources</button></form><form method="post" action="/publish/run"><button type="submit">Post approved now</button></form></div></header><div class="pipeline" role="group" aria-label="Pipeline stages"><div class="stage"><div class="stage-name"><span class="dot-ok" aria-hidden="true"></span>Sources</div><div class="stage-num">5</div><div class="stage-sub">next scan 2026-09-11 06:00</div></div><div class="stage is-focus"><div class="stage-name"><span class="dot-warn" aria-hidden="true"></span>Queue</div><div class="stage-num">61</div><div class="stage-sub">waiting for review · 62 total</div></div><div class="stage"><div class="stage-name"><span class="dot-ok" aria-hidden="true"></span>Approved</div><div class="stage-num">1</div><div class="stage-sub">next post 2026-09-10 19:51</div></div><div class="stage"><div class="stage-name"><span class="dot-ok" aria-hidden="true"></span>Published</div><div class="stage-num">1</div><div class="stage-sub">all time</div></div></div><div class="cols"><div class="stack"><section class="panel"><div class="panel-head"><span class="label">Needs attention</span><span class="pill">3 item(s)</span></div><div class="attn"><div class="attn-row"><span class="attn-ico act" aria-hidden="true">61</span><span class="attn-text"><strong>61 draft(s) waiting for review</strong><span class="small">62 in the queue · nothing posts until a human approves it</span></span><a class="btn btn-primary btn-sm" href="/review">Open queue</a></div><div class="attn-row"><span class="attn-ico" aria-hidden="true">1</span><span class="attn-text"><strong>1 approved and scheduled</strong><span class="small">oldest first — A Guide to Application Networking Basics (a-guide-to-application-networking-basics)</span></span><a class="btn btn-quiet btn-sm" href="/review?status=approved">View</a></div><div class="attn-row"><span class="attn-ico warn" aria-hidden="true">!</span><span class="attn-text"><strong>1 image job(s) failed</strong><span class="small">the draft keeps its existing image; regenerate from the draft page</span></span><a class="btn btn-quiet btn-sm" href="/status">Inspect</a></div></div></section><section class="panel"><div class="panel-head"><span class="label">Page feed</span><span class="pill">3 cached</span></div><div class="qlist"><a class="qrow" href="https://www.facebook.com/1148652808337860_122135960000000001"><span class="qthumb"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iMzYwIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNkY2VjZTkiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwZTZiNjQiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNjQwIiBoZWlnaHQ9IjM2MCIgZmlsbD0idXJsKCNnKSIvPjxjaXJjbGUgY3g9IjE1MCIgY3k9IjEzMCIgcj0iNzIiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMzAiLz48cmVjdCB4PSIyNzAiIHk9IjE5NiIgd2lkdGg9IjI1MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuNDAiLz48cmVjdCB4PSIyNzAiIHk9IjIyOCIgd2lkdGg9IjE4MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMjgiLz48L3N2Zz4=" alt="" loading="lazy"></span><span class="qbody"><span class="qtitle">Ai cũng nói: muốn làm tốt thì phải hiểu hết codebase của mình. Ở codebase nhỏ,…</span><span class="qmeta"><span class="pill">[Học cùng Atento]</span><time datetime="2026-09-09T12:51:00+00:00">2026-09-09 12:51 +07</time></span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="https://www.facebook.com/1148652808337860_122135000000000002"><span class="qthumb empty" aria-hidden="true"></span><span class="qbody"><span class="qtitle">Giờ này chiều mai là seminar “Agentic AI for business: from idea to product” đã…</span><span class="qmeta"><span class="pill">[Đọc báo cùng Atento]</span><time datetime="2026-09-04T08:01:00+00:00">2026-09-04 08:01 +07</time></span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="https://www.facebook.com/1148652808337860_122135000000000003"><span class="qthumb empty" aria-hidden="true"></span><span class="qbody"><span class="qtitle">(no text — added_photos post)</span><span class="qmeta"><time datetime="2026-08-28T04:47:00+00:00">2026-08-28 04:47 +07</time></span></span><span class="qgo" aria-hidden="true">›</span></a></div></section></div><div class="stack"><section class="panel"><div class="panel-head"><span class="label">Schedulers</span><span class="pill">5 source(s)</span></div><div class="sched"><div class="sched-row"><span class="dot-ok" aria-hidden="true"></span><span class="sched-name">Feed refresh<span class="small">last run ok · last 2026-09-10 07:00:00 · at 07:00, 19:00</span></span><span class="sched-when">next 2026-09-10 19:00</span></div><div class="sched-row"><span class="dot-ok" aria-hidden="true"></span><span class="sched-name">Source scan<span class="small">last run ok · last 2026-09-10 06:00:00 · at 06:00</span></span><span class="sched-when">next 2026-09-11 06:00</span></div><div class="sched-row"><span class="dot-warn" aria-hidden="true"></span><span class="sched-name">Post schedule<span class="small">not run yet · last — · at 19:30-21:00 · next up A Guide to Application Networking Basics (a-guide-to-application-networking-basics)</span></span><span class="sched-when">next 2026-09-10 19:51</span></div><div class="sched-row"><span class="dot dot-ok" aria-hidden="true"></span><span class="sched-name">Next post<span class="small">A Guide to Application Networking Basics (a-guide-to-application-networking-basics)</span></span><span class="sched-when">2026-09-10 19:51</span></div></div></section><section class="panel"><div class="panel-head"><span class="label">Ledger</span></div><div class="panel-body"><dl class="kv"><div class="kv-row"><dt>Seen items</dt><dd>62</dd></div><div class="kv-row"><dt>Drafts total</dt><dd>62</dd></div><div class="kv-row"><dt>Open drafts</dt><dd>61</dd></div><div class="kv-row"><dt>Published</dt><dd>1</dd></div><div class="kv-row"><dt>Min interval (days)</dt><dd>2</dd></div></dl></div></section><section class="panel"><div class="panel-head"><span class="label">Image jobs</span><span class="pill">3 job(s) · 1 running · 1 failed</span></div><div class="panel-body"><table><thead><tr><th>Draft</th><th>Status</th><th>Error</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr><td>automatically-detecting-ai-text</td><td><span class="badge badge-running">running</span></td><td></td><td>2026-09-10 06:13:00</td><td>—</td></tr><tr><td>social-media-engagement-summer-2026</td><td><span class="badge badge-failed">failed</span></td><td>HTTP 520 &lt;upstream&gt;</td><td>2026-09-10 06:12:00</td><td>2026-09-10 06:12:30</td></tr><tr><td>how-smart-model-routing-can-cut-llm</td><td><span class="badge badge-done">done</span></td><td></td><td>2026-09-10 06:12:00</td><td>2026-09-10 06:12:38</td></tr></tbody></table></div></section></div></div></section><section class="sf-view" id="sf-review"><header><div><h1>Review</h1><div class="sub">61 of 62 open draft(s) · generated 2026-09-10 12:00 +07</div></div><div class="cmdbar"><form method="post" action="/publish/run"><button type="submit">Post approved now</button></form><form method="post" action="/scan"><button type="submit" class="btn-primary">Scan sources now</button></form></div></header><form class="search-form" method="get" action="/review"><input type="hidden" name="per_page" value="7"><span class="field-inline"><label class="filter-label" for="q">Search</label><input type="search" id="q" name="q" value="" placeholder="Title, excerpt, or caption…"></span><span class="field-inline"><label class="filter-label" for="sort">Sort</label><select id="sort" name="sort"><option value="newest" selected>Newest first</option><option value="oldest">Oldest first</option></select></span><button type="submit" class="btn btn-sm">Apply</button></form><div class="filters"><div class="filter-row"><span class="filter-label">Status</span><span class="seg"><a class="seg-item" href="/review" aria-current="true">All<span class="count">62</span></a><a class="seg-item" href="/review?status=extracted">Extracted<span class="count">0</span></a><a class="seg-item" href="/review?status=ai_draft">AI draft<span class="count">60</span></a><a class="seg-item" href="/review?status=approved">Approved<span class="count">1</span></a></span></div><div class="filter-row"><span class="filter-label">Source</span><a class="chip chip-active" href="/review" aria-current="true">All<span class="count">62</span></a><a class="chip" href="/review?source=atento-blog">atento-blog<span class="count">8</span></a><a class="chip" href="/review?source=bytebytego">bytebytego<span class="count">12</span></a><a class="chip" href="/review?source=martinfowler">martinfowler<span class="count">12</span></a><a class="chip" href="/review?source=seangoedecke">seangoedecke<span class="count">29</span></a></div></div><section class="panel"><div class="panel-head"><span class="label">Queue</span><div class="pager"><span>Showing 1–7 / 61</span><span class="cmdbar"><span class="pill">Page 1 / 9</span><a class="btn btn-sm" href="/review?page=2&amp;per_page=7">Older →</a></span></div></div><div class="qlist"><a class="qrow" href="/review/a-guide-to-application-networking-basics"><span class="qthumb empty" aria-hidden="true"></span><span class="qbody"><span class="qtitle">A Guide to Application Networking Basics</span><span class="qmeta"><span class="badge badge-approved">approved</span><span class="badge badge-source">bytebytego</span><time datetime="2026-09-10T00:00:00+00:00">published 2026-09-10 00:00</time></span><span class="qpreview">From DNS to load balancers: the path a request takes before it reaches your code.</span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="/review/how-smart-model-routing-can-cut-llm"><span class="qthumb"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iMzYwIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNkY2VjZTkiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwZTZiNjQiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNjQwIiBoZWlnaHQ9IjM2MCIgZmlsbD0idXJsKCNnKSIvPjxjaXJjbGUgY3g9IjE1MCIgY3k9IjEzMCIgcj0iNzIiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMzAiLz48cmVjdCB4PSIyNzAiIHk9IjE5NiIgd2lkdGg9IjI1MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuNDAiLz48cmVjdCB4PSIyNzAiIHk9IjIyOCIgd2lkdGg9IjE4MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMjgiLz48L3N2Zz4=" alt="" loading="lazy"></span><span class="qbody"><span class="qtitle">How Smart Model Routing Can Cut LLM Costs by 10X</span><span class="qmeta"><span class="badge badge-ai-draft">ai_draft</span><span class="badge badge-source">bytebytego</span><time datetime="2026-09-09T15:30:26+00:00">published 2026-09-09 15:30</time></span><span class="qpreview">Ứng dụng nào gắn LLM cũng có một thói quen: chọn model mạnh nhất rồi tống mọi request vào đó.</span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="/review/social-media-engagement-summer-2026"><span class="qthumb"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iMzYwIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNkY2VjZTkiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwZTZiNjQiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNjQwIiBoZWlnaHQ9IjM2MCIgZmlsbD0idXJsKCNnKSIvPjxjaXJjbGUgY3g9IjE1MCIgY3k9IjEzMCIgcj0iNzIiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMzAiLz48cmVjdCB4PSIyNzAiIHk9IjE5NiIgd2lkdGg9IjI1MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuNDAiLz48cmVjdCB4PSIyNzAiIHk9IjIyOCIgd2lkdGg9IjE4MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMjgiLz48L3N2Zz4=" alt="" loading="lazy"></span><span class="qbody"><span class="qtitle">Social Media Engagement: summer 2026</span><span class="qmeta"><span class="badge badge-ai-draft">ai_draft</span><span class="badge badge-source">martinfowler</span><time datetime="2026-09-09T16:21:00+00:00">published 2026-09-09 16:21</time></span><span class="qpreview">LinkedIn cho engagement cao nhất. X đứng thứ hai. Bluesky và Mastodon gần như im lặng.</span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="/review/fragments-september-8"><span class="qthumb empty" aria-hidden="true"></span><span class="qbody"><span class="qtitle">Fragments: September 8</span><span class="qmeta"><span class="badge badge-ai-draft">ai_draft</span><span class="badge badge-source">martinfowler</span><time datetime="2026-09-08T15:22:00+00:00">published 2026-09-08 15:22</time></span><span class="qpreview">dealing with AI&#x27;s counterfeit utility, exasperated readers of LLMs, missing Creating Passionate Users</span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="/review/do-you-even-need-a-presentation"><span class="qthumb empty" aria-hidden="true"></span><span class="qbody"><span class="qtitle">Do you even need a presentation?</span><span class="qmeta"><span class="badge badge-ai-draft">ai_draft</span><span class="badge badge-source">martinfowler</span><time datetime="2026-09-08T13:42:00+00:00">published 2026-09-08 13:42</time></span><span class="qpreview">Most of the time, we shouldn&#x27;t use a presentation.</span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="/review/automatically-detecting-ai-text"><span class="qthumb empty" aria-hidden="true"></span><span class="qbody"><span class="qtitle">Automatically detecting AI text in my browser</span><span class="qmeta"><span class="badge badge-ai-draft">ai_draft</span><span class="badge badge-source">seangoedecke</span><time datetime="2026-09-08T00:00:00+00:00">published 2026-09-08 00:00</time></span><span class="qpreview">Automated AI text detection is currently an underserved niche.</span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="/review/nen-tang-hoc-tap-nao-cho-nguoi-di-lam"><span class="qthumb empty" aria-hidden="true"></span><span class="qbody"><span class="qtitle">Nền tảng học tập nào cho người đi làm bận rộn?</span><span class="qmeta"><span class="badge badge-ai-draft">ai_draft</span><span class="badge badge-source">atento-blog</span><time datetime="2026-09-06T02:15:38+00:00">published 2026-09-06 02:15</time></span><span class="qpreview">Ba tiêu chí để chọn một khoá học không phí thời gian: mật độ, phản hồi, và ứng dụng được ngay.</span></span><span class="qgo" aria-hidden="true">›</span></a></div></section></section><section class="sf-view" id="sf-draft"><header><div><a class="crumbs" href="/review">← Review queue</a><h1>Ứng dụng nào gắn LLM cũng có một thói quen: chọn model mạnh nhất rồi tống mọi r…</h1><div class="head-meta"><span class="badge badge-ai-draft">ai_draft</span><span class="badge badge-source">bytebytego</span><span>published 2026-09-09 15:30</span><a class="next" href="/review/do-you-even-need-a-presentation">Next draft →</a></div></div></header><div class="detail"><div class="stack"><figure class="hero"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iMzYwIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNkY2VjZTkiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwZTZiNjQiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNjQwIiBoZWlnaHQ9IjM2MCIgZmlsbD0idXJsKCNnKSIvPjxjaXJjbGUgY3g9IjE1MCIgY3k9IjEzMCIgcj0iNzIiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMzAiLz48cmVjdCB4PSIyNzAiIHk9IjE5NiIgd2lkdGg9IjI1MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuNDAiLz48cmVjdCB4PSIyNzAiIHk9IjIyOCIgd2lkdGg9IjE4MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMjgiLz48L3N2Zz4=" alt="a funnel splitting small parcels onto three conveyor belts of different widths, only the heaviest parcel reaching the widest belt" loading="lazy"></figure><section class="panel"><div class="panel-head"><span class="label">Compose</span><span class="pill">[Học cùng Atento]</span></div><div class="composer"><form id="publish-form" class="form-block" method="post" action="/review/how-smart-model-routing-can-cut-llm/publish" data-private="false"><div class="field"><label for="caption">Caption · Vietnamese</label><textarea id="caption" name="caption" lang="vi">[Học cùng Atento]
 
-<header class="topbar">
-  <div class="wrap topbar-inner">
-    <a class="brand" href="#factory">
-      <span class="brand-mark" aria-hidden="true">A</span>
-      <span class="brand-text">
-        <span class="brand-eyebrow">Atento Education</span>
-        <span class="brand-name">Social Content Factory</span>
-      </span>
-    </a>
-    <nav class="nav" aria-label="Sections">
-      <button class="navtab" type="button" data-view="factory" aria-current="true">Factory</button>
-      <button class="navtab" type="button" data-view="review">Review</button>
-      <button class="navtab" type="button" data-view="draft">Draft</button>
-      <button class="navtab" type="button" data-view="published">Published</button>
-      <button class="navtab" type="button" data-view="status">Status</button>
-    </nav>
-    <div class="topbar-tools">
-      <span class="pill"><span class="dot dot-ok dot-live"></span>Facebook · Atento Education</span>
-      <button class="icon-btn" type="button" id="theme-toggle" title="Toggle light / dark" aria-label="Toggle light or dark theme">◐</button>
-    </div>
-  </div>
-</header>
+Ứng dụng nào gắn LLM cũng có một thói quen: chọn model mạnh nhất rồi tống mọi request vào đó.
 
-<main class="wrap">
-
-  <!-- ============ FACTORY ============ -->
-  <section class="view is-active" id="view-factory" aria-label="Factory overview">
-    <div class="page-head">
-      <div>
-        <h1>Factory</h1>
-        <p class="sub">Atento Education · Facebook Page · generated 2026-09-11 21:12 +07</p>
-      </div>
-      <div class="cmdbar">
-        <button class="btn btn-quiet btn-sm" type="button">Refresh feed</button>
-        <button class="btn btn-quiet btn-sm" type="button">Scan sources</button>
-        <button class="btn btn-quiet btn-sm" type="button">Post approved now</button>
-      </div>
-    </div>
-
-    <div class="pipeline" role="group" aria-label="Pipeline stages">
-      <div class="stage">
-        <div class="stage-name"><span class="dot dot-ok"></span>Sources</div>
-        <div class="stage-num">5</div>
-        <div class="stage-sub">feeds watched · next scan 06:00</div>
-      </div>
-      <div class="stage is-focus">
-        <div class="stage-name"><span class="dot dot-warn"></span>Queue</div>
-        <div class="stage-num">61</div>
-        <div class="stage-sub">waiting for review · 60 rewritten</div>
-      </div>
-      <div class="stage">
-        <div class="stage-name"><span class="dot dot-ok"></span>Approved</div>
-        <div class="stage-num">1</div>
-        <div class="stage-sub">ready · next slot 19:30–21:00</div>
-      </div>
-      <div class="stage">
-        <div class="stage-name"><span class="dot dot-ok"></span>Published</div>
-        <div class="stage-num">1</div>
-        <div class="stage-sub">public · all-time</div>
-      </div>
-    </div>
-
-    <div class="cols">
-      <div class="stack">
-        <section class="panel" aria-label="Needs attention">
-          <div class="panel-head"><span class="label">Needs attention</span><span class="pill">3 items</span></div>
-          <div class="attn">
-            <div class="attn-row">
-              <span class="attn-ico act" aria-hidden="true">61</span>
-              <span class="attn-text"><strong>61 drafts waiting for review</strong>
-                <span class="small">Oldest queued 2026-09-02 · 12 arrived from the last scan</span></span>
-              <button class="btn btn-primary btn-sm" type="button" data-goto="review">Open queue</button>
-            </div>
-            <div class="attn-row">
-              <span class="attn-ico" aria-hidden="true">1</span>
-              <span class="attn-text"><strong>1 draft approved and scheduled</strong>
-                <span class="small">Fires today in the 19:30–21:00 window · oldest-first</span></span>
-              <button class="btn btn-quiet btn-sm" type="button" data-goto="draft">View draft</button>
-            </div>
-            <div class="attn-row">
-              <span class="attn-ico warn" aria-hidden="true">!</span>
-              <span class="attn-text"><strong>Image generation has not run yet</strong>
-                <span class="small">Enabled, but no rewrite has arrived since the last restart</span></span>
-              <button class="btn btn-quiet btn-sm" type="button" data-goto="status">Inspect</button>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel" aria-label="Page feed">
-          <div class="panel-head"><span class="label">Page feed</span>
-            <span class="pill">latest 3 of 10</span></div>
-          <div class="feed">
-            <article class="feed-item">
-              <div class="feed-when">2026-09-11 21:10 +07</div>
-              <div>
-                <span class="feed-mast">[Học cùng Atento]</span>
-                <p class="feed-caption">Ai cũng nói: muốn làm tốt thì phải hiểu hết codebase của mình. Ở codebase nhỏ, điều đó đúng. Nhưng ở hệ thống hàng chục triệu dòng với team thay máu liên tục, hiểu hết là chuyện không tưởng — và theo Sean Goedecke, cố hiểu hết không phải là mục tiêu đúng.</p>
-              </div>
-            </article>
-            <article class="feed-item">
-              <div class="feed-when">2026-09-04 15:01 +07</div>
-              <div>
-                <span class="feed-mast">[Đọc báo cùng Atento]</span>
-                <p class="feed-caption">Giờ này chiều mai là seminar “Agentic AI for business: from idea to product” đã đi được đến đoạn demo xong sản phẩm rồi đấy mấy ní ạ. Ai lỡ quên thì nhớ set báo thức nha ⏳</p>
-              </div>
-            </article>
-            <article class="feed-item">
-              <div class="feed-when">2026-08-28 11:47 +07</div>
-              <div>
-                <span class="feed-mast">[Học cùng Atento]</span>
-                <p class="feed-caption">Với Atento, buổi học đầu tiên của khóa System Design K1 thật sự mang một ý nghĩa lớn, đánh dấu bước đầu tiên trên một hành trình dài. 🥰</p>
-              </div>
-            </article>
-          </div>
-        </section>
-      </div>
-
-      <aside class="stack" aria-label="System status">
-        <section class="panel">
-          <div class="panel-head"><span class="label">Schedulers</span><span class="pill"><span class="dot dot-ok dot-live"></span>all ok</span></div>
-          <div class="sched">
-            <div class="sched-row">
-              <span class="dot dot-ok" aria-hidden="true"></span>
-              <span class="sched-name">Feed refresh <span class="small">last ok · 21:23</span></span>
-              <span class="sched-when">next 07:00</span>
-            </div>
-            <div class="sched-row">
-              <span class="dot dot-ok" aria-hidden="true"></span>
-              <span class="sched-name">Source scan <span class="small">last ok · +12 drafts</span></span>
-              <span class="sched-when">next 06:00</span>
-            </div>
-            <div class="sched-row">
-              <span class="dot dot-warn" aria-hidden="true"></span>
-              <span class="sched-name">Timed posting <span class="small">not run yet this process</span></span>
-              <span class="sched-when">next 19:51</span>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head"><span class="label">Token &amp; account</span></div>
-          <div class="panel-body">
-            <dl class="kv">
-              <div class="kv-row"><dt>Status</dt><dd><span class="badge badge-posted">Valid</span></dd></dl>
-              <div class="kv-row"><dt>Checked</dt><dd>2026-09-11 21:23</dd></div>
-              <div class="kv-row"><dt>Type</dt><dd>Page</dd></div>
-              <div class="kv-row"><dt>Permissions</dt><dd>3 granted</dd></div>
-              <div class="kv-row"><dt>Mode</dt><dd>Public posts</dd></div>
-            </dl>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="panel-head"><span class="label">Ledger</span></div>
-          <div class="panel-body">
-            <dl class="kv">
-              <div class="kv-row"><dt>Seen items</dt><dd>62</dd></div>
-              <div class="kv-row"><dt>Drafts total</dt><dd>62</dd></div>
-              <div class="kv-row"><dt>Image jobs</dt><dd>0 run</dd></div>
-              <div class="kv-row"><dt>Max / day</dt><dd>10</dd></div>
-              <div class="kv-row"><dt>Min interval</dt><dd>2 days</dd></div>
-            </dl>
-          </div>
-        </section>
-      </aside>
-    </div>
-  </section>
-
-  <!-- ============ REVIEW ============ -->
-  <section class="view" id="view-review" aria-label="Review queue">
-    <div class="page-head">
-      <div>
-        <h1>Review</h1>
-        <p class="sub">61 open drafts · 60 awaiting a decision · 1 approved</p>
-      </div>
-      <div class="cmdbar">
-        <button class="btn btn-quiet" type="button">Post approved now</button>
-        <button class="btn btn-primary" type="button">Scan sources</button>
-      </div>
-    </div>
-
-    <div class="toolbar">
-      <div class="seg" role="group" aria-label="Filter by state">
-        <button class="seg-btn" type="button" aria-pressed="true">All <span class="n">61</span></button>
-        <button class="seg-btn" type="button" aria-pressed="false">AI draft <span class="n">60</span></button>
-        <button class="seg-btn" type="button" aria-pressed="false">Approved <span class="n">1</span></button>
-        <button class="seg-btn" type="button" aria-pressed="false">Extracted <span class="n">0</span></button>
-      </div>
-      <span class="field">
-        <label class="field-label" for="src-filter" style="margin:0">Source</label>
-        <select class="control" id="src-filter">
-          <option>All sources (61)</option>
-          <option>seangoedecke (29)</option>
-          <option>bytebytego (12)</option>
-          <option>martinfowler (12)</option>
-          <option>atento-blog (8)</option>
-        </select>
-      </span>
-      <span class="field">
-        <input class="control search" type="search" placeholder="Search titles…" aria-label="Search titles">
-      </span>
-      <span class="field spacer">
-        <label class="field-label" for="sort" style="margin:0">Sort</label>
-        <select class="control" id="sort">
-          <option>Newest first</option>
-          <option>Oldest first</option>
-          <option>Longest waiting</option>
-        </select>
-      </span>
-    </div>
-
-    <div class="panel qlist">
-      <a class="qrow" href="#draft" data-goto="draft">
-        <span class="qthumb is-empty" aria-hidden="true"></span>
-        <span>
-          <span class="qtitle">A Guide to Application Networking Basics</span>
-          <span class="qmeta">
-            <span class="badge badge-approved">Approved</span>
-            <span class="badge badge-source">bytebytego</span>
-            <span>published 2026-09-10 22:31</span>
-          </span>
-        </span>
-        <span class="qgo" aria-hidden="true">›</span>
-      </a>
-      <a class="qrow" href="#draft" data-goto="draft">
-        <span class="qthumb"><img src="https://martinfowler.com/articles/2026-social-traffic/card.png" alt="" loading="lazy" onerror="this.style.display='none'"></span>
-        <span>
-          <span class="qtitle">Social Media Engagement: summer 2026</span>
-          <span class="qmeta">
-            <span class="badge badge-ai_draft">AI draft</span>
-            <span class="badge badge-source">martinfowler</span>
-            <span>published 2026-09-09 23:21</span>
-          </span>
-          <span class="qpreview">LinkedIn cho engagement cao nhất. X đứng thứ hai. Bluesky và Mastodon gần như im lặng.</span>
-        </span>
-        <span class="qgo" aria-hidden="true">›</span>
-      </a>
-      <a class="qrow" href="#draft" data-goto="draft">
-        <span class="qthumb"><img src="https://substackcdn.com/image/fetch/$s_!CAXo!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F8555df7f-556b-4e5b-929a-4a10d5a2f245_3282x1316.png" alt="" loading="lazy" onerror="this.style.display='none'"></span>
-        <span>
-          <span class="qtitle">How Smart Model Routing Can Cut LLM Costs by 10X</span>
-          <span class="qmeta">
-            <span class="badge badge-ai_draft">AI draft</span>
-            <span class="badge badge-source">bytebytego</span>
-            <span>published 2026-09-09 22:30</span>
-          </span>
-          <span class="qpreview">Ứng dụng nào gắn LLM cũng có một thói quen: chọn model mạnh nhất rồi tống mọi request vào đó.</span>
-        </span>
-        <span class="qgo" aria-hidden="true">›</span>
-      </a>
-      <a class="qrow" href="#draft" data-goto="draft">
-        <span class="qthumb"><img src="https://substackcdn.com/image/fetch/$s_!ig6R!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F6fb1cdea-0ebf-44ba-8edb-371847e23884_1769x2048.png" alt="" loading="lazy" onerror="this.style.display='none'"></span>
-        <span>
-          <span class="qtitle">Built for Reliability: How American Express Processes Payments at Scale</span>
-          <span class="qmeta">
-            <span class="badge badge-ai_draft">AI draft</span>
-            <span class="badge badge-source">bytebytego</span>
-            <span>published 2026-09-09 01:31</span>
-          </span>
-          <span class="qpreview">Khách quẹt thẻ ở quầy thanh toán. Giao dịch vừa chạy vào hệ thống thì một microservice bắt đầu chết.</span>
-        </span>
-        <span class="qgo" aria-hidden="true">›</span>
-      </a>
-      <a class="qrow" href="#draft" data-goto="draft">
-        <span class="qthumb is-empty" aria-hidden="true"></span>
-        <span>
-          <span class="qtitle">Fragments: September 8</span>
-          <span class="qmeta">
-            <span class="badge badge-ai_draft">AI draft</span>
-            <span class="badge badge-source">martinfowler</span>
-            <span>published 2026-09-08 22:22</span>
-          </span>
-          <span class="qpreview">dealing with AI's counterfeit utility, exasperated readers of LLMs, missing Creating Passionate Users</span>
-        </span>
-        <span class="qgo" aria-hidden="true">›</span>
-      </a>
-      <a class="qrow" href="#draft" data-goto="draft">
-        <span class="qthumb is-empty" aria-hidden="true"></span>
-        <span>
-          <span class="qtitle">Do you even need a presentation?</span>
-          <span class="qmeta">
-            <span class="badge badge-ai_draft">AI draft</span>
-            <span class="badge badge-source">martinfowler</span>
-            <span>published 2026-09-08 20:42</span>
-          </span>
-          <span class="qpreview">Most of the time, we shouldn't use a presentation.</span>
-        </span>
-        <span class="qgo" aria-hidden="true">›</span>
-      </a>
-      <a class="qrow" href="#draft" data-goto="draft">
-        <span class="qthumb is-empty" aria-hidden="true"></span>
-        <span>
-          <span class="qtitle">Automatically detecting AI text in my browser</span>
-          <span class="qmeta">
-            <span class="badge badge-ai_draft">AI draft</span>
-            <span class="badge badge-source">seangoedecke</span>
-            <span>published 2026-09-08 07:00</span>
-          </span>
-          <span class="qpreview">Automated AI text detection is currently an underserved niche.</span>
-        </span>
-        <span class="qgo" aria-hidden="true">›</span>
-      </a>
-      <div class="pager">
-        <span>Showing 1–7 of 61</span>
-        <span class="cmdbar">
-          <button class="btn btn-sm" type="button" disabled>← Newer</button>
-          <button class="btn btn-sm" type="button">Older →</button>
-        </span>
-      </div>
-    </div>
-  </section>
-
-  <!-- ============ DRAFT ============ -->
-  <section class="view" id="view-draft" aria-label="Draft detail">
-    <a class="crumbs" href="#review" data-goto="review">← Review queue</a>
-    <div class="page-head">
-      <div>
-        <h1>How Smart Model Routing Can Cut LLM Costs by 10X</h1>
-        <p class="sub">
-          <span class="badge badge-ai_draft">AI draft</span>
-          <span class="badge badge-source">bytebytego</span>
-          published 2026-09-09 22:30
-        </p>
-      </div>
-      <div class="cmdbar"><button class="btn btn-quiet btn-sm" type="button">Next draft →</button></div>
-    </div>
-
-    <div class="detail">
-      <div class="stack">
-        <div class="hero">
-          <img src="https://substackcdn.com/image/fetch/$s_!CAXo!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F8555df7f-556b-4e5b-929a-4a10d5a2f245_3282x1316.png" alt="A funnel dividing small parcels onto three conveyors of different widths" onerror="this.style.display='none'">
-        </div>
-
-        <section class="panel">
-          <div class="panel-head"><span class="label">Compose</span>
-            <span class="pill">every post is a photo post</span></div>
-          <div class="composer">
-            <div class="masthead">
-              <span class="field-label" style="margin:0">Series masthead</span>
-              <button class="masthead-chip" type="button">[Học cùng Atento]</button>
-              <button class="btn btn-quiet btn-sm" type="button">Change</button>
-            </div>
-            <div>
-              <label class="field-label" for="caption">Caption · Vietnamese</label>
-              <textarea id="caption">Ứng dụng nào gắn LLM cũng có một thói quen: chọn model mạnh nhất rồi tống mọi request vào đó.
-
-Một request kiểu "phân loại ticket này là billing hay technical" và một request kiểu "soát đống sổ sách tài chính lệch nhau, chỉ ra nguyên nhân" cần hai mức reasoning rất khác. Nhưng cả hai đều bay vào cùng một model đắt nhất — chẳng khác nào thuê một kiến trúc sư senior đi đổi tên file.
+Một request kiểu “phân loại ticket này là billing hay technical” và một request kiểu “soát đống sổ sách tài chính lệch nhau” cần hai mức reasoning rất khác. Nhưng cả hai đều bay vào cùng một model đắt nhất — chẳng khác nào thuê một kiến trúc sư senior đi đổi tên file.
 
 Model routing đặt một router trước vài model: việc dễ đẩy sang model nhỏ, việc khó mới tới model mạnh. Trong ví dụ của bài, nếu 85% request chỉ cần model nhỏ, 10% cần model vừa và 5% cần model mạnh, chi phí trung bình có thể rơi xuống quanh mức 1/10.
 
 Nhưng tiết kiệm không phải chuyện đương nhiên. Nó phụ thuộc vào loại traffic, mức chênh giá giữa các model, và quan trọng nhất là router đoán đúng tới đâu.
 
-Routing tốt không phải chọn model mạnh nhất. Là chọn model rẻ nhất còn đủ sức làm đúng việc, và biết khi nào cần nâng cấp.
+Routing tốt không phải chọn model mạnh nhất. Là chọn model rẻ nhất còn đủ sức làm đúng việc, và biết khi nào cần nâng cấp.</textarea><div class="countbar"><span id="caption-count">966</span> characters posted (caption + hashtags)</div></div><div class="field"><label for="hashtags">Hashtags</label><input type="text" id="hashtags" name="hashtags" value="#Atento #fromfoundationtoexcellence #systemdesign"><div class="field-hint">Appended to the caption when posted. Space or comma separated.</div></div><div class="field"><label for="image_prompt">Image prompt · English</label><input type="text" id="image_prompt" name="image_prompt" value="a funnel splitting small parcels onto three conveyor belts of different widths, only the heaviest parcel reaching the widest belt"><div class="field-hint">Subject and composition for the generated image — also the image's alt text. Falls back to the source title when blank.</div></div></form></div></section><section class="panel"><div class="panel-head"><span class="label">Preview</span><span class="pill">exactly what posts</span></div><div class="panel-body"><div class="fb-preview"><div class="head"><span class="avatar" aria-hidden="true">A</span><span class="meta"><span class="name">Atento Education</span><span class="when">Just now · 🌐</span></span></div><div class="body" id="preview-body" lang="vi">[Học cùng Atento]
 
-Nguồn: ByteByteGo — "How Smart Model Routing Can Cut LLM Costs by 10X".
-Đọc bài gốc đầy đủ tại comment.</textarea>
-              <div class="countbar">
-                <span>1,270 / 2,200</span>
-                <span class="meter" role="img" aria-label="58 percent of the Facebook caption limit"><span></span></span>
-                <span>caption + hashtags</span>
-              </div>
-            </div>
-            <div>
-              <label class="field-label" for="tags">Hashtags</label>
-              <input type="text" id="tags" value="#Atento #fromfoundationtoexcellence #systemdesign">
-            </div>
-          </div>
-        </section>
+Ứng dụng nào gắn LLM cũng có một thói quen: chọn model mạnh nhất rồi tống mọi request vào đó.
 
-        <section class="panel">
-          <div class="panel-head"><span class="label">Live preview</span>
-            <span class="pill">exactly what posts</span></div>
-          <div class="panel-body">
-            <div class="fbcard">
-              <div class="fbcard-head">
-                <span class="fb-avatar" aria-hidden="true">A</span>
-                <span>
-                  <span class="fb-name">Atento Education</span>
-                  <span class="fb-sub">Just now · 🌐</span>
-                </span>
-              </div>
-              <div class="fb-body">Ứng dụng nào gắn LLM cũng có một thói quen: chọn model mạnh nhất rồi tống mọi request vào đó.
+Một request kiểu “phân loại ticket này là billing hay technical” và một request kiểu “soát đống sổ sách tài chính lệch nhau” cần hai mức reasoning rất khác. Nhưng cả hai đều bay vào cùng một model đắt nhất — chẳng khác nào thuê một kiến trúc sư senior đi đổi tên file.
 
-Một request kiểu "phân loại ticket này là billing hay technical" và một request kiểu "soát đống sổ sách tài chính lệch nhau" cần hai mức reasoning rất khác. Nhưng cả hai đều bay vào cùng một model đắt nhất.</div>
-              <img class="fb-img" src="https://substackcdn.com/image/fetch/$s_!CAXo!,f_auto,q_auto:good,fl_progressive:steep/https%3A%2F%2Fsubstack-post-media.s3.amazonaws.com%2Fpublic%2Fimages%2F8555df7f-556b-4e5b-929a-4a10d5a2f245_3282x1316.png" alt="" onerror="this.style.display='none'">
-              <div class="fb-foot">#Atento #fromfoundationtoexcellence #systemdesign</div>
-            </div>
-          </div>
-        </section>
+Model routing đặt một router trước vài model: việc dễ đẩy sang model nhỏ, việc khó mới tới model mạnh. Trong ví dụ của bài, nếu 85% request chỉ cần model nhỏ, 10% cần model vừa và 5% cần model mạnh, chi phí trung bình có thể rơi xuống quanh mức 1/10.
 
-        <div class="actionbar">
-          <button class="btn btn-primary" type="button">Post publicly</button>
-          <button class="btn" type="button">Approve &amp; schedule</button>
-          <button class="btn btn-quiet" type="button">Dry run</button>
-          <button class="btn btn-quiet" type="button">Regenerate image</button>
-          <span class="spacer"></span>
-          <span class="hint">Publishes to the Facebook Page</span>
-          <button class="btn btn-danger" type="button">Reject</button>
-        </div>
-      </div>
+Nhưng tiết kiệm không phải chuyện đương nhiên. Nó phụ thuộc vào loại traffic, mức chênh giá giữa các model, và quan trọng nhất là router đoán đúng tới đâu.
 
-      <aside class="stack">
-        <section class="panel" aria-label="Pipeline state">
-          <div class="panel-head"><span class="label">Pipeline</span></div>
-          <div class="panel-body">
-            <div class="stepper">
-              <div class="step is-done"><span class="step-dot" aria-hidden="true">✓</span>
-                <span class="step-name">Extracted <span class="small">queued from bytebytego</span></span></div>
-              <div class="step is-now"><span class="step-dot" aria-hidden="true">●</span>
-                <span class="step-name">AI draft <span class="small">rewritten · waiting on you</span></span></div>
-              <div class="step"><span class="step-dot" aria-hidden="true">·</span>
-                <span class="step-name">Approved <span class="small">not yet</span></span></div>
-              <div class="step"><span class="step-dot" aria-hidden="true">·</span>
-                <span class="step-name">Posted <span class="small">not yet</span></span></div>
-            </div>
-          </div>
-        </section>
-
-        <section class="panel">
-          <div class="rail-block">
-            <span class="section-label">Source</span>
-            <p class="excerpt"><a href="https://blog.bytebytego.com/p/how-smart-model-routing-can-cut-llm">blog.bytebytego.com/p/how-smart-model-routing-…</a></p>
-            <p class="excerpt" style="margin-top:8px;color:var(--muted)">Published Wed, 09 Sep 2026 15:30:26 GMT</p>
-            <p class="excerpt" style="margin-top:8px">Cost reduction isn't a given. It also depends on the types of requests the application receives and how well the routing system performs.</p>
-          </div>
-          <div class="rail-block">
-            <span class="section-label">Rewriter notes</span>
-            <p class="notes">Register technical (giọng Dũng), format D (đám đông rồi lật), drama vừa. Có nêu trade-off under/over-routing để không hype con số 10x. Cần xác nhận giữ nguyên ví dụ 85/10/5 hay lược bớt.</p>
-          </div>
-          <div class="rail-block">
-            <span class="section-label">CTA · review only, not posted</span>
-            <p class="excerpt">Đọc bài gốc đầy đủ tại comment.</p>
-          </div>
-          <div class="rail-block">
-            <span class="section-label">Image alt text</span>
-            <p class="excerpt">Một phễu chia các kiện hàng nhỏ ra ba băng tải có độ rộng khác nhau, chỉ kiện nặng nhất mới đi tới băng tải rộng nhất.</p>
-          </div>
-          <div class="rail-block">
-            <details class="dna">
-              <summary>Atento DNA · brand voice</summary>
-              <pre># Atento DNA — brand voice & content playbook
+Routing tốt không phải chọn model mạnh nhất. Là chọn model rẻ nhất còn đủ sức làm đúng việc, và biết khi nào cần nâng cấp.</div><div class="tags" id="preview-tags">#Atento #fromfoundationtoexcellence #systemdesign</div><img class="media" src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iMzYwIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNkY2VjZTkiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwZTZiNjQiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNjQwIiBoZWlnaHQ9IjM2MCIgZmlsbD0idXJsKCNnKSIvPjxjaXJjbGUgY3g9IjE1MCIgY3k9IjEzMCIgcj0iNzIiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMzAiLz48cmVjdCB4PSIyNzAiIHk9IjE5NiIgd2lkdGg9IjI1MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuNDAiLz48cmVjdCB4PSIyNzAiIHk9IjIyOCIgd2lkdGg9IjE4MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMjgiLz48L3N2Zz4=" alt="" loading="lazy"></div><p class="field-hint">Facebook shows roughly the first two lines before “See more”.</p></div></section></div><div class="stack"><section class="panel"><div class="panel-head"><span class="label">Pipeline</span></div><div class="panel-body"><div class="stepper"><div class="step is-done"><span class="step-dot" aria-hidden="true">✓</span><span class="step-name">Extracted<span class="small">queued from bytebytego</span></span></div><div class="step is-now"><span class="step-dot" aria-hidden="true">●</span><span class="step-name">AI draft<span class="small">rewritten · waiting on you</span></span></div><div class="step"><span class="step-dot" aria-hidden="true">·</span><span class="step-name">Approved<span class="small">not yet</span></span></div><div class="step"><span class="step-dot" aria-hidden="true">·</span><span class="step-name">Posted<span class="small">not yet</span></span></div></div></div></section><aside class="panel"><div class="rail-block"><span class="section-label">Source</span><p>How Smart Model Routing Can Cut LLM Costs by 10X</p><p><a href="https://blog.bytebytego.com/p/how-smart-model-routing-can-cut-llm">https://blog.bytebytego.com/p/how-smart-model-routing-can-cut-llm</a></p><p class="muted">Published 2026-09-09 15:30</p><p class="excerpt">Cost reduction isn&#x27;t a given. It also depends on the types of requests the application receives and how well the routing system performs.</p></div><div class="rail-block"><span class="section-label">Rewriter notes</span><p class="notes">Register technical (giọng Dũng), format D (đám đông rồi lật), drama vừa. Có nêu trade-off under/over-routing để không hype con số 10x.</p></div><div class="rail-block"><span class="section-label">CTA · review only, not posted</span><p class="excerpt">Đọc bài gốc đầy đủ tại comment.</p></div><div class="rail-block"><details class="dna"><summary>Atento DNA · brand voice</summary><pre># Atento DNA — brand voice &amp; content playbook
 The single source of truth for how Atento sounds.
-Masthead on line 1, one register, technical terms in English…</pre>
-            </details>
-          </div>
-        </section>
-      </aside>
-    </div>
-  </section>
 
-  <!-- ============ PUBLISHED ============ -->
-  <section class="view" id="view-published" aria-label="Published log">
-    <div class="page-head">
-      <div><h1>Published</h1><p class="sub">1 post · 1 public · 0 private</p></div>
-    </div>
-    <section class="panel">
-      <div class="panel-head"><span class="label">Audit log</span><span class="pill">oldest first</span></div>
-      <div class="qlist">
-        <div class="qrow">
-          <span class="qthumb is-empty" aria-hidden="true"></span>
-          <span>
-            <span class="qtitle">A Guide to Application Networking Basics</span>
-            <span class="qmeta"><span class="badge badge-posted">Public</span>
-              <span>bytebytego</span><span>facebook</span><span>2026-09-11 19:51</span></span>
-          </span>
-          <a class="qgo" href="#" aria-label="Open on Facebook">↗</a>
-        </div>
-      </div>
-    </section>
-  </section>
-
-  <!-- ============ STATUS ============ -->
-  <section class="view" id="view-status" aria-label="Status">
-    <div class="page-head">
-      <div><h1>Status</h1><p class="sub">generated 2026-09-11 21:12 +07</p></div>
-      <div class="cmdbar"><span class="pill"><span class="dot dot-ok dot-live"></span>Ready · 200</span></div>
-    </div>
-    <div class="cols">
-      <div class="stack">
-        <section class="panel">
-          <div class="panel-head"><span class="label">Health</span></div>
-          <div class="sched">
-            <div class="sched-row"><span class="dot dot-ok"></span>
-              <span class="sched-name">Token <span class="small">page token · 3 permissions</span></span>
-              <span class="sched-when">valid</span></div>
-            <div class="sched-row"><span class="dot dot-ok"></span>
-              <span class="sched-name">Schedulers <span class="small">refresh · scan · posting loops alive</span></span>
-              <span class="sched-when">3 / 3</span></div>
-            <div class="sched-row"><span class="dot dot-ok"></span>
-              <span class="sched-name">State dirs <span class="small">data/review · data/publish</span></span>
-              <span class="sched-when">writable</span></div>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head"><span class="label">Sources</span></div>
-          <div class="panel-body">
-            <dl class="kv">
-              <div class="kv-row"><dt>atento-blog</dt><dd>index · vi · 8 drafts</dd></div>
-              <div class="kv-row"><dt>bytebytego</dt><dd>rss · en · 12 drafts</dd></div>
-              <div class="kv-row"><dt>martinfowler</dt><dd>rss · en · 12 drafts</dd></div>
-              <div class="kv-row"><dt>seangoedecke</dt><dd>rss · en · 29 drafts</dd></div>
-              <div class="kv-row"><dt>netflix-tech-blog</dt><dd>rss · en · 0 drafts</dd></div>
-            </dl>
-          </div>
-        </section>
-      </div>
-      <aside class="stack">
-        <section class="panel">
-          <div class="panel-head"><span class="label">Drafts by state</span></div>
-          <div class="panel-body">
-            <dl class="kv">
-              <div class="kv-row"><dt>Approved</dt><dd>1</dd></div>
-              <div class="kv-row"><dt>AI draft</dt><dd>60</dd></div>
-              <div class="kv-row"><dt>Extracted</dt><dd>0</dd></div>
-              <div class="kv-row"><dt>Posted</dt><dd>1</dd></div>
-            </dl>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head"><span class="label">Publishing</span></div>
-          <div class="panel-body">
-            <dl class="kv">
-              <div class="kv-row"><dt>Destinations</dt><dd>facebook</dd></div>
-              <div class="kv-row"><dt>Max / day</dt><dd>10</dd></div>
-              <div class="kv-row"><dt>Min interval</dt><dd>2 days</dd></div>
-              <div class="kv-row"><dt>Approved waiting</dt><dd>1</dd></div>
-              <div class="kv-row"><dt>Next up</dt><dd>19:30–21:00</dd></div>
-              <div class="kv-row"><dt>DNA file set</dt><dd>yes</dd></div>
-            </dl>
-          </div>
-        </section>
-      </aside>
-    </div>
-  </section>
-
-  <p class="frame-note">Styleframe only — a static mock of the proposed look, not the running app. Toggle views from the top bar.</p>
-</main>
-
+- Masthead on line 1, one register per post, technical terms in English.
+- Format D (the crowd, then the turn): open on a shared belief, then complicate it.
+- No engagement bait, no hype numbers, name the trade-off.
+</pre></details></div></aside></div></div><p class="field-hint">Approve &amp; schedule queues this for the next slot (2026-09-10 19:51); Post now sends it immediately.</p><div class="action-bar"><button type="submit" form="publish-form" class="btn-primary">Post publicly</button><button type="submit" form="publish-form" name="approve" value="1" class="btn">Approve &amp; schedule</button><button type="submit" form="publish-form" formaction="/review/how-smart-model-routing-can-cut-llm/save" name="save" value="1" class="btn btn-quiet">Save</button><form id="image-form" method="post" action="/review/how-smart-model-routing-can-cut-llm/image"><button type="submit" class="btn btn-quiet">Regenerate image</button></form><span class="hint">This publishes to the Facebook Page.</span><span class="spacer"></span><form id="reject-form" method="post" action="/review/how-smart-model-routing-can-cut-llm/reject"><button type="submit" class="btn btn-danger">Reject</button></form></div><p class="muted">Publishing is human-gated: only the buttons here send anything.</p></section><section class="sf-view" id="sf-published"><header><div><h1>Published</h1><div class="sub">2 post(s) · generated 2026-09-10 12:00 +07</div></div></header><section class="panel"><div class="panel-head"><span class="label">Audit log</span><span class="pill">2 record(s)</span></div><div class="panel-body"><table><thead><tr><th>When</th><th>Source</th><th>Destination</th><th>Post</th></tr></thead><tbody><tr><td>2026-09-07 20:04</td><td>martinfowler</td><td>facebook</td><td></td></tr><tr><td>2026-09-09 19:51</td><td><a href="https://blog.bytebytego.com/p/a-guide-to-application-networking">bytebytego</a></td><td>facebook</td><td><a href="https://www.facebook.com/1148652808337860_122135960000000001">https://www.facebook.com/1148652808337860_122135960000000001</a></td></tr></tbody></table></div></section></section><section class="sf-view" id="sf-status"><header><div><h1>Status</h1><div class="sub">generated 2026-09-10 12:00 +07</div></div></header><div class="cards"><div class="card"><div class="num">61</div><div class="label">Open drafts</div><div class="sub">62 total</div></div><div class="card"><div class="num">1</div><div class="label">Published</div></div><div class="card"><div class="num">62</div><div class="label">Seen items</div></div></div><div class="cols"><div class="stack"><section class="panel"><div class="panel-head"><span class="label">Token</span></div><div class="panel-body"><dl class="kv"><div class="kv-row"><dt>Status</dt><dd><span class="badge badge-valid">valid</span></dd></div><div class="kv-row"><dt>Expires</dt><dd>2026-11-09 21:12 +07 (in 59 day(s))</dd></div><div class="kv-row"><dt>Checked</dt><dd>2026-09-10 07:00:00</dd></div><div class="kv-row"><dt>Type</dt><dd>PAGE</dd></div><div class="kv-row"><dt>Permissions</dt><dd>3 granted</dd></div></dl></div></section><section class="panel"><div class="panel-head"><span class="label">Schedules</span></div><div class="sched"><div class="sched-row"><span class="dot-ok" aria-hidden="true"></span><span class="sched-name">Feed refresh<span class="small">last run ok · last 2026-09-10 07:00:00 · at 07:00, 19:00</span></span><span class="sched-when">next 2026-09-10 19:00</span></div><div class="sched-row"><span class="dot-ok" aria-hidden="true"></span><span class="sched-name">Source scan<span class="small">last run ok · last 2026-09-10 06:00:00 · at 06:00</span></span><span class="sched-when">next 2026-09-11 06:00</span></div><div class="sched-row"><span class="dot-warn" aria-hidden="true"></span><span class="sched-name">Post schedule<span class="small">not run yet · last — · at 19:30-21:00 · next up A Guide to Application Networking Basics (a-guide-to-application-networking-basics)</span></span><span class="sched-when">next 2026-09-10 19:51</span></div></div></section><section class="panel"><div class="panel-head"><span class="label">Image jobs</span><span class="pill">3 job(s) · 1 running · 1 failed</span></div><div class="panel-body"><table><thead><tr><th>Draft</th><th>Status</th><th>Error</th><th>Started</th><th>Finished</th></tr></thead><tbody><tr><td>automatically-detecting-ai-text</td><td><span class="badge badge-running">running</span></td><td></td><td>2026-09-10 06:13:00</td><td>—</td></tr><tr><td>social-media-engagement-summer-2026</td><td><span class="badge badge-failed">failed</span></td><td>HTTP 520 &lt;upstream&gt;</td><td>2026-09-10 06:12:00</td><td>2026-09-10 06:12:30</td></tr><tr><td>how-smart-model-routing-can-cut-llm</td><td><span class="badge badge-done">done</span></td><td></td><td>2026-09-10 06:12:00</td><td>2026-09-10 06:12:38</td></tr></tbody></table></div></section><section class="panel"><div class="panel-head"><span class="label">Sources</span></div><div class="panel-body"><table><thead><tr><th>Name</th><th>Type</th><th>URL</th><th>Lang</th></tr></thead><tbody><tr><td>atento-blog</td><td>index</td><td><a href="https://atento.vn/blog">https://atento.vn/blog</a></td><td>vi</td></tr><tr><td>bytebytego</td><td>rss</td><td><a href="https://blog.bytebytego.com/feed">https://blog.bytebytego.com/feed</a></td><td>en</td></tr><tr><td>martinfowler</td><td>rss</td><td><a href="https://martinfowler.com/feed.atom">https://martinfowler.com/feed.atom</a></td><td>en</td></tr><tr><td>seangoedecke</td><td>rss</td><td><a href="https://www.seangoedecke.com/rss.xml">https://www.seangoedecke.com/rss.xml</a></td><td>en</td></tr><tr><td>netflix-tech-blog</td><td>rss</td><td><a href="https://netflixtechblog.com/feed">https://netflixtechblog.com/feed</a></td><td>en</td></tr></tbody></table></div></section></div><div class="stack"><section class="panel"><div class="panel-head"><span class="label">Drafts by state</span></div><div class="panel-body"><table><thead><tr><th>State</th><th>Count</th></tr></thead><tbody><tr><td>ai_draft</td><td>60</td></tr><tr><td>approved</td><td>1</td></tr><tr><td>extracted</td><td>0</td></tr><tr><td>posted</td><td>1</td></tr><tr><td>rejected</td><td>0</td></tr></tbody></table></div></section><section class="panel"><div class="panel-head"><span class="label">Publishing</span></div><div class="panel-body"><table><thead><tr><th>Setting</th><th>Value</th></tr></thead><tbody><tr><td>enabled</td><td>True</td></tr><tr><td>destinations</td><td>facebook</td></tr><tr><td>min interval (days)</td><td>2</td></tr><tr><td>interval remaining (days)</td><td>0</td></tr><tr><td>approved waiting</td><td>1</td></tr><tr><td>next up</td><td>A Guide to Application Networking Basics (a-guide-to-application-networking-basics)</td></tr><tr><td>post at</td><td>19:30-21:00</td></tr><tr><td>post per slot</td><td>1</td></tr><tr><td>DNA file set</td><td>True</td></tr></tbody></table></div></section></div></div></section><section class="sf-view" id="sf-feed"><header><div><h1>Atento Education</h1><div class="sub">3 most recent post(s) · cached 2026-09-10 12:00 +07</div></div></header><section class="panel"><div class="panel-head"><span class="label">Page feed</span></div><div class="qlist"><a class="qrow" href="https://www.facebook.com/1148652808337860_122135960000000001"><span class="qthumb"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI2NDAiIGhlaWdodD0iMzYwIj48ZGVmcz48bGluZWFyR3JhZGllbnQgaWQ9ImciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiNkY2VjZTkiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiMwZTZiNjQiLz48L2xpbmVhckdyYWRpZW50PjwvZGVmcz48cmVjdCB3aWR0aD0iNjQwIiBoZWlnaHQ9IjM2MCIgZmlsbD0idXJsKCNnKSIvPjxjaXJjbGUgY3g9IjE1MCIgY3k9IjEzMCIgcj0iNzIiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMzAiLz48cmVjdCB4PSIyNzAiIHk9IjE5NiIgd2lkdGg9IjI1MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuNDAiLz48cmVjdCB4PSIyNzAiIHk9IjIyOCIgd2lkdGg9IjE4MCIgaGVpZ2h0PSIxNiIgcng9IjgiIGZpbGw9IiNmZmZmZmYiIG9wYWNpdHk9IjAuMjgiLz48L3N2Zz4=" alt="" loading="lazy"></span><span class="qbody"><span class="qtitle">Ai cũng nói: muốn làm tốt thì phải hiểu hết codebase của mình. Ở codebase nhỏ,…</span><span class="qmeta"><span class="pill">[Học cùng Atento]</span><time datetime="2026-09-09T12:51:00+00:00">2026-09-09 12:51 +07</time></span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="https://www.facebook.com/1148652808337860_122135000000000002"><span class="qthumb empty" aria-hidden="true"></span><span class="qbody"><span class="qtitle">Giờ này chiều mai là seminar “Agentic AI for business: from idea to product” đã…</span><span class="qmeta"><span class="pill">[Đọc báo cùng Atento]</span><time datetime="2026-09-04T08:01:00+00:00">2026-09-04 08:01 +07</time></span></span><span class="qgo" aria-hidden="true">›</span></a><a class="qrow" href="https://www.facebook.com/1148652808337860_122135000000000003"><span class="qthumb empty" aria-hidden="true"></span><span class="qbody"><span class="qtitle">(no text — added_photos post)</span><span class="qmeta"><time datetime="2026-08-28T04:47:00+00:00">2026-08-28 04:47 +07</time></span></span><span class="qgo" aria-hidden="true">›</span></a></div></section></section><section class="sf-view" id="sf-foundations"><div class="sf-grid"><div class="stack"><section class="panel"><div class="panel-head"><span class="label">Colour tokens</span></div><div class="panel-body"><div class="sf-swatches"><div class="sf-swatch"><span class="sf-chip" style="background: var(--bg)"></span><span class="sf-swatch-text"><span class="sf-token">--bg</span><span class="sf-desc">App background</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--surface)"></span><span class="sf-swatch-text"><span class="sf-token">--surface</span><span class="sf-desc">Panel / card surface</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--surface-2)"></span><span class="sf-swatch-text"><span class="sf-token">--surface-2</span><span class="sf-desc">Inset surface, hover</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--border)"></span><span class="sf-swatch-text"><span class="sf-token">--border</span><span class="sf-desc">Hairline divider</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--border-strong)"></span><span class="sf-swatch-text"><span class="sf-token">--border-strong</span><span class="sf-desc">Control edge, emphasis</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--fg)"></span><span class="sf-swatch-text"><span class="sf-token">--fg</span><span class="sf-desc">Primary ink</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--ink-2)"></span><span class="sf-swatch-text"><span class="sf-token">--ink-2</span><span class="sf-desc">Secondary ink</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--muted)"></span><span class="sf-swatch-text"><span class="sf-token">--muted</span><span class="sf-desc">Muted ink / captions</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--accent)"></span><span class="sf-swatch-text"><span class="sf-token">--accent</span><span class="sf-desc">Signal: primary action + focus</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--accent-2)"></span><span class="sf-swatch-text"><span class="sf-token">--accent-2</span><span class="sf-desc">Signal hover</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--accent-soft)"></span><span class="sf-swatch-text"><span class="sf-token">--accent-soft</span><span class="sf-desc">Signal tint surface</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--accent-fg)"></span><span class="sf-swatch-text"><span class="sf-token">--accent-fg</span><span class="sf-desc">Text on the signal</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--ok)"></span><span class="sf-swatch-text"><span class="sf-token">--ok</span><span class="sf-desc">Success state</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--warn)"></span><span class="sf-swatch-text"><span class="sf-token">--warn</span><span class="sf-desc">Warning state</span></span></div><div class="sf-swatch"><span class="sf-chip" style="background: var(--danger)"></span><span class="sf-swatch-text"><span class="sf-token">--danger</span><span class="sf-desc">Danger state</span></span></div></div></div></section><section class="panel"><div class="panel-head"><span class="label">Badges</span></div><div class="panel-body"><div class="sf-row"><span class="badge badge-extracted">extracted</span><span class="badge badge-ai-draft">ai_draft</span><span class="badge badge-approved">approved</span><span class="badge badge-posted">posted</span><span class="badge badge-rejected">rejected</span><span class="badge badge-valid">valid</span><span class="badge badge-invalid">invalid</span><span class="badge badge-unknown">unknown</span><span class="badge badge-running">running</span><span class="badge badge-done">done</span><span class="badge badge-no-change">no change</span><span class="badge badge-skipped">skipped</span><span class="badge badge-failed">failed</span><span class="badge badge-public">public</span><span class="badge badge-private">private</span></div></div></section><section class="panel"><div class="panel-head"><span class="label">Buttons</span></div><div class="panel-body"><div class="sf-row"><button type="button" class="btn btn-primary">Primary action</button><button type="button" class="btn">Secondary</button><button type="button" class="btn btn-quiet">Quiet</button><button type="button" class="btn btn-danger">Danger</button><button type="button" class="btn btn-sm">Small</button><button type="button" class="btn" disabled>Disabled</button></div></div></section><section class="panel"><div class="panel-head"><span class="label">Form fields</span></div><div class="panel-body"><div class="field"><label for="sf-caption">Caption · Vietnamese</label><textarea id="sf-caption" lang="vi">Một caption mẫu để xem kiểu chữ và khoảng cách trong ô nhập liệu.</textarea><div class="field-hint">Helper text under a field, muted and small.</div></div><div class="field"><label for="sf-tags">Hashtags</label><input type="text" id="sf-tags" value="#Atento #systemdesign"></div><div class="countbar"><span>1,270</span> characters posted (caption + hashtags)</div></div></section><section class="panel"><div class="panel-head"><span class="label">Pipeline strip</span></div><div class="panel-body"><div class="pipeline" role="group" aria-label="Pipeline stages"><div class="stage"><div class="stage-name"><span class="dot dot-ok"></span>Sources</div><div class="stage-num">5</div><div class="stage-sub">feeds watched</div></div><div class="stage is-focus"><div class="stage-name"><span class="dot dot-warn"></span>Queue</div><div class="stage-num">61</div><div class="stage-sub">waiting for review</div></div><div class="stage"><div class="stage-name"><span class="dot dot-ok"></span>Approved</div><div class="stage-num">1</div><div class="stage-sub">ready</div></div><div class="stage"><div class="stage-name"><span class="dot dot-ok"></span>Published</div><div class="stage-num">1</div><div class="stage-sub">all time</div></div></div></div></section></div><div class="stack"><section class="panel"><div class="panel-head"><span class="label">Notices</span></div><div class="panel-body"><div class="notice" role="status">Informational — a neutral update.</div><div class="notice notice-ok" role="status">Success — the action completed.</div><div class="notice notice-warn" role="status">Warning — proceed with care.</div><div class="notice notice-error" role="status">Error — the action failed.</div><div class="notice notice-warn"><strong>Private mode</strong>: posts are unpublished and visible to page admins only.</div></div></section><section class="panel"><div class="panel-head"><span class="label">Dots &amp;amp; pills</span></div><div class="panel-body"><div class="sf-row"><span class="pill"><span class="dot dot-ok"></span>ok</span><span class="pill"><span class="dot dot-warn"></span>warning</span><span class="pill"><span class="dot dot-danger"></span>failed</span><span class="pill">3 items</span></div></div></section><section class="panel"><div class="panel-head"><span class="label">Segmented control &amp;amp; chips</span></div><div class="panel-body"><div class="filters"><div class="filter-row"><span class="filter-label">Status</span><span class="seg"><a class="seg-item" href="#sf-review">All <span class="count">61</span></a><a class="seg-item" href="#sf-review" aria-current="true">AI draft <span class="count">60</span></a><a class="seg-item" href="#sf-review">Approved <span class="count">1</span></a></span></div><div class="filter-row"><span class="filter-label">Source</span><a class="chip chip-active" href="#sf-review">All <span class="count">61</span></a><a class="chip" href="#sf-review">bytebytego <span class="count">12</span></a><a class="chip" href="#sf-review">seangoedecke <span class="count">29</span></a></div></div></div></section><section class="panel"><div class="panel-head"><span class="label">Table</span></div><div class="panel-body"><table><thead><tr><th>When</th><th>Source</th><th>Destination</th></tr></thead><tbody><tr><td>2026-09-09 19:51</td><td>bytebytego</td><td>facebook</td></tr><tr><td>2026-09-07 20:04</td><td>martinfowler</td><td>facebook</td></tr></tbody></table></div></section><section class="panel"><div class="panel-head"><span class="label">Stepper</span></div><div class="panel-body"><div class="stepper"><div class="step is-done"><span class="step-dot" aria-hidden="true">✓</span><span class="step-name">Extracted<span class="small">queued from bytebytego</span></span></div><div class="step is-now"><span class="step-dot" aria-hidden="true">●</span><span class="step-name">AI draft<span class="small">rewritten · waiting on you</span></span></div><div class="step"><span class="step-dot" aria-hidden="true">·</span><span class="step-name">Approved<span class="small">not yet</span></span></div><div class="step"><span class="step-dot" aria-hidden="true">·</span><span class="step-name">Posted<span class="small">not yet</span></span></div></div></div></section><section class="panel"><div class="panel-head"><span class="label">Scheduler rows &amp;amp; key / value</span></div><div class="panel-body"><div class="sched"><div class="sched-row"><span class="dot dot-ok" aria-hidden="true"></span><span class="sched-name">Feed refresh<span class="small">last run ok</span></span><span class="sched-when">next 19:00</span></div><div class="sched-row"><span class="dot dot-warn" aria-hidden="true"></span><span class="sched-name">Post schedule<span class="small">not run yet</span></span><span class="sched-when">next 19:51</span></div></div><dl class="kv"><div class="kv-row"><dt>Seen items</dt><dd>62</dd></div><div class="kv-row"><dt>Open drafts</dt><dd>61</dd></div><div class="kv-row"><dt>Published</dt><dd>1</dd></div></dl></div></section></div></div></section>
 <script>
 (function () {
-  var tabs = Array.prototype.slice.call(document.querySelectorAll(".navtab"));
-  var views = Array.prototype.slice.call(document.querySelectorAll(".view"));
-
-  function show(name) {
+  var tabs = Array.prototype.slice.call(document.querySelectorAll(".sf-tab"));
+  var views = Array.prototype.slice.call(document.querySelectorAll(".sf-view"));
+  function show(key) {
     views.forEach(function (view) {
-      view.classList.toggle("is-active", view.id === "view-" + name);
+      view.classList.toggle("is-active", view.id === "sf-" + key);
     });
     tabs.forEach(function (tab) {
-      tab.setAttribute("aria-current", tab.dataset.view === name ? "true" : "false");
+      tab.setAttribute("aria-current", tab.dataset.view === key ? "true" : "false");
     });
-    window.scrollTo({ top: 0, behavior: "instant" in window ? "instant" : "auto" });
+    window.scrollTo({ top: 0 });
   }
-
   tabs.forEach(function (tab) {
     tab.addEventListener("click", function () { show(tab.dataset.view); });
-  });
-
-  document.querySelectorAll("[data-goto]").forEach(function (el) {
-    el.addEventListener("click", function (event) {
-      event.preventDefault();
-      show(el.dataset.goto);
-    });
-  });
-
-  document.querySelectorAll(".seg-btn").forEach(function (btn) {
-    btn.addEventListener("click", function () {
-      btn.parentElement.querySelectorAll(".seg-btn").forEach(function (other) {
-        other.setAttribute("aria-pressed", "false");
-      });
-      btn.setAttribute("aria-pressed", "true");
-    });
-  });
-
-  var toggle = document.getElementById("theme-toggle");
-  toggle.addEventListener("click", function () {
-    var root = document.documentElement;
-    root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
   });
 })();
 </script>

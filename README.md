@@ -132,7 +132,7 @@ docker compose logs -f                # follow refresh/scan runs
 |---|---|
 | `GET /` | **Dashboard** — refresh/scan controls, open-draft and published counts, scheduler state, the next post (time + which draft), and the cached feed. |
 | `GET /review` | **Review** — open drafts, newest first (with a **Scan sources now** button). Paged (`?page=`, `?per_page=`, default 20). |
-| `GET /review/{id}` | One draft: editable caption + hashtags, Post now / Dry run / Reject, Approve & schedule when `publish.post_at` is set, the DNA brief. |
+| `GET /review/{id}` | One draft: editable caption + hashtags + English image prompt, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set, the DNA brief. |
 | `GET /publish` | **Published** — the audit log (public and private sends, with permalinks). |
 | `GET /status` | **Status** — sources, drafts by state, publish settings (min interval, days remaining, next up), and scheduler runs. |
 | `GET /health` | JSON: busy, last refresh/scan result, schedules, next runs, open drafts, lifecycle. |
@@ -141,6 +141,7 @@ docker compose logs -f                # follow refresh/scan runs
 | `POST /refresh` | `{"started": true}`, or `409` if a refresh is already running. |
 | `POST /scan` | Scan the sources now; new drafts appear at `/review`. |
 | `POST /publish/run` | Post the approved queue now, without waiting for a slot. |
+| `POST /review/{id}/save` | Save the compose edits (caption, hashtags, image prompt); never posts. |
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only; `approve=1` queues the draft for the next slot instead). |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
 
@@ -218,14 +219,14 @@ Then, with `serve` running, hand the drafts to your rewriter and approve:
 curl localhost:8083/api/drafts                          # drafts + your DNA text
 curl -X POST localhost:8083/api/drafts/post-one/rewrite \
      -H 'content-type: application/json' \
-     -d '{"caption":"...","hashtags":["#Atento"],"alt_text":"..."}'
+     -d '{"caption":"...","hashtags":["#Atento"],"image_prompt":"a lone tree by a river"}'
 open http://localhost:8083/review                       # edit + Post now / Approve & schedule
 ```
 
 State lives under `data/review/`: `queue.json` (the queue) and `seen.json`
 (dedupe); the publish audit is `data/publish/published.jsonl`. Set
-`publish.enabled: false` for a global kill-switch, `publish.max_per_day` to cap
-posting, `publish.interval_days` for a minimum gap between public posts, and
+`publish.enabled: false` for a global kill-switch, `publish.interval_days` for a
+minimum gap between public posts (`1` = at most one per day), and
 `publish.post_at` to the daily slots at which approved drafts post (a slot is
 `HH:MM`, or a window `HH:MM-HH:MM`; `[]` disables timed posting). Drain the
 approved queue on demand with `blog publish` or `POST /publish/run`.
@@ -235,7 +236,7 @@ approved queue on demand with `blog publish` or `POST /publish/run`.
 admins can see. Use it to exercise the whole pipeline without going public:
 private sends leave the draft in the queue (so you can post it publicly later)
 and are recorded in `published.jsonl` with `"private": true`, and they don't count
-toward `publish.max_per_day` or `publish.interval_days`. Set it back to `false`
+toward `publish.interval_days`. Set it back to `false`
 to post publicly. This is
 not a dry run — it does create a post object, just an unpublished one.
 
@@ -243,7 +244,7 @@ not a dry run — it does create a post object, just an unpublished one.
 |---|---|
 | `GET /` | Dashboard: controls + counts + scheduler state + cached feed. |
 | `GET /review` | HTML review list of open drafts (with a **Scan sources now** button). |
-| `GET /review/{id}` | HTML detail with an editable caption + Approve/Reject. |
+| `GET /review/{id}` | HTML detail with an editable caption, hashtags, and English image prompt + Approve/Reject. |
 | `GET /publish` | HTML audit log of what has been posted (public and private). |
 | `GET /status` | HTML status page (sources, drafts by state, publish settings, runs). |
 | `POST /scan` | Trigger a source scan now (`{"started": true}`, or `409` if one is running). |
@@ -251,7 +252,7 @@ not a dry run — it does create a post object, just an unpublished one.
 | `POST /review/{id}/reject` | Mark the draft rejected. |
 | `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
 | `GET /api/status` | JSON: full pipeline snapshot — sources, drafts by state, seen, published, schedules, lifecycle. `publish.next_draft` names the oldest approved draft the poster will send next (`publish.approved` counts them, `publish.interval_remaining` is the days still to wait). |
-| `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `alt_text`, `commentary`). |
+| `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `image_prompt`). |
 
 **LinkedIn** is wired as a destination adapter but not implemented — the
 company-page path needs LinkedIn's Community Management API approval. Add a

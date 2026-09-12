@@ -16,6 +16,7 @@ from social_bot.web import (
     image_jobs_view,
     infer_last_runs,
     live_view,
+    next_post_at,
     next_run_at,
     readiness_view,
     runtime_state_snapshot,
@@ -97,6 +98,33 @@ class TestNextRunAt:
     def test_rolls_to_tomorrow(self):
         now = dt.datetime(2026, 9, 10, 20, 0)
         assert next_run_at(["07:00", "19:00"], now) == dt.datetime(2026, 9, 11, 7, 0)
+
+
+class TestNextPostAt:
+    """The slot that can actually send — the interval gate skips earlier wakes."""
+
+    NOW = dt.datetime(2026, 9, 12, 15, 57)
+
+    def test_no_schedule_is_none(self):
+        assert next_post_at([], interval_remaining=2, now=self.NOW) is None
+
+    def test_without_a_hold_it_is_the_next_wake(self):
+        assert next_post_at(["09:00", "20:00"], now=self.NOW) == dt.datetime(2026, 9, 12, 20, 0)
+
+    def test_hold_lands_on_the_day_the_gate_lifts(self):
+        assert next_post_at(
+            ["09:00", "20:00"], interval_remaining=1, now=self.NOW
+        ) == dt.datetime(2026, 9, 13, 9, 0)
+
+    def test_hold_picks_the_earliest_of_several_slots(self):
+        assert next_post_at(
+            ["20:00", "09:00"], interval_remaining=2, now=self.NOW
+        ) == dt.datetime(2026, 9, 14, 9, 0)
+
+    def test_hold_with_a_window_lands_inside_the_window(self):
+        moment = next_post_at(["19:30-21:00"], interval_remaining=1, now=self.NOW)
+        assert moment.date() == dt.date(2026, 9, 13)
+        assert dt.datetime(2026, 9, 13, 19, 30) <= moment < dt.datetime(2026, 9, 13, 21, 0)
 
 
 class TestCurrentSlot:

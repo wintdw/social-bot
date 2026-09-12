@@ -70,12 +70,12 @@ class Draft:
     caption: str = ""
     hashtags: list[str] = field(default_factory=list)
     cta: str = ""
-    alt_text: str = ""
     commentary: str = ""
-    # A concrete visual concept for the generated image. The rewriter knows the
-    # article, so it gives a far better subject than the raw title/excerpt
-    # (which is why every auto-prompt image looked alike). Optional: image_gen
-    # falls back to the title when this is empty.
+    # A concrete English visual concept for the generated image — also the
+    # image's alt text. The rewriter knows the article, so it gives a far better
+    # subject than the raw title/excerpt (which is why every auto-prompt image
+    # looked alike). Optional: image_gen falls back to the title when this is
+    # empty. Editable on /review/{id}.
     image_prompt: str = ""
     # Publish bookkeeping.
     destinations: list[str] = field(default_factory=list)
@@ -107,7 +107,6 @@ class Draft:
         caption: str = "",
         hashtags: list[str] | None = None,
         cta: str = "",
-        alt_text: str = "",
         commentary: str = "",
         image_prompt: str = "",
     ) -> None:
@@ -117,8 +116,6 @@ class Draft:
             self.hashtags = [str(tag) for tag in hashtags]
         if cta:
             self.cta = cta
-        if alt_text:
-            self.alt_text = alt_text
         if commentary:
             self.commentary = commentary
         if image_prompt:

@@ -63,7 +63,6 @@ review:
 publish:
   enabled: true               # false is a global kill-switch (approve returns an error)
   destinations: [facebook]    # what an approval may post to (linkedin is a stub)
-  max_per_day: 10             # hard cap on posts per day
   # Timed posting: a human still approves each draft (Approve & schedule on
   # /review/{id}); the serve scheduler then posts approved drafts at these
   # container-local slots, oldest first. It never approves anything. An empty
@@ -74,13 +73,13 @@ publish:
   # 21:00 Vietnam time (compose sets TZ=Asia/Ho_Chi_Minh).
   post_at: ["19:30-21:00"]
   post_per_slot: 1            # oldest approved drafts posted per slot
-  # Minimum days between *public* posts, alongside max_per_day. 2 = one post
-  # every other day: the scheduler still wakes daily, but skips until the gap
+  # Minimum days between *public* posts. 2 = one post every other day, 1 = at
+  # most one per day: the scheduler still wakes daily, but skips until the gap
   # has elapsed. Private (unpublished) test sends don't count toward it.
   interval_days: 2
   # Private mode: every approve/post is a REAL Graph call but stays unpublished
   # (visible to page admins only). Private sends are audited, don't consume the
-  # draft, and don't count toward max_per_day or interval_days — so this is the
+  # draft, and don't count toward interval_days — so this is the
   # safe way to test the pipeline end to end. Set it back to false to go public.
   private: false
   # Series masthead on line 1 of every caption — the recognition cue a new
@@ -104,6 +103,11 @@ blog:
   timeout_seconds: 30.0       # per-request timeout for source fetches
   retries: 2                  # retries with backoff (the blog host is flaky)
   max_scan: 12                # max new drafts queued per source per scan
+  # Skip items published more than this many days ago (0 = no limit). A feed
+  # that exposes more entries than one scan takes (martinfowler's Atom, notably:
+  # a 30-entry window against a max_scan of 12) is otherwise walked back another
+  # batch every scan.
+  max_age_days: 90
   excerpt_chars: 240          # excerpt truncation for RSS items
   enrich: true                # fetch each new post page for title/excerpt/image
   user_agent: social-bot/0.1 (+content pipeline)

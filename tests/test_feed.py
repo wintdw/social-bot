@@ -14,6 +14,7 @@ SAMPLE = {
             "message": "Hello page fans!",
             "status_type": "mobile_status_update",
             "permalink_url": "https://www.facebook.com/123/posts/1",
+            "full_picture": "https://scontent.example.com/hero.jpg",
             "from": {"name": "Example Page", "id": "123"},
         },
         {
@@ -55,6 +56,7 @@ class TestParseFeedResponse:
         assert first.message == "Hello page fans!"
         assert first.created is not None
         assert first.status_type == "mobile_status_update"
+        assert first.image == "https://scontent.example.com/hero.jpg"
 
     def test_story_fallback_text(self):
         items = parse_feed_response(SAMPLE)
@@ -64,6 +66,7 @@ class TestParseFeedResponse:
     def test_media_post_without_text(self):
         items = parse_feed_response(SAMPLE)
         assert items[2].text == "" and items[2].created is None
+        assert items[2].image == ""  # a post without `full_picture` -> empty
 
     def test_empty_feed(self):
         assert parse_feed_response({"data": []}) == []

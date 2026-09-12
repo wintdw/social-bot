@@ -25,7 +25,9 @@ UA = "social-bot/0.1 (Graph API client)"
 #   pages_manage_posts     -> post to the page
 #   pages_show_list        -> `whoami` lists the pages the token can manage
 
-FEED_FIELDS = "id,created_time,message,story,permalink_url,status_type,from{name,id}"
+FEED_FIELDS = (
+    "id,created_time,message,story,permalink_url,status_type,full_picture,from{name,id}"
+)
 
 
 class ApiError(Exception):

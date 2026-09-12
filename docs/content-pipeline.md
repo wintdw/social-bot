@@ -54,12 +54,19 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 - Dedupes by `"<source>:<slug>"` against `seen.json`; queues new items as
   `extracted` drafts in `queue.json`. A slug is marked seen only after it is
   queued.
+- Drops items published more than `blog.max_age_days` days ago (`0` = no limit;
+  the project `config.yaml` sets `90`). Applied **before** `blog.max_scan`, so
+  old entries can't consume the batch and a feed that exposes more entries than
+  one scan takes (martinfowler's Atom: a 30-entry window against a cap of 12)
+  stops being walked back at the cutoff instead of queueing another batch every
+  scan. An item with no date is kept: an `index` listing carries none until
+  enrichment, and an undated post can't be shown to be old.
 
 ### 2. Rewrite (`draft_pipeline.receive_rewrite`)
 - The agent calls `GET /api/drafts` (open drafts + `publish.dna_file` contents
   as `dna`; paged — pass `limit`/`offset` and follow `next_offset`) and
   `POST /api/drafts/{id}/rewrite` with
-  `{caption, hashtags, cta, alt_text, commentary, image_prompt}`.
+  `{caption, hashtags, cta, commentary, image_prompt}`.
 - Stored via `Draft.apply_rewrite`; the draft becomes `ai_draft`.
 - `publish.mastheads` (config.yaml) sets the series masthead on line 1 of every
   caption. The label is a **content judgment, not a source default**: the
@@ -68,6 +75,14 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   `mastheads.default` is only the fallback the pipeline prepends when the
   rewriter omits one. It lands in `caption`, so the review preview, the
   character count, and the posted text all include it.
+- A Facebook post has no title field, so a post's title can only be the caption's
+  leading line — the **hook under the series masthead** (the masthead is a
+  standing label, not a title). `caption.split_title` promotes that line for
+  every feed row and review row, falling back to the caption's own first line
+  when there is no masthead; `caption.display_title` falls back to the source's
+  title while a draft is still unwritten. The masthead rides along as a pill, and
+  `/review/{id}` keeps the source title in its Source rail. The Graph API can't
+  edit an already-published post, so consistency has to come from the renderer.
 - Captions written **before** the mastheads were configured lack one;
   `social-bot blog masthead` fills the default in (idempotent, never replaces a
   chosen label, never touches the image). Re-label a misjudged post on
@@ -78,7 +93,10 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   `social-bot blog image`, the **Generate image** button on `/review/{id}`, or
   `POST /api/drafts/{id}/image`. The rewriter supplies `image_prompt` — a
   concrete English visual concept for that post — and that is what gets
-  illustrated. The button only appears when `image_gen.enabled` is true.
+  illustrated. It is also the image's alt text (there is no separate Vietnamese
+  alt), and it is **editable on `/review/{id}`** (saved with the caption); edit
+  it before hitting **Regenerate image**. The button only appears when
+  `image_gen.enabled` is true.
 - The review/API paths run synchronously (the request waits for the provider,
   which can take minutes with `gpt-image` models); `blog image` batches.
 - **Every post is a photo post**, so `serve` also fills the image
@@ -120,14 +138,22 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   waiting for a slot) **newest first by the item's own date**
   (`published`, falling back to when it was queued — a whole scan is queued
   within seconds, so `created_at` alone orders a batch arbitrarily), with
-  **Source** and **Status** filter chips
-  (`?source=<name>&status=<state>`, plain links, no JS). A card shows the state
-  badge, the source, and the date it is sorted by (`published`, or `queued`
-  when the source gave none).
+  **Status** as a segmented control and **Source** as filter chips
+  (`?source=<name>&status=<state>`, plain links, no JS). A row shows a
+  thumbnail, the state badge, the source, the series masthead, the date it is
+  sorted by (`published`, or `queued` when the source gave none), and a one-line
+  caption preview — titled by the caption's hook (or the source's title while
+  the draft is still unwritten).
+  A **Search** box matches the title, excerpt, or caption (`?q=<text>`,
+  case-insensitive)
+  and **Sort** switches between newest and oldest first (`?sort=oldest`), both a
+  plain GET form so they work without JS; the search and sort are carried
+  through every filter link and the pager.
   `/review/{id}` shows the extracted info, the
   editable caption + hashtags, and the actions. Rendered by
   `draft_html.render_draft_html`.
-- Actions: **Post now** (publish immediately) and **Dry run** always; **Reject**.
+- Actions: **Save** (persist the caption, hashtags, and image prompt without
+  posting) and **Post now** (publish immediately) always; **Reject**.
   When `publish.post_at` is non-empty, **Approve & schedule** also appears — it
   saves the caption edits and queues the draft as `approved` for the next slot
   (an already-`approved` draft shows "waiting for the next slot" instead). The
@@ -150,7 +176,7 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   (`published=false` on the Graph call, visible to page admins only). The call
   is real — it just doesn't go public — so the draft stays in the queue and the
   record in `published.jsonl` gets `"private": true`. Private sends don't count
-  toward `publish.max_per_day`.
+  toward `publish.interval_days`.
 - On a public success: `mark_posted`, append to `published.jsonl`, save.
 
 ### 4b. Scheduled posting (`draft_pipeline.publish_scheduled`)
@@ -160,23 +186,30 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   random time (seeded by date+slot, so it is stable across restarts). At each
   slot it drains the
   **oldest** `approved` drafts first (FIFO), up to `publish.post_per_slot` per
-  slot and `publish.max_per_day` overall, calling `publish_draft` per draft — so
-  the kill-switch, cap, interval and destination adapters are shared with the
+  slot, calling `publish_draft` per draft — so
+  the kill-switch, interval and destination adapters are shared with the
   on-demand path. It never approves, rewrites, or touches `extracted`/`ai_draft`
   drafts.
 - On demand: `POST /publish/run` (the dashboard/review "Post approved now"
   button, content-negotiated like `/scan`) and `social-bot blog publish
   [--limit N] [--dry-run]`.
+- After a run that actually posted, `serve` also refreshes the feed cache
+  (`refresh_feed`), so the new post shows on the dashboard immediately instead
+  of waiting for the next `--refresh-at` slot. A run that posted nothing
+  refreshes nothing.
 - `publish.interval_days` sets a minimum gap between **public** posts (e.g. `2`
-  = one post every other day); enforced in `publish_draft` next to the cap, so
-  it paces both the scheduler and "Post now". Private sends don't count. The
-  built-in default is `0` (no minimum).
+  = one post every other day, `1` = at most one per day); enforced in
+  `publish_draft`, so it paces both the scheduler and "Post now". Private sends
+  don't count. The built-in default is `0` (no minimum).
 - The next send is knowable ahead of time: `status()` sets
   `publish.next_draft` (the oldest `approved` — exactly what `publish_scheduled`
   drains first), plus `publish.approved` and `publish.interval_remaining`. The
-  dashboard's **Next post** card and the `/status` **Timed posting** line render
-  that as time + which draft; `GET /api/status` exposes the same fields.
-- A daily-cap or interval `ValueError` stops the batch; a publisher/API error is
+  dashboard's **Next post** card and the `/status` **Post schedule** line render
+  that as time + which draft; `GET /api/status` exposes the same fields. A wake
+  is not a post: the card's time is the first slot that can actually send
+  (`web.next_post_at`, honoring `interval_remaining`), while the **Post schedule**
+  row shows the scheduler's next wake.
+- An interval `ValueError` stops the batch; a publisher/API error is
   recorded
   and the batch continues. Because a private send leaves the draft in the queue,
   a draft already sent **privately** that day is skipped, so `publish.private`
@@ -195,8 +228,8 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | Method | Path | Purpose |
 |---|---|---|
 | GET | `/` | Dashboard: controls, counts, scheduler state, cached feed. |
-| GET | `/review` | Review list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters; paged with `?page=<n>&per_page=<n>` (default 20, max 200). |
-| GET | `/review/{id}` | Review detail: editable caption, Post now / Dry run / Reject, plus Approve & schedule when `publish.post_at` is set (+ Generate image when enabled). |
+| GET | `/review` | Review list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters, `?q=<text>` title/excerpt search, and `?sort=oldest`; paged with `?page=<n>&per_page=<n>` (default 20, max 200). |
+| GET | `/review/{id}` | Review detail: editable caption, hashtags, and image prompt; Save / Post now / Reject, plus Approve & schedule when `publish.post_at` is set (+ Generate image when enabled). |
 | GET | `/publish` | Publish audit log (public + private sends). |
 | GET | `/status` | Human-readable snapshot: token validity/expiry, schedules, sources. |
 | GET | `/drafts` | Redirect (307) to `/review` for old links. |
@@ -207,6 +240,7 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | POST | `/refresh` | Refresh the feed now. |
 | POST | `/scan` | Scan sources now (JSON, or a 303 back to `/review` for browsers). |
 | POST | `/publish/run` | Drain the approved queue now (JSON, or a 303 back to `/review`). |
+| POST | `/review/{id}/save` | Save the compose edits (caption, hashtags, image prompt); never posts. |
 | POST | `/review/{id}/publish` | Publish (form; `dry_run=1` to preview). With `approve=1` it saves the edits and queues the draft as `approved` instead of posting. |
 | POST | `/review/{id}/reject` | Reject. |
 | POST | `/review/{id}/image` | Generate/regenerate a draft's image (form; redirects back). |
@@ -252,11 +286,10 @@ Swap the image endpoint/provider with `image_gen.base_url` + `image_gen.model`.
 - `publish_draft` is reached from the explicit **Post now** action, the scheduled
   drain, `POST /publish/run`, and `blog publish`. `publish.post_at: []` disables
   timed posting entirely.
-- `publish.enabled: false` is a global kill-switch; `publish.max_per_day` caps
-  posts/day and `publish.interval_days` enforces a minimum gap between public
-  posts (both enforced in `publish_draft`).
-- `--dry-run` is available on every publish path (`post` command and the review
-  page).
+- `publish.enabled: false` is a global kill-switch; `publish.interval_days`
+  enforces a minimum gap between public posts (enforced in `publish_draft`).
+- `--dry-run` is available on every publish path (`post` command, `blog publish`,
+  and `dry_run=1` on `POST /review/{id}/publish`).
 - Only the configured official feeds are fetched — no HTML scraping of
   facebook.com, and stay within each site's robots.txt.
 - Endpoints are currently **unauthenticated**; do not expose them publicly
