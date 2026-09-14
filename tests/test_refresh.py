@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from social_bot import refresh as refresh_mod
 from social_bot.config import ROOT
+from social_bot.destinations.facebook import reader as refresh_mod
 
 RAW = [{"id": "123_1", "message": "hi", "status_type": "mobile_status_update"}]
 
@@ -24,12 +24,14 @@ class FakeApi:
 
 def _cfg(tmp_path):
     return {
-        "graph": {
-            "base_url": "https://graph.facebook.com",
-            "api_version": "v26.0",
-            "timeout_seconds": 30.0,
-            "page_id": "123",
-            "token": "",
+        "destinations": {
+            "facebook": {
+                "base_url": "https://graph.facebook.com",
+                "api_version": "v26.0",
+                "timeout_seconds": 30.0,
+                "account_id": "123",
+                "token": "",
+            }
         },
         "feed": {"limit": 5, "dir": str(tmp_path / "feed")},
     }
@@ -65,7 +67,7 @@ def test_load_cached_items_parses_cache(tmp_path):
 
 def test_missing_page_id_raises(tmp_path):
     cfg = _cfg(tmp_path)
-    cfg["graph"]["page_id"] = ""
+    cfg["destinations"]["facebook"]["account_id"] = ""
     with pytest.raises(ValueError):
         refresh_mod.refresh_feed(cfg)
 

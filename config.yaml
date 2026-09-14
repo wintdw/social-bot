@@ -2,20 +2,29 @@
 # Every value here overrides a built-in default; delete a key to go back to the default.
 # Relative paths resolve against the project root.
 
-graph:
-  # Base of the Graph API. Pin the version; Meta keeps a rolling window of
-  # supported majors, so bump api_version deliberately when needed.
-  base_url: https://graph.facebook.com
-  api_version: v26.0
-  timeout_seconds: 30.0
+# One block per destination the factory can publish to. Connection settings
+# only — `publish.destinations` (below) selects where a new draft is routed.
+# Tokens are SECRETS and do NOT belong in this committed file: put them in
+# credentials.yaml (next to this file; git-ignored, template in
+# credentials.example.yaml) or in the environment.
+destinations:
+  facebook:
+    # Base of the Graph API. Pin the version; Meta keeps a rolling window of
+    # supported majors, so bump api_version deliberately when needed.
+    base_url: https://graph.facebook.com
+    api_version: v26.0
+    timeout_seconds: 30.0
 
-  # Page to fetch / post to: Atento Education. Leave empty to force --page-id
-  # on each command, or discover the id with `social-bot whoami`.
-  page_id: "1148652808337860"
+    # Page to fetch / post to: Atento Education. Leave empty to force --page-id
+    # on each command, or discover the id with `social-bot whoami`.
+    account_id: "1148652808337860"
 
-  # The access token is a SECRET and does NOT belong in this committed file.
-  # Put it in credentials.yaml (next to this file; git-ignored, template in
-  # credentials.example.yaml) or export SOCIAL_BOT_TOKEN.
+  linkedin:
+    # Publishing is a stub for now (needs Community Management API approval).
+    # Fill in author_urn + a token to switch it on once the adapter is wired.
+    base_url: https://api.linkedin.com
+    api_version: ""            # LinkedIn-Version header, e.g. "202601"
+    author_urn: ""             # urn:li:organization:<id>
 
 feed:
   limit: 10            # default number of feed posts shown by `feed`

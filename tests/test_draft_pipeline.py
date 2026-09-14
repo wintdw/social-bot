@@ -13,7 +13,7 @@ from social_bot import draft_pipeline as pipeline
 from social_bot.config import DEFAULTS
 from social_bot.drafts import AI_DRAFT, APPROVED, EXTRACTED, POSTED, REJECTED, Draft
 from social_bot.image_gen import DEFAULT_BASE_URL
-from social_bot.publishers import PublisherError
+from social_bot.destinations import PublishResult, PublisherError
 from social_bot.source_api import SourceError
 
 SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
@@ -56,18 +56,18 @@ class FakePublisher:
 
     def publish(self, draft):
         self.published.append(draft.id)
-        return {
-            "destination": "facebook",
-            "post_id": "123_9",
-            "permalink": "https://www.facebook.com/123_9",
-        }
+        return PublishResult(
+            destination="facebook",
+            post_id="123_9",
+            permalink="https://www.facebook.com/123_9",
+        )
 
 
 def _cfg(tmp_path):
     cfg = copy.deepcopy(DEFAULTS)
     cfg["review"]["dir"] = str(tmp_path / "review")
     cfg["publish"]["dir"] = str(tmp_path / "publish")
-    cfg["graph"]["page_id"] = "123"
+    cfg["destinations"]["facebook"]["account_id"] = "123"
     # Force a sitemap source so the fixtures below stay about the pipeline.
     cfg["sources"] = [
         {
@@ -709,6 +709,42 @@ class TestPublish:
         audit = pipeline.published_path(cfg).read_text(encoding="utf-8").splitlines()
         assert json.loads(audit[0])["post_id"] == "123_9"
 
+    def test_each_destination_posts_independently(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.destinations = ["facebook", "linkedin"]
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+
+        calls: list[str] = []
+
+        def factory(name, cfg, token=None):
+            class P:
+                def describe(self, draft):
+                    return f"POST {name}"
+
+                def publish(self, draft):
+                    calls.append(name)
+                    return PublishResult(
+                        destination=name,
+                        post_id=f"{name}_9",
+                        permalink=f"https://x/{name}_9",
+                    )
+
+            return P()
+
+        monkeypatch.setattr(pipeline, "publisher_for", factory)
+        # First send only reaches facebook; linkedin stays pending.
+        pipeline.publish_draft(cfg, "post-one", destination="facebook")
+        assert calls == ["facebook"]
+        assert pipeline.get_draft(cfg, "post-one").state == AI_DRAFT
+        # The next send skips the destination already posted publicly.
+        calls.clear()
+        pipeline.publish_draft(cfg, "post-one", destination="linkedin")
+        assert calls == ["linkedin"]
+        draft = pipeline.get_draft(cfg, "post-one")
+        assert draft.state == POSTED
+        assert draft.posted_destinations() == ["facebook", "linkedin"]
+
     def test_cannot_publish_from_extracted(self, tmp_path):
         cfg = _seed_draft(tmp_path)  # state EXTRACTED
         with pytest.raises(ValueError):
@@ -768,12 +804,12 @@ class PrivatePublisher(FakePublisher):
 
     def publish(self, draft):
         self.published.append(draft.id)
-        return {
-            "destination": "facebook",
-            "post_id": "123_77",
-            "permalink": "https://www.facebook.com/123_77",
-            "private": True,
-        }
+        return PublishResult(
+            destination="facebook",
+            post_id="123_77",
+            permalink="https://www.facebook.com/123_77",
+            private=True,
+        )
 
 
 class TestPublishPrivate:

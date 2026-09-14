@@ -13,8 +13,6 @@ from __future__ import annotations
 import datetime as dt
 import html
 
-from .feed import FeedItem
-from .feed_html import render_feed_section
 from .ui import badge, layout
 
 
@@ -51,6 +49,8 @@ def _state(runtime: dict) -> tuple[str, str]:
     """(dot class, human-readable state) for a scheduler's last run."""
     if runtime.get("busy"):
         return "dot-warn", "running now"
+    if runtime.get("paused"):
+        return "dot-warn", "paused"
     if runtime.get("ok") is True:
         return "dot-ok", "last run ok"
     if runtime.get("ok") is False:
@@ -65,13 +65,14 @@ def _run_line(name: str, runtime: dict, next_item: str = "") -> str:
     nxt = runtime.get("next") or "—"
     schedule = ", ".join(str(s) for s in runtime.get("schedule") or []) or "—"
     detail = f" · next up {html.escape(next_item)}" if next_item else ""
+    when = "paused" if runtime.get("paused") else f"next {html.escape(str(nxt))}"
     return (
         '<div class="sched-row">'
         f'<span class="{dot}" aria-hidden="true"></span>'
         f'<span class="sched-name">{html.escape(name)}'
         f'<span class="small">{html.escape(state)} · last {html.escape(str(last))} · '
         f"at {html.escape(schedule)}{detail}</span></span>"
-        f'<span class="sched-when">next {html.escape(str(nxt))}</span>'
+        f'<span class="sched-when">{when}</span>'
         "</div>"
     )
 
@@ -240,7 +241,12 @@ def _pipeline(stats: dict, refresh: dict, scan: dict, post: dict | None) -> str:
     open_drafts = int(drafts.get("open", 0) or 0)
     approved = int(publish.get("approved") or 0)
 
-    approved_sub = f"next post {post.get('next_post') or '—'}" if post else "ready to post"
+    if post and post.get("paused"):
+        approved_sub = "posting paused"
+    elif post:
+        approved_sub = f"next post {post.get('next_post') or '—'}"
+    else:
+        approved_sub = "ready to post"
 
     def stage(name: str, num, sub: str, *, dot: str, focus: bool = False) -> str:
         cls = "stage is-focus" if focus else "stage"
@@ -358,69 +364,106 @@ def _attention(
 
 def render_dashboard_html(
     *,
-    items: list[FeedItem] | None,
     stats: dict,
     refresh: dict,
     scan: dict,
     post: dict | None = None,
     images: dict | None = None,
     token: dict | None = None,
-    page_id: str = "",
-    page_name: str = "",
+    feed_section: str = "",
+    feed_label: str = "",
+    feed_count: int = 0,
+    account_label: str = "",
     message: str = "",
     private: bool = False,
     generated_at: dt.datetime | None = None,
 ) -> str:
-    """The single control surface: pipeline, controls, attention, and feed."""
+    """The single control surface: pipeline, controls, attention, and feed.
+
+    The feed panel is platform-owned: the caller (a destination's reader) renders
+    ``feed_section`` and passes ``feed_label``; when there is no reader the panel
+    is omitted entirely, so the core UI never imports a platform module.
+    """
     generated_at = generated_at or dt.datetime.now()
     drafts = stats.get("drafts", {})
     published = stats.get("published", {})
     publish = stats.get("publish", {}) or {}
 
-    controls = (
-        '<div class="cmdbar">'
-        '<form method="post" action="/refresh"><button type="submit">Refresh feed</button></form>'
-        '<form method="post" action="/scan"><button type="submit">Scan sources</button></form>'
-        + (
+    post_controls = ""
+    if post:
+        post_controls = (
             '<form method="post" action="/publish/run">'
             '<button type="submit">Post approved now</button></form>'
-            if post
-            else ""
         )
+        if post.get("paused"):
+            post_controls += (
+                '<form method="post" action="/publish/resume">'
+                '<button type="submit">Resume posting</button></form>'
+            )
+        else:
+            post_controls += (
+                '<form method="post" action="/publish/pause">'
+                '<button type="submit">Pause posting</button></form>'
+            )
+    refresh_control = ""
+    if feed_label:
+        refresh_control = (
+            '<form method="post" action="/refresh">'
+            '<button type="submit">Refresh feed</button></form>'
+        )
+    controls = (
+        '<div class="cmdbar">'
+        + refresh_control
+        + '<form method="post" action="/scan"><button type="submit">Scan sources</button></form>'
+        + post_controls
         + "</div>"
     )
+    who = html.escape(account_label) if account_label else "no destination configured"
     header = (
         "<header><div><h1>Factory</h1>"
-        f'<div class="sub">Page {html.escape(page_name or page_id or "—")} · generated '
+        f'<div class="sub">{who} · generated '
         f"{html.escape(_stamp(generated_at))}</div></div>"
         + controls
         + "</header>"
     )
 
-    if items is None:
+    if not feed_label:
+        # No reader for the enabled destinations — no feed panel to show.
+        feed_panel = ""
+    elif not feed_section:
         feed_panel = _panel(
-            "Page feed",
+            feed_label,
             '<div class="panel-body"><p class="muted">No feed cached yet — click '
             "<strong>Refresh feed</strong> to load it.</p></div>",
         )
     else:
         feed_panel = _panel(
-            "Page feed",
-            f'<div class="qlist">{render_feed_section(items)}</div>',
-            extra=f'<span class="pill">{len(items)} cached</span>',
+            feed_label,
+            f'<div class="qlist">{feed_section}</div>',
+            extra=f'<span class="pill">{feed_count} cached</span>',
         )
 
     schedule_rows = _run_line("Feed refresh", refresh) + _run_line("Source scan", scan)
     if post:
         schedule_rows += _run_line("Post schedule", post, _posting_detail(publish))
-        schedule_rows += (
-            '<div class="sched-row">'
-            '<span class="dot dot-ok" aria-hidden="true"></span>'
-            '<span class="sched-name">Next post'
-            f'<span class="small">{html.escape(_next_post_note(publish))}</span></span>'
-            f'<span class="sched-when">{html.escape(str(post.get("next_post") or "—"))}</span>'
-            "</div>"
-        )
+        if post.get("paused"):
+            schedule_rows += (
+                '<div class="sched-row">'
+                '<span class="dot dot-warn" aria-hidden="true"></span>'
+                '<span class="sched-name">Next post'
+                '<span class="small">paused — resume to schedule the next post</span></span>'
+                '<span class="sched-when">—</span>'
+                "</div>"
+            )
+        else:
+            schedule_rows += (
+                '<div class="sched-row">'
+                '<span class="dot dot-ok" aria-hidden="true"></span>'
+                '<span class="sched-name">Next post'
+                f'<span class="small">{html.escape(_next_post_note(publish))}</span></span>'
+                f'<span class="sched-when">{html.escape(str(post.get("next_post") or "—"))}</span>'
+                "</div>"
+            )
     schedule_panel = _panel(
         "Schedulers",
         f'<div class="sched">{schedule_rows}</div>',
@@ -574,9 +617,18 @@ def render_status_html(
         [html.escape(str(state)), html.escape(str(count))]
         for state, count in sorted(by_state.items())
     ]
+    destination_rows = [
+        [
+            html.escape(str(d.get("name", ""))),
+            html.escape(str(d.get("label", ""))),
+            "yes" if d.get("enabled") else "no",
+            "yes" if d.get("configured") else "no",
+        ]
+        for d in publish.get("destination_state", [])
+    ]
     publish_rows = [
         ["enabled", str(bool(publish.get("enabled")))],
-        ["destinations", html.escape(", ".join(publish.get("destinations", [])))],
+        ["routed", html.escape(", ".join(publish.get("destinations", [])))],
         ["min interval (days)", html.escape(str(publish.get("interval_days", "")))],
         ["interval remaining (days)", html.escape(str(publish.get("interval_remaining", "")))],
         ["approved waiting", html.escape(str(publish.get("approved", "")))],
@@ -609,6 +661,16 @@ def render_status_html(
         + _panel(
             "Drafts by state",
             '<div class="panel-body">' + _table(["State", "Count"], state_rows) + "</div>",
+        )
+        + (
+            _panel(
+                "Destinations",
+                '<div class="panel-body">'
+                + _table(["Name", "Label", "Routed", "Configured"], destination_rows)
+                + "</div>",
+            )
+            if destination_rows
+            else ""
         )
         + _panel(
             "Publishing",

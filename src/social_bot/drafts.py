@@ -77,19 +77,32 @@ class Draft:
     # looked alike). Optional: image_gen falls back to the title when this is
     # empty. Editable on /review/{id}.
     image_prompt: str = ""
-    # Publish bookkeeping.
+    # Publish bookkeeping. `posts` is keyed by destination name, one record per
+    # platform the draft has been sent to, so a multi-destination draft keeps
+    # each platform's own post_id/permalink/time:
+    #   {destination: {"post_id", "permalink", "posted_at", "private"}}
     destinations: list[str] = field(default_factory=list)
+    posts: dict[str, dict] = field(default_factory=dict)
     created_at: str = ""
     updated_at: str = ""
-    posted_at: str = ""
-    post_id: str = ""
-    permalink: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "Draft":
+        data = dict(data)
+        # Migrate pre-destinations drafts: the flat post_id/permalink/posted_at
+        # become the first destination's record.
+        if "posts" not in data:
+            legacy = {
+                "post_id": data.get("post_id", ""),
+                "permalink": data.get("permalink", ""),
+                "posted_at": data.get("posted_at", ""),
+            }
+            if any(legacy.values()):
+                destination = (data.get("destinations") or ["facebook"])[0]
+                data["posts"] = {destination: {**legacy, "private": False}}
         known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -133,12 +146,76 @@ class Draft:
         self.state = REJECTED
         self.touch()
 
-    def mark_posted(self, *, post_id: str = "", permalink: str = "") -> None:
-        self.state = POSTED
-        self.post_id = post_id
-        self.permalink = permalink
-        self.posted_at = now_iso()
+    def record_post(
+        self,
+        destination: str,
+        *,
+        post_id: str = "",
+        permalink: str = "",
+        private: bool = False,
+    ) -> None:
+        """Record the result of a send to one destination."""
+        self.posts[destination] = {
+            "post_id": str(post_id),
+            "permalink": str(permalink),
+            "posted_at": now_iso(),
+            "private": bool(private),
+        }
         self.touch()
+
+    def mark_posted(
+        self,
+        destination: str,
+        *,
+        post_id: str = "",
+        permalink: str = "",
+        private: bool = False,
+    ) -> None:
+        """Record a send; flip to POSTED once every target has a public post.
+
+        A private send (``publish.private``) is recorded but never completes the
+        draft, so it stays in the queue for a later public send.
+        """
+        self.record_post(
+            destination, post_id=post_id, permalink=permalink, private=private
+        )
+        if not private and self.is_fully_posted():
+            self.state = POSTED
+
+    def posted_destinations(self) -> list[str]:
+        """Destinations with a *public* post record."""
+        return [name for name, record in self.posts.items() if not record.get("private")]
+
+    def pending_destinations(self) -> list[str]:
+        """Target destinations that still have no public post."""
+        done = set(self.posted_destinations())
+        return [name for name in self.destinations if name not in done]
+
+    def is_fully_posted(self) -> bool:
+        return bool(self.destinations) and not self.pending_destinations()
+
+    # Flat access to the *primary* posted destination (facebook preferred), so
+    # single-destination code and templates keep working. Private records are
+    # ignored — a private send leaves the draft "not posted", as before.
+    @property
+    def post_id(self) -> str:
+        return self._first_public_post("post_id")
+
+    @property
+    def permalink(self) -> str:
+        return self._first_public_post("permalink")
+
+    @property
+    def posted_at(self) -> str:
+        return self._first_public_post("posted_at")
+
+    def _first_public_post(self, field: str) -> str:
+        public = self.posted_destinations()
+        if not public:
+            return ""
+        if "facebook" in public:
+            public = ["facebook"] + [name for name in public if name != "facebook"]
+        return str(self.posts[public[0]].get(field, "") or "")
 
     def touch(self) -> None:
         self.updated_at = now_iso()

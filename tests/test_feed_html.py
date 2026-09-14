@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import datetime as dt
 
-from social_bot.feed import FeedItem, parse_feed_response
-from social_bot.feed_html import render_feed_html, render_feed_section
+from social_bot.destinations.facebook.feed import FeedItem, parse_feed_response
+from social_bot.destinations.facebook.feed_html import (
+    render_feed_html,
+    render_feed_section,
+)
 
 GENERATED = dt.datetime(2026, 9, 10, 12, 0)
 

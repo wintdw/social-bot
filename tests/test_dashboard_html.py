@@ -9,7 +9,8 @@ from social_bot.dashboard_html import (
     render_publish_html,
     render_status_html,
 )
-from social_bot.feed import FeedItem
+from social_bot.destinations.facebook.feed import FeedItem
+from social_bot.destinations.facebook.feed_html import render_feed_section
 
 GENERATED = dt.datetime(2026, 9, 10, 12, 0)
 
@@ -24,6 +25,10 @@ STATS = {
         "enabled": True,
         "private": False,
         "destinations": ["facebook"],
+        "destination_state": [
+            {"name": "facebook", "label": "Facebook", "enabled": True, "configured": True},
+            {"name": "linkedin", "label": "LinkedIn", "enabled": False, "configured": False},
+        ],
         "post_at": ["09:00", "20:00"],
         "post_per_slot": 1,
         "interval_days": 2,
@@ -67,6 +72,27 @@ POST = {
     "next_post": "2026-09-11 09:00",
 }
 
+
+def _dash(feed_items=None, *, account_label="Atento Education", **kw):
+    """render_dashboard_html with a Facebook feed panel, as the app wires it."""
+    section = ""
+    count = 0
+    if feed_items:
+        section = render_feed_section(feed_items)
+        count = len(feed_items)
+    kw.setdefault("stats", STATS)
+    kw.setdefault("refresh", REFRESH)
+    kw.setdefault("scan", SCAN)
+    kw.setdefault("generated_at", GENERATED)
+    return render_dashboard_html(
+        feed_section=section,
+        feed_label="Facebook feed",
+        feed_count=count,
+        account_label=account_label,
+        **kw,
+    )
+
+
 RECORDS = [
     {
         "id": "a",
@@ -92,69 +118,50 @@ RECORDS = [
 
 class TestDashboard:
     def test_has_navigation_to_every_page(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
-        )
+        out = _dash()
         for href in ('href="/"', 'href="/review"', 'href="/publish"', 'href="/status"'):
             assert href in out
 
     def test_controls_post_to_refresh_and_scan(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
-        )
+        out = _dash()
         assert 'action="/refresh"' in out and "Refresh feed" in out
         assert 'action="/scan"' in out and "Scan sources" in out
 
     def test_counts_and_schedule(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
-        )
+        out = _dash()
         assert ">8<" in out  # open drafts
         assert "2026-09-10 19:00" in out  # next refresh
         assert "2026-09-11 06:00" in out  # next scan
 
     def test_renders_feed_items(self):
         items = [FeedItem(message="Hello fans", permalink_url="https://fb/1")]
-        out = render_dashboard_html(
-            items=items, stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
-        )
+        out = _dash(feed_items=items)
         assert "Hello fans" in out
+        assert "Facebook feed" in out
 
     def test_no_cache_hint(self):
-        out = render_dashboard_html(
-            items=None, stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
-        )
+        out = _dash()  # no feed items, but a reader is present
         assert "No feed cached yet" in out
 
-    def test_message_is_escaped(self):
+    def test_no_reader_hides_the_feed_panel_and_control(self):
         out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN,
-            message="<b>Scan started</b>", generated_at=GENERATED,
+            stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
         )
+        assert "No feed cached yet" not in out
+        assert 'action="/refresh"' not in out
+        assert "no destination configured" in out
+
+    def test_message_is_escaped(self):
+        out = _dash(message="<b>Scan started</b>")
         assert "&lt;b&gt;Scan started&lt;/b&gt;" in out
 
     def test_private_mode_notice(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN,
-            private=True, generated_at=GENERATED,
-        )
+        out = _dash(private=True)
         assert "Private mode" in out
 
-    def test_shows_page_name_over_id(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN,
-            page_id="1148652808337860", page_name="Atento Education",
-            generated_at=GENERATED,
-        )
-        assert "Page Atento Education" in out
-        assert "1148652808337860" not in out
-
-    def test_falls_back_to_page_id_without_name(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN,
-            page_id="1148652808337860", generated_at=GENERATED,
-        )
-        assert "Page 1148652808337860" in out
+    def test_shows_the_account_label(self):
+        out = _dash(account_label="Atento Education")
+        assert "Atento Education" in out
 
 
 IMAGES = {
@@ -182,10 +189,7 @@ IMAGES = {
 
 class TestImageSection:
     def test_dashboard_shows_image_jobs(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN,
-            images=IMAGES, generated_at=GENERATED,
-        )
+        out = _dash(images=IMAGES)
         assert "Image jobs" in out
         assert "post-two" in out
         assert "badge-failed" in out and "badge-running" in out
@@ -278,6 +282,11 @@ class TestStatus:
         out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
         assert "Not checked yet." in out
 
+    def test_lists_destinations(self):
+        out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
+        assert "Destinations" in out
+        assert "Facebook" in out and "LinkedIn" in out
+
     def test_token_valid_with_expiry(self):
         token = {
             "valid": True,
@@ -327,19 +336,14 @@ class TestStatus:
 
 class TestTimedPosting:
     def test_dashboard_shows_next_post_and_control(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, post=POST,
-            generated_at=GENERATED,
-        )
+        out = _dash(post=POST)
         assert "Next post" in out
         assert "2026-09-11 09:00" in out
         assert "Post schedule" in out
         assert 'action="/publish/run"' in out
 
     def test_dashboard_hides_posting_without_a_schedule(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
-        )
+        out = _dash()
         assert "Next post" not in out
         assert "Post schedule" not in out
         assert 'action="/publish/run"' not in out
@@ -355,26 +359,17 @@ class TestTimedPosting:
         assert ">2<" in out
 
     def test_dashboard_next_post_card_names_the_draft(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, post=POST,
-            generated_at=GENERATED,
-        )
+        out = _dash(post=POST)
         assert "Next post" in out
         assert "Oldest approved draft (post-old)" in out
 
     def test_dashboard_posting_line_names_the_draft(self):
-        out = render_dashboard_html(
-            items=[], stats=STATS, refresh=REFRESH, scan=SCAN, post=POST,
-            generated_at=GENERATED,
-        )
+        out = _dash(post=POST)
         assert "next up Oldest approved draft (post-old)" in out
 
     def test_dashboard_says_when_nothing_is_approved(self):
         stats = {**STATS, "publish": {**STATS["publish"], "approved": 0, "next_draft": None}}
-        out = render_dashboard_html(
-            items=[], stats=stats, refresh=REFRESH, scan=SCAN, post=POST,
-            generated_at=GENERATED,
-        )
+        out = _dash(stats=stats, post=POST)
         assert "nothing approved yet" in out
 
     def test_dashboard_shows_the_interval_hold(self):
@@ -382,10 +377,7 @@ class TestTimedPosting:
             **STATS,
             "publish": {**STATS["publish"], "interval_remaining": 2},
         }
-        out = render_dashboard_html(
-            items=[], stats=stats, refresh=REFRESH, scan=SCAN, post=POST,
-            generated_at=GENERATED,
-        )
+        out = _dash(stats=stats, post=POST)
         assert "in 2 day(s)" in out
 
     def test_dashboard_next_post_shows_the_interval_aware_time(self):
@@ -393,10 +385,7 @@ class TestTimedPosting:
         # the Next post row shows the slot that can send, not the next wake.
         stats = {**STATS, "publish": {**STATS["publish"], "interval_remaining": 1}}
         post = {**POST, "next": "2026-09-12 19:51", "next_post": "2026-09-13 20:14"}
-        out = render_dashboard_html(
-            items=[], stats=stats, refresh=REFRESH, scan=SCAN, post=post,
-            generated_at=GENERATED,
-        )
+        out = _dash(stats=stats, post=post)
         assert '<span class="sched-when">2026-09-13 20:14</span>' in out
         # the scheduler wake stays, but only on the Post schedule row
         assert '<span class="sched-when">next 2026-09-12 19:51</span>' in out
@@ -427,10 +416,7 @@ class TestTimedPosting:
                 "next_draft": {"id": "x", "title": "<script>alert(1)</script>"},
             },
         }
-        out = render_dashboard_html(
-            items=[], stats=stats, refresh=REFRESH, scan=SCAN, post=POST,
-            generated_at=GENERATED,
-        )
+        out = _dash(stats=stats, post=POST)
         assert "<script>" not in out
         assert "&lt;script&gt;" in out
 
@@ -438,3 +424,34 @@ class TestTimedPosting:
         out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
         assert "Post schedule" not in out
         assert "post at" in out  # the setting row still renders, as "—"
+
+
+class TestPostingPause:
+    PAUSED = {**POST, "paused": True}
+
+    def test_dashboard_offers_pause_when_running(self):
+        out = _dash(post=POST)
+        assert 'action="/publish/pause"' in out and "Pause posting" in out
+        assert 'action="/publish/resume"' not in out
+
+    def test_dashboard_offers_resume_when_paused(self):
+        out = _dash(post=self.PAUSED)
+        assert 'action="/publish/resume"' in out and "Resume posting" in out
+        assert 'action="/publish/pause"' not in out
+
+    def test_dashboard_reports_the_pause(self):
+        out = _dash(post=self.PAUSED)
+        assert '<span class="sched-when">paused</span>' in out
+        assert "resume to schedule the next post" in out
+        assert "posting paused" in out  # the Approved pipeline stage
+
+    def test_status_reports_the_pause(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, post=self.PAUSED, generated_at=GENERATED
+        )
+        assert '<span class="sched-when">paused</span>' in out
+
+    def test_no_pause_control_without_a_schedule(self):
+        out = _dash()
+        assert 'action="/publish/pause"' not in out
+        assert 'action="/publish/resume"' not in out

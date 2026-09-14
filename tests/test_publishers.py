@@ -6,20 +6,17 @@ import copy
 
 import pytest
 
-from social_bot import publishers as pub_mod
 from social_bot.config import DEFAULTS
+from social_bot.destinations import PublisherError, publisher_for
+from social_bot.destinations.facebook import publisher as pub_mod
+from social_bot.destinations.facebook import FacebookPublisher
+from social_bot.destinations.linkedin import LinkedInPublisher
 from social_bot.drafts import Draft
-from social_bot.publishers import (
-    FacebookPublisher,
-    LinkedInPublisher,
-    PublisherError,
-    publisher_for,
-)
 
 
 def _cfg():
     cfg = copy.deepcopy(DEFAULTS)
-    cfg["graph"]["page_id"] = "123"
+    cfg["destinations"]["facebook"]["account_id"] = "123"
     return cfg
 
 
@@ -57,9 +54,10 @@ class TestFacebookPublisher:
         draft.apply_rewrite(caption="Caption")
         result = FacebookPublisher(_cfg()).publish(draft)
         assert fake.photo == ("123", "Caption", "https://img/x.jpg", True)
-        assert result["post_id"] == "123_9"
-        assert result["permalink"] == "https://www.facebook.com/123_9"
-        assert result["private"] is False
+        assert result.destination == "facebook"
+        assert result.post_id == "123_9"
+        assert result.permalink == "https://www.facebook.com/123_9"
+        assert result.private is False
 
     def test_link_fallback_without_image(self, monkeypatch):
         fake = FakeApi()
@@ -89,7 +87,7 @@ class TestFacebookPublisher:
         draft.apply_rewrite(caption="Caption")
         result = FacebookPublisher(cfg).publish(draft)
         assert fake.photo == ("123", "Caption", "https://img/x.jpg", False)
-        assert result["private"] is True
+        assert result.private is True
 
     def test_private_mode_status_post(self, monkeypatch):
         cfg = _cfg()
@@ -142,7 +140,7 @@ class TestFacebookPublisher:
         assert fake.comment is None
 
     def test_comment_failure_does_not_fail_publish(self, monkeypatch):
-        from social_bot.api import ApiError
+        from social_bot.destinations.facebook.api import ApiError
 
         fake = FakeApi()
 
@@ -155,13 +153,22 @@ class TestFacebookPublisher:
         draft = _draft()
         draft.apply_rewrite(caption="Caption")
         result = FacebookPublisher(_cfg()).publish(draft)
-        assert result["post_id"] == "123_8"
+        assert result.post_id == "123_8"
 
     def test_missing_page_id_raises(self):
         cfg = _cfg()
-        cfg["graph"]["page_id"] = ""
+        cfg["destinations"]["facebook"]["account_id"] = ""
         with pytest.raises(ValueError):
             FacebookPublisher(cfg).describe(_draft())
+
+    def test_configured_needs_token_and_account(self, monkeypatch):
+        monkeypatch.delenv("SOCIAL_BOT_TOKEN", raising=False)
+        monkeypatch.delenv("SOCIAL_BOT_FACEBOOK_TOKEN", raising=False)
+        cfg = _cfg()
+        cfg["destinations"]["facebook"]["token"] = "tok"
+        assert FacebookPublisher(cfg).configured() is True
+        cfg["destinations"]["facebook"]["account_id"] = ""
+        assert FacebookPublisher(cfg).configured() is False
 
 
 class TestLinkedInAndRegistry:
@@ -169,8 +176,14 @@ class TestLinkedInAndRegistry:
         with pytest.raises(PublisherError):
             LinkedInPublisher(_cfg()).publish(_draft())
 
+    def test_linkedin_describe_and_configured(self):
+        publisher = LinkedInPublisher(_cfg())
+        assert publisher.describe(_draft()) == "POST https://api.linkedin.com/rest/posts"
+        assert publisher.configured() is False
+
     def test_publisher_for_known(self):
         assert isinstance(publisher_for("facebook", _cfg()), FacebookPublisher)
+        assert isinstance(publisher_for("linkedin", _cfg()), LinkedInPublisher)
 
     def test_publisher_for_unknown(self):
         with pytest.raises(PublisherError):

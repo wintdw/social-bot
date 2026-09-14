@@ -8,11 +8,16 @@ import pathlib
 import sys
 
 from . import __version__
-from .api import ApiError, api_from_config
 from .config import load_config, validate
+from .destinations import names as destination_names, publisher_for
+from .destinations.facebook import (
+    ApiError,
+    api_from_config,
+    format_feed_md,
+    parse_feed_response,
+    refresh_feed,
+)
 from .draft_pipeline import apply_masthead, generate_images, publish_scheduled, scan_sources
-from .feed import format_feed_md, parse_feed_response
-from .refresh import refresh_feed
 
 # Shown when the state directory can't be written (a common Docker uid mismatch).
 _DATA_DIR_HINT = (
@@ -27,21 +32,29 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--config", type=pathlib.Path, help="config.yaml path (default: project root)")
     parser.add_argument(
         "--token",
-        help="Page access token (overrides SOCIAL_BOT_TOKEN and config.yaml)",
+        help=(
+            "facebook access token (overrides SOCIAL_BOT_TOKEN, "
+            "SOCIAL_BOT_FACEBOOK_TOKEN, and credentials.yaml)"
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_whoami = sub.add_parser("whoami", help="check the token and list pages it can manage")
     p_whoami.set_defaults(func=_cmd_whoami)
 
+    p_dest = sub.add_parser(
+        "destinations", help="list the destinations and whether each is routed/configured"
+    )
+    p_dest.set_defaults(func=_cmd_destinations)
+
     p_feed = sub.add_parser("feed", help="fetch the page feed (read-only)")
-    p_feed.add_argument("--page-id", help="override graph.page_id from config.yaml")
+    p_feed.add_argument("--page-id", help="override destinations.facebook.account_id")
     p_feed.add_argument("--limit", type=int, default=None, help="posts to show (default: feed.limit)")
     p_feed.add_argument("--json", action="store_true", help="print the raw Graph API JSON instead")
     p_feed.set_defaults(func=_cmd_feed)
 
     p_post = sub.add_parser("post", help="post a status, link, or photo to the page")
-    p_post.add_argument("--page-id", help="override graph.page_id from config.yaml")
+    p_post.add_argument("--page-id", help="override destinations.facebook.account_id")
     p_post.add_argument("--message", help="post text (required unless --photo is given)")
     p_post.add_argument("--link", help="optional link attached to the post")
     p_post.add_argument(
@@ -175,13 +188,26 @@ def _load_config(args: argparse.Namespace) -> dict:
 
 
 def _page_id(args: argparse.Namespace, cfg: dict) -> str:
-    page_id = (args.page_id or cfg["graph"]["page_id"] or "").strip()
+    page_id = (
+        args.page_id or cfg["destinations"]["facebook"].get("account_id") or ""
+    ).strip()
     if not page_id:
         raise ValueError(
-            "no page id: set graph.page_id in config.yaml, pass --page-id, "
-            "or run `whoami` to list the pages the token can manage"
+            "no page id: set destinations.facebook.account_id in config.yaml, pass "
+            "--page-id, or run `whoami` to list the pages the token can manage"
         )
     return page_id
+
+
+def _cmd_destinations(args: argparse.Namespace) -> int:
+    cfg = _load_config(args)
+    enabled = set(cfg.get("publish", {}).get("destinations", []) or [])
+    for name in destination_names():
+        publisher = publisher_for(name, cfg)
+        state = "configured" if publisher.configured() else "not configured"
+        routed = "routed" if name in enabled else "not routed"
+        print(f"{name}: {publisher.label or name} — {state}, {routed}")
+    return 0
 
 
 def _cmd_whoami(args: argparse.Namespace) -> int:
@@ -200,7 +226,7 @@ def _cmd_whoami(args: argparse.Namespace) -> int:
     print("Pages:")
     for page in pages:
         print(f"  - {page.get('name', '?')} (id {page.get('id', '?')})")
-    print("Set graph.page_id in config.yaml to one of these ids.")
+    print("Set destinations.facebook.account_id in config.yaml to one of these ids.")
     return 0
 
 

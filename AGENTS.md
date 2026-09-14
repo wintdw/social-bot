@@ -14,8 +14,8 @@ drafts, `blog masthead` backfills the series masthead onto existing captions,
 `blog publish` posts the human-approved queue on demand, and `serve` runs a
 long-lived feed dashboard + a draft review UI + scheduled
 refresh/scan/posting. Skeleton cloned from the voz-bot/otofun-bot family
-(cli/config/tests/Docker layout); the crawl engine is replaced by `api.py`, a
-~150-line urllib Graph client.
+(cli/config/tests/Docker layout); the crawl engine is replaced by
+`destinations/facebook/api.py`, a ~150-line urllib Graph client.
 
 **Detailed docs live in `docs/`** — read `docs/README.md` first (module map +
 "where to work"), then `content-pipeline.md`, `operations.md`, `development.md`.
@@ -24,35 +24,38 @@ refresh/scan/posting. Skeleton cloned from the voz-bot/otofun-bot family
 
 ```
 src/social_bot/
-├── cli.py            # entry point (social-bot): whoami, feed, post, refresh, blog scan/image/masthead/publish, serve
-├── config.py         # DEFAULTS + config.yaml + credentials.yaml; token resolution
-├── api.py            # urllib Graph client: GET/POST + ApiError from FB payloads
-├── feed.py           # pure parse/render of /{page}/feed JSON -> markdown
-├── feed_html.py      # pure render of feed items -> HTML (section + standalone page)
+├── cli.py            # entry point (social-bot): whoami, destinations, feed, post, refresh, blog scan/image/masthead/publish, serve
+├── config.py         # DEFAULTS + config.yaml + credentials.yaml; per-destination token resolution
 ├── caption.py        # pure caption text rule: series masthead + hook row title
-├── refresh.py        # fetch feed -> data/feed/latest.{json,html}; cache reader (refresh/serve)
 ├── source.py         # pure parse of sitemap / RSS / Atom -> Item (no network)
 ├── source_api.py     # urllib source fetcher: retries + SourceError
-├── drafts.py         # Draft model + state machine + atomic persistence
+├── drafts.py         # Draft model + state machine + per-destination post records + atomic persistence
 ├── draft_pipeline.py # scan sources -> drafts; generate images; receive rewrite; publish (on demand + scheduled)
 ├── image_gen.py      # urllib Pollinations client: prompt build + image generation
-├── publishers.py     # destination adapters: Facebook (real), LinkedIn (stub)
 ├── ui.py             # shared operator-UI chrome: stylesheet, nav, layout
 ├── styleframe.py     # generated design-system preview (docs/design/styleframe.html)
 ├── draft_html.py     # pure render of the /review queue + a draft detail page
-├── dashboard_html.py # pure render of / (dashboard), /publish, /status
+├── dashboard_html.py # pure render of / (dashboard), /publish, /status (feed_section passed in)
 ├── web.py            # FastAPI operator UI + JSON API + refresh/scan/posting schedulers
+├── destinations/     # ONE PACKAGE PER PLATFORM — the only platform-coupled code
+│   ├── base.py       #   Publisher / AccountReader contracts, PublishResult, DestinationError
+│   ├── registry.py   #   PUBLISHERS / READERS, publisher_for(), reader_for(), describe_all()
+│   ├── facebook/     #   api.py (urllib Graph client), publisher.py, reader.py, feed.py, feed_html.py
+│   └── linkedin/     #   publisher.py (stub — not implemented)
 └── __init__.py
 ```
 
 Flow: `load_config` merges `config.yaml` and `credentials.yaml` over `DEFAULTS`
-→ token resolves (`--token` > `SOCIAL_BOT_TOKEN` > `credentials.yaml`) → `GraphApi` talks to
+→ each destination's token resolves (`--token` > `SOCIAL_BOT_<NAME>_TOKEN` >
+`SOCIAL_BOT_TOKEN` > `credentials.yaml`) → the facebook `GraphApi` talks to
 `https://graph.facebook.com/<version>/<path>` → `feed` renders through
-`feed.py`; `post` sends `message` (+ optional `link`) to `/{page}/feed`, or
-`url` + `caption` to `/{page}/photos` when `--photo` is given.
+`destinations/facebook/feed.py`; `post` sends `message` (+ optional `link`) to
+`/{page}/feed`, or `url` + `caption` to `/{page}/photos` when `--photo` is given.
+The core (pipeline, CLI, web, UI) reaches a platform only through
+`destinations/registry.py` — no `facebook`/`linkedin` import outside `destinations/`.
 
-`serve` flow: the FastAPI `lifespan` starts three asyncio schedulers; the refresh
-loop calls `refresh.py:refresh_feed` (via `asyncio.to_thread`) at the
+`serve` flow: the FastAPI `lifespan` starts the schedulers; the refresh
+loop calls `destinations.facebook:refresh_feed` (via `asyncio.to_thread`) at the
 `--refresh-at` slots and on `POST /refresh`, writing
 `data/feed/latest.{json,html}`, the scan loop calls
 `draft_pipeline.py:scan_sources` at the `--scan-at` slots, and the posting loop
@@ -77,7 +80,7 @@ rewriter — Command Code, applying the Atento DNA (`docs/atento-dna.md`, wired
 via `publish.dna_file`) — reads `GET /api/drafts` and
 POSTs the caption back to `/api/drafts/{id}/rewrite` (`AI_DRAFT`). A human
 approves on `/review/{id}`, which either posts immediately through a
-`publishers.py` adapter or — when `publish.post_at` slots are configured —
+`destinations/` publisher adapter or — when `publish.post_at` slots are configured —
 queues the draft as `APPROVED` for the posting scheduler. **The scan and
 refresh loops never post, and the posting loop never approves: it only posts
 drafts a human already approved. `publish.post_at: []` disables timed posting
@@ -86,10 +89,11 @@ entirely, leaving approval as the only publish path.**
 ## Hard-won facts
 
 - **Graph API v26.0** is current as of Sept 2026 (introduced 2026-07-29).
-  Meta supports the current version plus two previous majors; `graph.api_version`
+  Meta supports the current version plus two previous majors; `destinations.facebook.api_version`
   is configurable and pinned in `config.yaml`.
 - The token is the whole auth story. It is **never in code or committed
-  config**: passed via `SOCIAL_BOT_TOKEN`, `--token`, or `credentials.yaml`
+  config**: passed via `SOCIAL_BOT_TOKEN` (global) / `SOCIAL_BOT_<NAME>_TOKEN`,
+  `--token`, or `credentials.yaml` under `destinations.<name>.token`
   (git-ignored; template `credentials.example.yaml`). Required
   permissions: `pages_read_engagement` (feed), `pages_manage_posts` (post),
   `pages_show_list` (`whoami` page list). It expires — OAuth errors mean
@@ -235,7 +239,9 @@ entirely, leaving approval as the only publish path.**
   unpublished** Graph post (`published=false`) — visible to page admins only.
   It is not a dry run. Private sends are audited with `"private": true`, leave
   the draft in the review queue, and are excluded from `publish.interval_days`;
-  only a *public* send calls `mark_posted`. Flip it to `false` to post publicly.
+  only a *public* send records a `posts[<destination>]` entry, and the draft
+  turns `posted` only once **every** target has one. Flip it to `false` to post
+  publicly.
 - API posts must stay within Facebook platform policies (no engagement bait,
   spam, inauthentic behavior). The content pipeline keeps its human review
   step: `scan_sources` only queues drafts, the AI rewrite only suggests a
@@ -261,8 +267,9 @@ Read `docs/design/design-system.md` before changing any markup or the stylesheet
 
 - All styling lives in `src/social_bot/ui.py` (`_CSS` plus the `layout` /
   `nav_html` / `badge` / `notice_html` primitives). Page modules
-  (`draft_html.py`, `dashboard_html.py`, `feed_html.py`) render **fragments
-  only**: no `<style>`, no `style="…"` attribute, no colour or size literals.
+  (`draft_html.py`, `dashboard_html.py`, `destinations/facebook/feed_html.py`)
+  render **fragments only**: no `<style>`, no `style="…"` attribute, no colour
+  or size literals.
   Add a class to `_CSS` instead of styling a page.
 - Compose from the shared components and tokens (`.panel`, `.stack`, `.cols`,
   `.cmdbar`, `.btn`, `.badge`, `.pill`, `.qrow`, `.stepper`, `.dot`, …). Never
@@ -286,7 +293,8 @@ Read `docs/design/design-system.md` before changing any markup or the stylesheet
 Tests cover config defaults/deep-merge/validation, token precedence,
 Graph URL/error-payload handling, feed timestamp parsing, markdown + HTML
 rendering, the refresh cache writer, source parsing (sitemap/RSS/Atom/JSON-LD
-index), the draft model/persistence, the publisher adapters, the
+index), the draft model/persistence (incl. per-destination post records and the
+legacy-field migration), the destination registry + publisher adapters, the
 scan/rewrite/publish pipeline (stubbed clients), the scheduled drain
 (`publish_scheduled`, `approve_draft`), image prompt building and
 URL construction (`image_gen.py`, stubbed `urlopen`), the operator pages

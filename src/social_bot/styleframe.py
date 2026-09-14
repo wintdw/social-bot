@@ -31,10 +31,10 @@ from .dashboard_html import (
     render_publish_html,
     render_status_html,
 )
+from .destinations.facebook.feed import FeedItem
+from .destinations.facebook.feed_html import render_feed_html, render_feed_section
 from .draft_html import render_draft_html, render_drafts_html
 from .drafts import Draft
-from .feed import FeedItem
-from .feed_html import render_feed_html
 from .ui import _CSS, badge, nav_html, notice_html
 
 # Where the generated styleframe lives, relative to this module (src/social_bot).
@@ -92,6 +92,10 @@ _STATS = {
         "enabled": True,
         "private": False,
         "destinations": ["facebook"],
+        "destination_state": [
+            {"name": "facebook", "label": "Facebook", "enabled": True, "configured": True},
+            {"name": "linkedin", "label": "LinkedIn", "enabled": False, "configured": False},
+        ],
         "post_at": ["19:30-21:00"],
         "post_per_slot": 1,
         "interval_days": 2,
@@ -311,6 +315,7 @@ _DETAIL = Draft(
     image=_THUMB,
     published="Wed, 09 Sep 2026 15:30:26 GMT",
     lang="en",
+    destinations=["facebook"],
     state="ai_draft",
     caption=(
         "[Học cùng Atento]\n\n"
@@ -354,15 +359,16 @@ def render_pages() -> list[tuple[str, str]]:
         (
             "Factory",
             render_dashboard_html(
-                items=_ITEMS,
                 stats=_STATS,
                 refresh=_REFRESH,
                 scan=_SCAN,
                 post=_POST,
                 images=_IMAGES,
                 token=_TOKEN,
-                page_id="1148652808337860",
-                page_name="Atento Education",
+                feed_section=render_feed_section(_ITEMS),
+                feed_label="Facebook feed",
+                feed_count=len(_ITEMS),
+                account_label="Atento Education",
                 generated_at=_AT,
             ),
         ),

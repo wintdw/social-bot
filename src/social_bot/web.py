@@ -29,12 +29,17 @@ import urllib.parse
 from collections import Counter
 
 from . import draft_pipeline as pipeline
-from .api import ApiError, api_from_config, check_token
 from .config import load_config
 from .dashboard_html import render_dashboard_html, render_publish_html, render_status_html
+from .destinations import DestinationError, default_reader
+from .destinations.facebook import (
+    JSON_NAME,
+    feed_cache_dir,
+    load_cached_items,
+    refresh_feed,
+    render_feed_section,
+)
 from .draft_html import render_draft_html, render_drafts_html, render_message_html
-from .publishers import PublisherError
-from .refresh import JSON_NAME, feed_cache_dir, load_cached_items, refresh_feed
 
 # Optional [server] extra. Importing web.py without fastapi must still work
 # (the pure helpers below are used by tests), so the names resolve to None and
@@ -213,8 +218,9 @@ def _parse_iso(text) -> dt.datetime | None:
 def runtime_state_snapshot(state: dict) -> dict:
     """The restart-durable slice of the scheduler state (pure).
 
-    Only the last-run outcome is kept: a job in flight when the process dies
-    is not "running" anymore, so `busy` is deliberately left out.
+    The last-run outcome plus the posting pause is kept: a job in flight when
+    the process dies is not "running" anymore, so `busy` is deliberately left
+    out, but a pause must outlive the process.
     """
     return {
         "refresh": {
@@ -232,6 +238,9 @@ def runtime_state_snapshot(state: dict) -> dict:
             "slot": state.get("scan_slot"),
             "added": state.get("last_added"),
         },
+        # The pause survives a restart: a deploy must not silently resume a
+        # posting hold an operator set on purpose.
+        "post": {"paused": bool(state.get("post_paused"))},
     }
 
 
@@ -252,6 +261,8 @@ def apply_runtime_state(state: dict, data: dict) -> None:
     state["scan_error"] = scan.get("error")
     state["scan_slot"] = scan.get("slot")
     state["last_added"] = scan.get("added")
+    post = data.get("post") or {}
+    state["post_paused"] = bool(post.get("paused"))
 
 
 def _read_state_file(path: pathlib.Path) -> dict:
@@ -373,6 +384,10 @@ def create_app(
         post_times = list(post_at)
     private = bool(cfg.get("publish", {}).get("private", False))
     image_enabled = bool(pipeline.image_gen_config(cfg).get("enabled"))
+    # The account reader for the enabled destinations (facebook today). None when
+    # no enabled destination can read a feed, so the feed panels and the
+    # page/token loops stay off rather than failing.
+    reader = default_reader(cfg)
 
     state: dict = {
         "busy": False,
@@ -399,6 +414,10 @@ def create_app(
         "post_error": None,
         "post_slot": None,
         "last_posted": None,
+        # Timed posting can be paused at runtime (and the pause persisted to
+        # state.json) so the poster skips its slots without touching the
+        # schedule. Manual posting is a human action and is not affected.
+        "post_paused": False,
         "page_name": None,
         "token_status": None,
         "token_error": None,
@@ -444,14 +463,15 @@ def create_app(
             print(f"[web] cannot persist scheduler state: {exc}", file=sys.stderr, flush=True)
 
     def _lookup_page_name() -> str:
-        page_id = str(cfg["graph"].get("page_id") or "").strip()
-        if not page_id:
+        if reader is None:
             return ""
-        info = api_from_config(cfg).page_info(page_id)
+        info = reader.account()
         return str(info.get("name") or "").strip()
 
     async def _page_job() -> None:
-        """Resolve the page's display name for the dashboard (best-effort)."""
+        """Resolve the account's display name for the dashboard (best-effort)."""
+        if reader is None:
+            return
         try:
             name = await asyncio.to_thread(_lookup_page_name)
         except Exception as exc:  # a name lookup must never kill the app
@@ -484,11 +504,11 @@ def create_app(
 
     async def _token_job(reason: str) -> None:
         """Check the token's validity/expiry so /status can display it."""
-        if state["token_busy"]:
+        if reader is None or state["token_busy"]:
             return
         state["token_busy"] = True
         try:
-            status = await asyncio.to_thread(check_token, cfg)
+            status = await asyncio.to_thread(reader.token_status)
         except Exception as exc:  # a token check must never kill the app
             status = {"valid": None, "error": str(exc)}
         finally:
@@ -503,6 +523,8 @@ def create_app(
         await _token_job("startup")
 
     async def _refresh_job(reason: str) -> None:
+        if reader is None:
+            return  # no feed-capable destination is enabled
         async with state["lock"]:
             if state["busy"]:
                 return
@@ -662,6 +684,11 @@ def create_app(
             if slot is None or state["post_slot"] == slot:
                 continue  # this slot already ran (manual or a restart)
             state["post_slot"] = slot
+            if state["post_paused"]:
+                # Paused: consume the slot anyway, so resuming posts from the
+                # next slot rather than firing a backlog of missed ones.
+                print(f"[web] posting paused — skipping slot {slot}", flush=True)
+                continue
             await _post_job(f"scheduled {slot}")
 
     async def _image_job(draft_id: str) -> None:
@@ -723,6 +750,17 @@ def create_app(
             if state["inflight_publishes"] == 0:
                 state["drain"].set()
 
+    def _set_post_paused(paused: bool) -> None:
+        """Pause/resume the timed poster, persisted so a restart keeps the hold.
+
+        Only the *scheduled* poster is affected: an explicit human send
+        ("Post approved now", a draft's Post now, `blog publish`) still goes
+        out, because the pause exists to stop unattended posting.
+        """
+        state["post_paused"] = paused
+        _persist_state()
+        print(f"[web] posting {'paused' if paused else 'resumed'}", flush=True)
+
     def _schedule_image(draft_id: str) -> None:
         """Queue a background image generation for a just-rewritten draft."""
         if state["shutting_down"]:
@@ -746,9 +784,12 @@ def create_app(
         state["loops"] = {
             "refresh": asyncio.create_task(_scheduler_loop()),
             "scan": asyncio.create_task(_scanner_loop()),
-            "token": asyncio.create_task(_token_loop()),
-            "page": asyncio.create_task(_page_loop()),
         }
+        if reader is not None:
+            # Facebook-only lookups (page name, token status); skipped when no
+            # enabled destination can read a feed.
+            state["loops"]["token"] = asyncio.create_task(_token_loop())
+            state["loops"]["page"] = asyncio.create_task(_page_loop())
         if post_times:
             state["loops"]["posting"] = asyncio.create_task(_posting_loop())
         try:
@@ -818,6 +859,7 @@ def create_app(
             "last_posted": state["last_posted"],
             "last_finished": _iso(state["post_finished"]),
             "schedule": post_times,
+            "paused": state["post_paused"],
             "next": next_run_at(post_times).strftime("%Y-%m-%d %H:%M") if post_times else "",
             "next_post": next_post.strftime("%Y-%m-%d %H:%M") if next_post else "",
         }
@@ -835,16 +877,30 @@ def create_app(
             markup, status_code=status_code, headers={"Cache-Control": "no-cache"}
         )
 
+    def _dashboard_redirect(message: str) -> RedirectResponse:
+        return RedirectResponse(
+            f"/?message={urllib.parse.quote(message)}", status_code=303
+        )
+
     @app.get("/", response_class=HTMLResponse)
     async def index(message: str = ""):
         """The operator dashboard: refresh/scan controls, counts, and feed."""
-        items = await asyncio.to_thread(load_cached_items, cfg)
         stats = await asyncio.to_thread(pipeline.status, cfg)
+        feed_section = ""
+        feed_label = ""
+        feed_count = 0
+        if reader is not None:
+            items = await asyncio.to_thread(load_cached_items, cfg)
+            feed_label = f"{reader.label} feed"
+            if items:
+                feed_section = render_feed_section(items)
+                feed_count = len(items)
         return _page(
             render_dashboard_html(
-                items=items,
-                page_id=str(cfg["graph"].get("page_id") or ""),
-                page_name=state["page_name"] or "",
+                feed_section=feed_section,
+                feed_label=feed_label,
+                feed_count=feed_count,
+                account_label=state["page_name"] or feed_label,
                 stats=stats,
                 refresh=_refresh_runtime(),
                 scan=_scan_runtime(),
@@ -905,6 +961,7 @@ def create_app(
                 "post_ok": state["post_ok"],
                 "post_error": state["post_error"],
                 "last_posted": state["last_posted"],
+                "post_paused": state["post_paused"],
                 "publish_schedule": post_times,
                 "next_publish": next_run_at(post_times).strftime("%Y-%m-%d %H:%M") if post_times else "",
                 "open_drafts": open_drafts,
@@ -1007,6 +1064,30 @@ def create_app(
             )
         return JSONResponse({"started": True})
 
+    @app.post("/publish/pause")
+    async def publish_pause(request: Request):
+        """Stop the poster firing at its slots until resumed (persisted).
+
+        The schedule is untouched, and explicit sends still work — this only
+        holds back the unattended poster.
+        """
+        wants_html = "text/html" in request.headers.get("accept", "")
+        _set_post_paused(True)
+        message = "Posting paused — the scheduler skips its slots until you resume. Post approved now still works."
+        if wants_html:
+            return _dashboard_redirect(message)
+        return JSONResponse({"paused": True, "message": message})
+
+    @app.post("/publish/resume")
+    async def publish_resume(request: Request):
+        """Resume the poster; the next scheduled slot posts again."""
+        wants_html = "text/html" in request.headers.get("accept", "")
+        _set_post_paused(False)
+        message = "Posting resumed — the next scheduled slot posts again."
+        if wants_html:
+            return _dashboard_redirect(message)
+        return JSONResponse({"paused": False, "message": message})
+
     # -- review queue (human-gated publishing) ---------------------------
 
     @app.get("/review", response_class=HTMLResponse)
@@ -1080,6 +1161,7 @@ def create_app(
                 next_id=next_id,
                 scheduling=bool(post_times),
                 next_post=_next_post_label(),
+                posting_paused=state["post_paused"],
             )
         )
 
@@ -1101,12 +1183,18 @@ def create_app(
             if approve:
                 # Approve & schedule: save the edits, then queue for the poster.
                 await asyncio.to_thread(pipeline.approve_draft, cfg, draft_id)
-                where = (
-                    f"the next slot ({_next_post_label()})"
-                    if post_times
-                    else "the queue is drained"
-                )
-                text = f"Approved — posts at {where}. Post now sends it immediately."
+                if state["post_paused"]:
+                    text = (
+                        "Approved — posting is paused, so it waits until you resume. "
+                        "Post now sends it immediately."
+                    )
+                elif post_times:
+                    text = (
+                        f"Approved — posts at the next slot ({_next_post_label()}). "
+                        "Post now sends it immediately."
+                    )
+                else:
+                    text = "Approved — the queue is drained. Post now sends it immediately."
                 return RedirectResponse(
                     f"/review/{urllib.parse.quote(draft_id)}"
                     f"?message={urllib.parse.quote(text)}&kind=success",
@@ -1124,7 +1212,7 @@ def create_app(
             )
         except ValueError as exc:
             return _page(render_message_html("Cannot publish", str(exc)), 400)
-        except (PublisherError, ApiError) as exc:
+        except DestinationError as exc:
             return _page(render_message_html("Publish failed", str(exc)), 502)
         if dry_run:
             suffix = " unpublished" if private else ""
@@ -1141,7 +1229,12 @@ def create_app(
             )
             kind = "warning"
         else:
-            text = f"Posted: {result['draft'].get('permalink') or result['draft'].get('post_id')}"
+            parts = [
+                f"{r.get('destination')}: {r.get('permalink') or r.get('post_id')}"
+                for r in result["results"]
+                if not r.get("skipped")
+            ]
+            text = "Posted " + "; ".join(parts) if parts else "Nothing to post."
             kind = "success"
         return RedirectResponse(
             f"/review/{urllib.parse.quote(draft_id)}?message={urllib.parse.quote(text)}"

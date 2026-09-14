@@ -1,8 +1,8 @@
 """Content pipeline orchestration: scan sources, receive rewrites, publish.
 
-Mirrors refresh.py: the fetch/write glue lives here, the pure model in
-drafts.py, the pure parsing in source.py, and the network in source_api.py /
-publishers.py. Publishing is always explicit — scan never posts.
+The fetch/write glue lives here, the pure model in drafts.py, the pure parsing
+in source.py, and the network in source_api.py and the `destinations/` packages.
+Publishing is always explicit — scan never posts.
 """
 
 from __future__ import annotations
@@ -11,9 +11,9 @@ import datetime as dt
 import json
 import pathlib
 
-from .api import ApiError
 from .caption import display_title
 from .config import ROOT, load_config
+from .destinations import DestinationError, describe_all, publisher_for
 from .drafts import (
     AI_DRAFT,
     APPROVED,
@@ -28,7 +28,6 @@ from .drafts import (
     save_drafts,
 )
 from .image_gen import DEFAULT_BASE_URL, ImageGenError, generate_for_draft
-from .publishers import PublisherError, publisher_for
 from .source import Source, parse_blog_posting, parse_source
 from .source_api import SourceClient, SourceError
 
@@ -299,14 +298,22 @@ def next_scheduled(drafts: list[Draft]) -> Draft | None:
     (``status``) don't re-read the file. Returns None when nothing is approved —
     the scheduler then has nothing to post.
     """
-    approved = [draft for draft in drafts if draft.state in SCHEDULED_STATES]
-    return _oldest_first(approved)[0] if approved else None
+    pending = [
+        draft
+        for draft in drafts
+        if draft.state in SCHEDULED_STATES and draft.pending_destinations()
+    ]
+    return _oldest_first(pending)[0] if pending else None
 
 
 def scheduled_queue(cfg: dict) -> list[Draft]:
-    """Approved drafts in posting order (oldest first) — what the poster drains."""
+    """Approved drafts with a destination still to post to, oldest first."""
     return _oldest_first(
-        [draft for draft in load_drafts(queue_path(cfg)) if draft.state in SCHEDULED_STATES]
+        [
+            draft
+            for draft in load_drafts(queue_path(cfg))
+            if draft.state in SCHEDULED_STATES and draft.pending_destinations()
+        ]
     )
 
 
@@ -753,6 +760,11 @@ def interval_remaining(cfg: dict) -> int:
     return max(0, minimum - elapsed)
 
 
+def destination_state(cfg: dict) -> list[dict]:
+    """Per-destination status for the operator UI (delegates to the registry)."""
+    return describe_all(cfg)
+
+
 def status(cfg: dict | None = None) -> dict:
     """A snapshot of the pipeline state for an operator/monitoring endpoint."""
     cfg = cfg or load_config()
@@ -792,6 +804,7 @@ def status(cfg: dict | None = None) -> dict:
             "enabled": bool(cfg.get("publish", {}).get("enabled", True)),
             "private": bool(cfg.get("publish", {}).get("private", False)),
             "destinations": list(cfg.get("publish", {}).get("destinations", [])),
+            "destination_state": destination_state(cfg),
             "post_at": list(cfg.get("publish", {}).get("post_at", []) or []),
             "post_per_slot": int(cfg.get("publish", {}).get("post_per_slot", 1)),
             "interval_days": interval_days(cfg),
@@ -830,6 +843,7 @@ def publish_draft(
     dry_run: bool = False,
     destination: str | None = None,
     token: str | None = None,
+    skip_private_today: bool = False,
 ) -> dict:
     """Publish an approved/AI-drafted item to its destinations.
 
@@ -854,7 +868,15 @@ def publish_draft(
             "run the AI rewrite (or approve it) before publishing"
         )
 
-    targets = [destination] if destination else (draft.destinations or cfg["publish"]["destinations"])
+    if not draft.destinations:
+        # A draft queued without routing adopts the configured set, so its post
+        # records always have a target list to compare against.
+        draft.destinations = list(cfg["publish"]["destinations"])
+    targets = [destination] if destination else list(draft.destinations)
+    # Each destination posts independently: skip the ones already posted publicly,
+    # so a re-run (or a retry after a partial failure) only fills the gaps.
+    already = set(draft.posted_destinations())
+    targets = [name for name in targets if name not in already]
     if not dry_run:
         remaining = interval_remaining(cfg)
         if remaining > 0:
@@ -866,6 +888,12 @@ def publish_draft(
 
     results: list[dict] = []
     for name in targets:
+        # The scheduler passes skip_private_today: a private send deliberately
+        # leaves the draft in the queue, so without this guard it would re-post
+        # at every slot. A manual publish is never skipped.
+        if skip_private_today and not dry_run and _private_sent_today(cfg, draft.id, name):
+            results.append({"destination": name, "skipped": "already posted privately today"})
+            continue
         publisher = publisher_for(name, cfg, token)
         if dry_run:
             print(f"dry-run: would {publisher.describe(draft)}")
@@ -875,40 +903,15 @@ def publish_draft(
             results.append({"destination": name, "dry_run": True})
             continue
         result = publisher.publish(draft)
-        if result.get("private"):
-            append_audit(
-                published_path(cfg),
-                {
-                    "id": draft.id,
-                    "source": draft.source,
-                    "url": draft.url,
-                    "destination": name,
-                    "post_id": str(result.get("post_id", "")),
-                    "permalink": str(result.get("permalink", "")),
-                    "posted_at": now_iso(),
-                    "private": True,
-                },
-            )
-            results.append(result)
-            continue
         draft.mark_posted(
-            post_id=str(result.get("post_id", "")),
-            permalink=str(result.get("permalink", "")),
+            name,
+            post_id=result.post_id,
+            permalink=result.permalink,
+            private=result.private,
         )
-        append_audit(
-            published_path(cfg),
-            {
-                "id": draft.id,
-                "source": draft.source,
-                "url": draft.url,
-                "destination": name,
-                "post_id": draft.post_id,
-                "permalink": draft.permalink,
-                "posted_at": draft.posted_at,
-            },
-        )
+        append_audit(published_path(cfg), _audit_record(draft, name))
         save_drafts(queue_path(cfg), drafts)  # persist after each destination
-        results.append(result)
+        results.append(result.to_dict())
 
     return {
         "draft": draft.to_dict(),
@@ -918,8 +921,25 @@ def publish_draft(
     }
 
 
-def _private_sent_today(cfg: dict, draft_id: str) -> bool:
-    """True when this draft already had a *private* send today.
+def _audit_record(draft: Draft, destination: str) -> dict:
+    """The publish-log record for one destination, built from the draft's record."""
+    record = draft.posts.get(destination, {})
+    audit = {
+        "id": draft.id,
+        "source": draft.source,
+        "url": draft.url,
+        "destination": destination,
+        "post_id": str(record.get("post_id", "")),
+        "permalink": str(record.get("permalink", "")),
+        "posted_at": str(record.get("posted_at", "")),
+    }
+    if record.get("private"):
+        audit["private"] = True
+    return audit
+
+
+def _private_sent_today(cfg: dict, draft_id: str, destination: str) -> bool:
+    """True when this draft already had a *private* send to this destination today.
 
     Private sends deliberately leave the draft in the queue (see
     ``publish_draft``), so without this guard the scheduler would re-post the
@@ -929,6 +949,7 @@ def _private_sent_today(cfg: dict, draft_id: str) -> bool:
     return any(
         record.get("private")
         and record.get("id") == draft_id
+        and record.get("destination") == destination
         and str(record.get("posted_at", "")).startswith(today)
         for record in list_published(cfg)
     )
@@ -965,12 +986,10 @@ def publish_scheduled(
     posted: list[dict] = []
     skipped: list[dict] = []
     errors: list[dict] = []
+    handled = 0
     for draft in queued:
-        if len(posted) >= batch:
+        if handled >= batch:
             break
-        if not dry_run and _private_sent_today(cfg, draft.id):
-            skipped.append({"id": draft.id, "reason": "already posted privately today"})
-            continue
         try:
             result = publish_draft(
                 cfg,
@@ -978,24 +997,28 @@ def publish_scheduled(
                 dry_run=dry_run,
                 destination=destination,
                 token=token,
+                skip_private_today=True,
             )
         except ValueError as exc:
             skipped.append({"id": draft.id, "reason": str(exc)})
             break  # interval/state unchanged: the rest would fail too
-        except (PublisherError, ApiError) as exc:
+        except DestinationError as exc:
             errors.append({"id": draft.id, "error": str(exc)})
             continue
-        posted.append(
-            {
-                "id": draft.id,
-                "destination": (
-                    result["results"][0].get("destination") if result["results"] else ""
-                ),
-                "post_id": result["draft"].get("post_id", ""),
-                "permalink": result["draft"].get("permalink", ""),
-                "private": result["private"],
-            }
-        )
+        handled += 1  # batch counts drafts, not destinations
+        for entry in result["results"]:
+            if entry.get("skipped"):
+                skipped.append({"id": draft.id, "reason": entry["skipped"]})
+                continue
+            posted.append(
+                {
+                    "id": draft.id,
+                    "destination": entry.get("destination", ""),
+                    "post_id": entry.get("post_id", ""),
+                    "permalink": entry.get("permalink", ""),
+                    "private": bool(entry.get("private")),
+                }
+            )
 
     return {
         "posted": posted,

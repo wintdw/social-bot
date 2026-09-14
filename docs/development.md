@@ -15,9 +15,10 @@ Tests never touch the network and never need the `[server]` extra. Conventions:
 
 - Pure logic is tested directly against fixture strings (XML/HTML/JSON), e.g.
   `tests/test_source.py` parses sample sitemap/RSS/HTML with no I/O.
-- I/O is stubbed: monkeypatch `refresh.api_from_config`,
-  `publishers.api_from_config`, or `draft_pipeline.publisher_for`, and pass a
-  fake `SourceClient` (`FakeClient`, `FakeApi` in the test files).
+- I/O is stubbed: monkeypatch `destinations.facebook.api.api_from_config`,
+  `destinations.facebook.publisher.api_from_config`, or
+  `draft_pipeline.publisher_for`, and pass a fake `SourceClient` (`FakeClient`,
+  `FakeApi` in the test files).
 - Stateful code uses `tmp_path` and points `cfg["review"]["dir"]` (and
   `cfg["publish"]["dir"]`) at it.
 - `web.py`'s scheduling helpers are pure and tested without fastapi
@@ -82,14 +83,22 @@ modules return fragments only and hand them to `layout()`. Read
 
 ## Recipe: add a destination
 
-1. Add a class in `publishers.py` with `name`, `describe(draft) -> str`, and
-   `publish(draft) -> {"destination", "post_id", "permalink"}`.
-2. Register it in `PUBLISHERS` and allow it in `config.validate` (the
-   `facebook`/`linkedin` set).
-3. Test the field mapping in `tests/test_publishers.py` with a fake API.
-4. `LinkedInPublisher` is a stub — a real one needs OAuth (`w_member_social`
-   for a profile, `w_organization_social` + partner approval for a company
-   page) and `POST https://api.linkedin.com/rest/posts`.
+Everything platform-specific lives in one package; the core never changes.
+
+1. Create `src/social_bot/destinations/<name>/` with a `Publisher` subclass
+   (`destinations/base.py`): set `name`, `label`, implement
+   `describe(draft) -> str` and `publish(draft) -> PublishResult`, and override
+   `validate_config(dst)` / `configured()` if it has its own config schema.
+2. Register it in `destinations/registry.py` (`PUBLISHERS`; add a `READERS`
+   entry too if it can read an account feed).
+3. Add its `DEFAULTS["destinations"]["<name>"]` block in `config.py` and the
+   `credentials.example.yaml` entry. Routing is `publish.destinations` in
+   `config.yaml`; `config.validate` accepts any registered name automatically.
+4. Test the field mapping in `tests/test_publishers.py` with a fake transport;
+   registry/config behaviour in `tests/test_destinations.py`.
+5. `linkedin/publisher.py` is a stub — a real one needs OAuth
+   (`w_member_social` for a profile, `w_organization_social` + partner approval
+   for a company page) and `POST https://api.linkedin.com/rest/posts`.
 
 ## Recipe: add a route
 

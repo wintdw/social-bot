@@ -10,73 +10,108 @@ from social_bot.config import DEFAULTS, load_config, resolve_token, validate
 
 def test_defaults_when_config_missing(tmp_path):
     cfg = load_config(tmp_path / "does-not-exist.yaml")
-    assert cfg["graph"]["api_version"] == "v26.0"
-    assert cfg["graph"]["base_url"] == "https://graph.facebook.com"
+    assert cfg["destinations"]["facebook"]["api_version"] == "v26.0"
+    assert cfg["destinations"]["facebook"]["base_url"] == "https://graph.facebook.com"
+    assert cfg["destinations"]["linkedin"]["base_url"] == "https://api.linkedin.com"
     assert cfg["feed"]["limit"] == 10
 
 
 def test_deep_merge_overrides_nested(tmp_path):
     conf = tmp_path / "config.yaml"
     conf.write_text(
-        yaml.safe_dump({"graph": {"api_version": "v25.0"}, "feed": {"limit": 3}}),
+        yaml.safe_dump(
+            {"destinations": {"facebook": {"api_version": "v25.0"}}, "feed": {"limit": 3}}
+        ),
         encoding="utf-8",
     )
     cfg = load_config(conf)
-    assert cfg["graph"]["api_version"] == "v25.0"
-    assert cfg["graph"]["base_url"] == DEFAULTS["graph"]["base_url"]  # untouched
+    assert cfg["destinations"]["facebook"]["api_version"] == "v25.0"
+    # The sibling key survives the nested merge.
+    assert (
+        cfg["destinations"]["facebook"]["base_url"]
+        == DEFAULTS["destinations"]["facebook"]["base_url"]
+    )
+    assert cfg["destinations"]["linkedin"]["base_url"]  # other block untouched
     assert cfg["feed"]["limit"] == 3
     assert cfg["feed"].get("fields") is None  # no phantom keys
 
 
 def test_token_resolution_precedence(tmp_path, monkeypatch):
-    cfg = load_config(tmp_path / "missing.yaml")  # defaults: graph.token == ""
+    cfg = load_config(tmp_path / "missing.yaml")  # defaults: no tokens
     monkeypatch.delenv("SOCIAL_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("SOCIAL_BOT_FACEBOOK_TOKEN", raising=False)
     # explicit argument wins
-    assert resolve_token("flag-token", cfg) == "flag-token"
-    # then the environment
+    assert resolve_token("facebook", cfg, "flag-token") == "flag-token"
+    # then the destination-specific environment variable
+    monkeypatch.setenv("SOCIAL_BOT_FACEBOOK_TOKEN", "fb-env-token")
+    assert resolve_token("facebook", cfg) == "fb-env-token"
+    # then the global environment fallback
+    monkeypatch.delenv("SOCIAL_BOT_FACEBOOK_TOKEN")
     monkeypatch.setenv("SOCIAL_BOT_TOKEN", "env-token")
-    assert resolve_token(None, cfg) == "env-token"
-    # then config.graph.token
+    assert resolve_token("facebook", cfg) == "env-token"
+    # then destinations.<name>.token
     monkeypatch.delenv("SOCIAL_BOT_TOKEN")
-    cfg["graph"]["token"] = "cfg-token"
-    assert resolve_token(None, cfg) == "cfg-token"
+    cfg["destinations"]["facebook"]["token"] = "cfg-token"
+    assert resolve_token("facebook", cfg) == "cfg-token"
     # empty when nothing is set
-    cfg["graph"]["token"] = ""
-    assert resolve_token(None, cfg) == ""
+    cfg["destinations"]["facebook"]["token"] = ""
+    assert resolve_token("facebook", cfg) == ""
+
+
+def test_destination_tokens_are_independent(tmp_path, monkeypatch):
+    cfg = load_config(tmp_path / "missing.yaml")
+    monkeypatch.delenv("SOCIAL_BOT_TOKEN", raising=False)
+    cfg["destinations"]["facebook"]["token"] = "fb-token"
+    cfg["destinations"]["linkedin"]["token"] = "li-token"
+    assert resolve_token("facebook", cfg) == "fb-token"
+    assert resolve_token("linkedin", cfg) == "li-token"
+    # A destination-specific env var overrides only its own destination.
+    monkeypatch.setenv("SOCIAL_BOT_LINKEDIN_TOKEN", "li-env")
+    assert resolve_token("facebook", cfg) == "fb-token"
+    assert resolve_token("linkedin", cfg) == "li-env"
 
 
 def test_credentials_file_supplies_token(tmp_path):
     conf = tmp_path / "config.yaml"
-    conf.write_text(yaml.safe_dump({"graph": {"page_id": "1"}}), encoding="utf-8")
+    conf.write_text(
+        yaml.safe_dump({"destinations": {"facebook": {"account_id": "1"}}}),
+        encoding="utf-8",
+    )
     (tmp_path / "credentials.yaml").write_text(
-        yaml.safe_dump({"graph": {"token": "cred-token"}}), encoding="utf-8"
+        yaml.safe_dump({"destinations": {"facebook": {"token": "cred-token"}}}),
+        encoding="utf-8",
     )
     cfg = load_config(conf)
-    assert cfg["graph"]["token"] == "cred-token"
-    assert cfg["graph"]["page_id"] == "1"  # config.yaml still applies
+    assert cfg["destinations"]["facebook"]["token"] == "cred-token"
+    assert cfg["destinations"]["facebook"]["account_id"] == "1"  # config applies
 
 
 def test_credentials_file_overrides_config_token(tmp_path):
     conf = tmp_path / "config.yaml"
-    conf.write_text(yaml.safe_dump({"graph": {"token": "cfg-token"}}), encoding="utf-8")
-    (tmp_path / "credentials.yaml").write_text(
-        yaml.safe_dump({"graph": {"token": "cred-token"}}), encoding="utf-8"
+    conf.write_text(
+        yaml.safe_dump({"destinations": {"facebook": {"token": "cfg-token"}}}),
+        encoding="utf-8",
     )
-    assert load_config(conf)["graph"]["token"] == "cred-token"
+    (tmp_path / "credentials.yaml").write_text(
+        yaml.safe_dump({"destinations": {"facebook": {"token": "cred-token"}}}),
+        encoding="utf-8",
+    )
+    assert load_config(conf)["destinations"]["facebook"]["token"] == "cred-token"
 
 
 def test_missing_credentials_file_keeps_default(tmp_path):
     cfg = load_config(tmp_path / "config.yaml")
-    assert cfg["graph"]["token"] == ""
+    assert cfg["destinations"]["facebook"]["token"] == ""
 
 
 def test_env_beats_credentials_file(tmp_path, monkeypatch):
     (tmp_path / "credentials.yaml").write_text(
-        yaml.safe_dump({"graph": {"token": "cred-token"}}), encoding="utf-8"
+        yaml.safe_dump({"destinations": {"facebook": {"token": "cred-token"}}}),
+        encoding="utf-8",
     )
     cfg = load_config(tmp_path / "config.yaml")
     monkeypatch.setenv("SOCIAL_BOT_TOKEN", "env-token")
-    assert resolve_token(None, cfg) == "env-token"
+    assert resolve_token("facebook", cfg) == "env-token"
 
 
 def test_validate_accepts_defaults():
@@ -99,9 +134,33 @@ def test_validate_accepts_a_configured_post_schedule():
 @pytest.mark.parametrize(
     "cfg",
     [
-        {**DEFAULTS, "graph": {**DEFAULTS["graph"], "api_version": "26.0"}},
-        {**DEFAULTS, "graph": {**DEFAULTS["graph"], "base_url": "http://graph.facebook.com"}},
-        {**DEFAULTS, "graph": {**DEFAULTS["graph"], "timeout_seconds": -1}},
+        {
+            **DEFAULTS,
+            "destinations": {
+                **DEFAULTS["destinations"],
+                "facebook": {**DEFAULTS["destinations"]["facebook"], "api_version": "26.0"},
+            },
+        },
+        {
+            **DEFAULTS,
+            "destinations": {
+                **DEFAULTS["destinations"],
+                "facebook": {
+                    **DEFAULTS["destinations"]["facebook"],
+                    "base_url": "http://graph.facebook.com",
+                },
+            },
+        },
+        {
+            **DEFAULTS,
+            "destinations": {
+                **DEFAULTS["destinations"],
+                "facebook": {
+                    **DEFAULTS["destinations"]["facebook"],
+                    "timeout_seconds": -1,
+                },
+            },
+        },
         {**DEFAULTS, "feed": {**DEFAULTS["feed"], "limit": 0}},
     ],
     ids=["bad-version", "http-base-url", "bad-timeout", "zero-limit"],
@@ -152,6 +211,7 @@ def test_credentials_file_supplies_image_key(tmp_path):
         {"sources": [{"name": "x", "type": "sitemap", "url": "https://x"}]},
         {"sources": [{"name": "x", "type": "ftp", "url": "https://x", "path_prefix": "/b/"}]},
         {"sources": [{"name": "x", "type": "rss", "url": "http://x"}]},
+        {"destinations": {**DEFAULTS["destinations"], "mastodon": {}}},
         {"publish": {"destinations": []}},
         {"publish": {"destinations": ["mastodon"]}},
         {"publish": {"destinations": ["facebook"], "post_at": ["nope"]}},
@@ -176,6 +236,7 @@ def test_credentials_file_supplies_image_key(tmp_path):
         "sitemap-needs-prefix",
         "bad-source-type",
         "http-source-url",
+        "unknown-destination-block",
         "no-destinations",
         "unknown-destination",
         "bad-post-at",

@@ -1,17 +1,16 @@
-"""Destination publishers (Facebook Page now; LinkedIn stubbed).
+"""Facebook Page publisher.
 
-A publisher turns an approved draft into a real post. Facebook reuses the
-existing Graph client; LinkedIn is wired as an adapter so enabling it later
-needs no changes in the pipeline — but it is not implemented yet (company-page
-posting needs LinkedIn Community Management API approval).
+Facebook reuses the Graph client in ``api.py``; this module is the *publishing*
+seam that turns an approved draft into a real post.
 """
 
 from __future__ import annotations
 
 import time
 
+from ...drafts import Draft
+from ..base import PublishResult, Publisher
 from .api import ApiError, api_from_config
-from .drafts import Draft
 
 # Seconds to wait before commenting on a freshly created post. Facebook's
 # Graph API can have a brief propagation delay before the post is available
@@ -19,16 +18,12 @@ from .drafts import Draft
 COMMENT_DELAY_SECONDS = 3
 
 
-class PublisherError(Exception):
-    """A destination could not accept the post."""
-
-
-class FacebookPublisher:
+class FacebookPublisher(Publisher):
     name = "facebook"
+    label = "Facebook"
 
     def __init__(self, cfg: dict, token: str | None = None) -> None:
-        self.cfg = cfg
-        self.token = token
+        super().__init__(cfg, token)
         self._api = None
 
     @property
@@ -37,11 +32,27 @@ class FacebookPublisher:
             self._api = api_from_config(self.cfg, self.token)
         return self._api
 
-    def page_id(self) -> str:
-        page_id = str(self.cfg.get("graph", {}).get("page_id") or "").strip()
-        if not page_id:
-            raise ValueError("no page id: set graph.page_id in config.yaml")
+    @classmethod
+    def validate_config(cls, dst: dict) -> None:
+        if not str(dst.get("api_version", "")).startswith("v"):
+            raise ValueError(
+                "config: destinations.facebook.api_version must look like 'v26.0'"
+            )
+        if not str(dst.get("base_url", "")).startswith("https://"):
+            raise ValueError("config: destinations.facebook.base_url must be an https URL")
+        if float(dst.get("timeout_seconds", 30)) <= 0:
+            raise ValueError("config: destinations.facebook.timeout_seconds must be positive")
+
+    def page_id(self, *, required: bool = True) -> str:
+        page_id = str(self.config().get("account_id") or "").strip()
+        if required and not page_id:
+            raise ValueError(
+                "no page id: set destinations.facebook.account_id in config.yaml"
+            )
         return page_id
+
+    def configured(self) -> bool:
+        return bool(self.token_value()) and bool(self.page_id(required=False))
 
     def private(self) -> bool:
         """True when publish.private is on: post unpublished (admins only)."""
@@ -53,7 +64,7 @@ class FacebookPublisher:
         endpoint = f"POST /{page_id}/photos" if draft.image else f"POST /{page_id}/feed"
         return f"{endpoint} (unpublished)" if self.private() else endpoint
 
-    def publish(self, draft: Draft) -> dict:
+    def publish(self, draft: Draft) -> PublishResult:
         page_id = self.page_id()
         caption = draft.post_text
         private = self.private()
@@ -79,49 +90,9 @@ class FacebookPublisher:
             except ApiError:
                 pass  # Comment failure shouldn't fail the publish
 
-        return {
-            "destination": self.name,
-            "post_id": post_id,
-            "permalink": permalink,
-            "private": private,
-        }
-
-
-class LinkedInPublisher:
-    name = "linkedin"
-
-    def __init__(self, cfg: dict, token: str | None = None) -> None:
-        self.cfg = cfg
-        self.token = token
-
-    def describe(self, draft: Draft) -> str:
-        return "POST https://api.linkedin.com/rest/posts"
-
-    def publish(self, draft: Draft) -> dict:
-        raise PublisherError(
-            "LinkedIn publishing is not enabled yet — provide an access token with "
-            "w_member_social / w_organization_social and implement the adapter"
+        return PublishResult(
+            destination=self.name,
+            post_id=post_id,
+            permalink=permalink,
+            private=private,
         )
-
-
-PUBLISHERS = {
-    FacebookPublisher.name: FacebookPublisher,
-    LinkedInPublisher.name: LinkedInPublisher,
-}
-
-
-def publisher_for(name: str, cfg: dict, token: str | None = None):
-    cls = PUBLISHERS.get(name)
-    if cls is None:
-        raise PublisherError(f"unknown destination {name!r}")
-    return cls(cfg, token)
-
-
-__all__ = [
-    "ApiError",
-    "PublisherError",
-    "FacebookPublisher",
-    "LinkedInPublisher",
-    "PUBLISHERS",
-    "publisher_for",
-]

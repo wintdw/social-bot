@@ -198,6 +198,19 @@ class TestRuntimeState:
         assert snap["refresh"]["ok"] is None
         assert snap["scan"]["slot"] is None
 
+    def test_posting_pause_round_trips(self):
+        snap = runtime_state_snapshot({"post_paused": True})
+        assert snap["post"]["paused"] is True
+        restored: dict = {}
+        apply_runtime_state(restored, snap)
+        assert restored["post_paused"] is True
+
+    def test_posting_pause_defaults_off(self):
+        assert runtime_state_snapshot({})["post"]["paused"] is False
+        restored = {"post_paused": True}
+        apply_runtime_state(restored, {"refresh": {}, "scan": {}})
+        assert restored["post_paused"] is False
+
     def test_bad_payload_is_ignored(self):
         state = {"last_ok": True}
         apply_runtime_state(state, "not a dict")

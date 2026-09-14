@@ -19,8 +19,9 @@ import html
 import urllib.parse
 
 from .caption import display_title, leading_masthead
+from .destinations import label_for, labels_for
 from .drafts import Draft, parse_when
-from .ui import badge, layout
+from .ui import BRAND_EYEBROW, badge, layout
 
 # Human labels for the status filter chips (the badge shows the raw state).
 _STATE_LABELS = {
@@ -70,7 +71,7 @@ _DETAIL_SCRIPT = """<script>
     var isApprove = !!button && button.name === 'approve';
     var isSave = !!button && button.name === 'save';
     if (!isApprove && !isSave && form.dataset.private !== 'true') {
-      if (!window.confirm('Post this publicly to the Facebook Page?')) {
+      if (!window.confirm('Post this publicly to __DEST__?')) {
         event.preventDefault();
         return;
       }
@@ -455,9 +456,11 @@ def render_draft_html(
     next_id: str | None = None,
     scheduling: bool = False,
     next_post: str = "",
+    posting_paused: bool = False,
 ) -> str:
     """Render one draft: the post it will create, its source, and the actions."""
     title = html.escape(display_title(draft.caption, draft.title or draft.id))
+    dest_text = ", ".join(labels_for(draft.destinations or ["facebook"]))
     meta_bits = [badge(draft.state)]
     if draft.source:
         meta_bits.append(f'<span class="badge badge-source">{html.escape(draft.source)}</span>')
@@ -559,15 +562,15 @@ def render_draft_html(
         '<section class="panel">'
         '<div class="panel-head"><span class="label">Preview</span>'
         '<span class="pill">exactly what posts</span></div>'
-        '<div class="panel-body"><div class="fb-preview">'
+        '<div class="panel-body"><div class="post-preview">'
         '<div class="head"><span class="avatar" aria-hidden="true">A</span>'
-        '<span class="meta"><span class="name">Atento Education</span>'
+        f'<span class="meta"><span class="name">{html.escape(BRAND_EYEBROW)}</span>'
         '<span class="when">Just now · 🌐</span></span></div>'
         f'<div class="body" id="preview-body" lang="vi">{caption}</div>'
         f'<div class="tags" id="preview-tags">{tags}</div>'
         f"{preview_media}"
         "</div>"
-        '<p class="field-hint">Facebook shows roughly the first two lines before '
+        '<p class="field-hint">The feed shows roughly the first two lines before '
         "“See more”.</p></div></section>"
     )
 
@@ -575,7 +578,7 @@ def render_draft_html(
     target = (
         "Private mode: posted unpublished, visible to page admins only."
         if private
-        else "This publishes to the Facebook Page."
+        else f"This publishes to {dest_text}."
     )
     image_button = ""
     if image_enabled:
@@ -610,22 +613,39 @@ def render_draft_html(
 
     schedule_note = ""
     if scheduling and draft.state == "approved":
-        schedule_note = (
-            f'<p class="field-hint">Approved — waiting for {html.escape(when)}. '
-            "Use Post now to send it immediately.</p>"
-        )
+        if posting_paused:
+            schedule_note = (
+                '<p class="field-hint">Approved — posting is paused, so it waits until '
+                "you resume. Use Post now to send it immediately.</p>"
+            )
+        else:
+            schedule_note = (
+                f'<p class="field-hint">Approved — waiting for {html.escape(when)}. '
+                "Use Post now to send it immediately.</p>"
+            )
     elif scheduling and draft.state == "ai_draft":
-        schedule_note = (
-            "<p class=\"field-hint\">Approve &amp; schedule queues this for "
-            f"{html.escape(when)}; Post now sends it immediately.</p>"
-        )
+        if posting_paused:
+            schedule_note = (
+                '<p class="field-hint">Approve &amp; schedule queues this; posting is '
+                "paused, so it sends when you resume. Post now sends it immediately.</p>"
+            )
+        else:
+            schedule_note = (
+                "<p class=\"field-hint\">Approve &amp; schedule queues this for "
+                f"{html.escape(when)}; Post now sends it immediately.</p>"
+            )
 
-    posted = ""
-    if draft.post_id:
-        posted = (
-            f'<p class="muted">Already posted: '
-            f"{html.escape(draft.permalink or draft.post_id)}</p>"
+    posted_lines: list[str] = []
+    for name, record in draft.posts.items():
+        if record.get("private"):
+            continue
+        link = str(record.get("permalink") or record.get("post_id") or "")
+        posted_lines.append(
+            f"Already posted to {html.escape(label_for(name))}: {html.escape(link)}"
         )
+    posted = ""
+    if posted_lines:
+        posted = '<p class="muted">' + "<br>".join(posted_lines) + "</p>"
 
     rail_parts: list[str] = []
     rail_parts.append('<div class="rail-block"><span class="section-label">Source</span>')
@@ -689,7 +709,7 @@ def render_draft_html(
         + posted
         + action_bar
         + tail
-        + _DETAIL_SCRIPT
+        + _DETAIL_SCRIPT.replace("__DEST__", dest_text)
     )
     return layout(
         f"Social Content Factory — {draft.id}",

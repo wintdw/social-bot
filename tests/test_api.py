@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from social_bot.api import (
+from social_bot.destinations.facebook.api import (
     ApiError,
     GraphApi,
     check_token,
@@ -22,7 +22,7 @@ class TestGraphApiUrls:
         assert url == "https://graph.facebook.com/v26.0/me/accounts"
 
     def test_feed_fields_cover_post_and_timestamp(self):
-        from social_bot.api import FEED_FIELDS
+        from social_bot.destinations.facebook.api import FEED_FIELDS
 
         for field in ("id", "message", "story", "created_time", "permalink_url"):
             assert field in FEED_FIELDS
@@ -170,11 +170,15 @@ class TestAddComment:
 
 
 def test_api_requires_token():
-    from social_bot.api import api_from_config
     from social_bot.config import DEFAULTS, load_config
+    from social_bot.destinations.facebook import api_from_config
 
     cfg = load_config("/nonexistent/config.yaml")
-    assert cfg["graph"]["token"] == DEFAULTS["graph"]["token"] == ""
+    assert (
+        cfg["destinations"]["facebook"]["token"]
+        == DEFAULTS["destinations"]["facebook"]["token"]
+        == ""
+    )
     with pytest.raises(ValueError):
         api_from_config(cfg, token=None)
 
@@ -249,16 +253,21 @@ class TestTokenStatusFromDebug:
 
 class TestCheckToken:
     CFG = {
-        "graph": {
-            "api_version": "v26.0",
-            "base_url": "https://graph.facebook.com",
-            "timeout_seconds": 30.0,
-            "token": "tok",
+        "destinations": {
+            "facebook": {
+                "api_version": "v26.0",
+                "base_url": "https://graph.facebook.com",
+                "timeout_seconds": 30.0,
+                "token": "tok",
+            }
         }
     }
 
     def _patch(self, monkeypatch, api):
-        monkeypatch.setattr("social_bot.api.api_from_config", lambda cfg, token=None: api)
+        monkeypatch.setattr(
+            "social_bot.destinations.facebook.api.api_from_config",
+            lambda cfg, token=None: api,
+        )
 
     def test_valid_token(self, monkeypatch):
         self._patch(monkeypatch, SimpleNamespace(debug_token=lambda: {"is_valid": True, "expires_at": 0}))
@@ -285,6 +294,10 @@ class TestCheckToken:
         assert "timed out" in out["error"]
 
     def test_no_token_raises(self):
-        cfg = {"graph": {**self.CFG["graph"], "token": ""}}
+        cfg = {
+            "destinations": {
+                "facebook": {**self.CFG["destinations"]["facebook"], "token": ""}
+            }
+        }
         with pytest.raises(ValueError):
             check_token(cfg)

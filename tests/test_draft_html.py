@@ -325,8 +325,31 @@ class TestRenderDraftHtml:
         out = render_draft_html(Draft(id="p", title="T", caption="Hi"))
         assert 'class="btn-primary"' in out
         assert "Post publicly" in out
-        assert "This publishes to the Facebook Page." in out
+        assert "This publishes to Facebook." in out
         assert 'data-private="false"' in out
+
+    def test_public_action_lists_multiple_destinations(self):
+        draft = Draft(
+            id="p", title="T", caption="Hi", destinations=["facebook", "linkedin"]
+        )
+        out = render_draft_html(draft)
+        assert "This publishes to Facebook, LinkedIn." in out
+
+    def test_posted_line_is_per_destination(self):
+        draft = Draft(
+            id="p",
+            title="T",
+            caption="Hi",
+            state="posted",
+            destinations=["facebook", "linkedin"],
+            posts={
+                "facebook": {"post_id": "1_2", "permalink": "https://x/fb", "posted_at": "now"},
+                "linkedin": {"post_id": "li1", "permalink": "https://x/li", "posted_at": "now"},
+            },
+        )
+        out = render_draft_html(draft)
+        assert "Already posted to Facebook: https://x/fb" in out
+        assert "Already posted to LinkedIn: https://x/li" in out
 
     def test_private_action_is_labelled_private(self):
         out = render_draft_html(Draft(id="p", title="T", caption="Hi"), private=True)
@@ -449,6 +472,25 @@ class TestRenderDraftHtml:
         assert 'name="approve"' not in out
         assert "waiting for" in out
         assert "2026-09-11 09:00" in out
+
+    def test_approved_draft_notes_a_posting_pause(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", caption="Hi", state="approved"),
+            scheduling=True,
+            next_post="2026-09-11 09:00",
+            posting_paused=True,
+        )
+        assert "posting is paused" in out
+
+    def test_approve_note_notes_a_posting_pause(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", caption="Hi", state="ai_draft"),
+            scheduling=True,
+            next_post="2026-09-11 09:00",
+            posting_paused=True,
+        )
+        assert 'name="approve"' in out
+        assert "paused, so it sends when you resume" in out
 
     def test_review_list_has_post_approved_now_when_scheduling(self):
         out = render_drafts_html([], scheduling=True, generated_at=GENERATED)

@@ -12,7 +12,8 @@ import pathlib
 import re
 from html.parser import HTMLParser
 
-from social_bot import dashboard_html, draft_html, feed_html, styleframe, ui
+from social_bot import dashboard_html, draft_html, styleframe, ui
+from social_bot.destinations.facebook import feed_html
 from social_bot.drafts import STATES
 
 _CLASS_RE = re.compile(r'class="([^"]*)"')

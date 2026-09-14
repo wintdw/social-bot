@@ -57,15 +57,18 @@ exclusive.
    lands in the repo. Copy the template and fill it in:
    ```sh
    cp credentials.example.yaml credentials.yaml
-   # edit credentials.yaml:  graph:
-   #                           token: "EAA..."
+   # edit credentials.yaml:  destinations:
+   #                           facebook:
+   #                             token: "EAA..."
    ```
-   Alternatively export `SOCIAL_BOT_TOKEN='EAA...'` — the environment
-   variable overrides the file (handy for CI and Docker).
+   Alternatively export `SOCIAL_BOT_TOKEN='EAA...'` (or the destination-specific
+   `SOCIAL_BOT_FACEBOOK_TOKEN`) — the environment overrides the file (handy for
+   CI and Docker).
 4. Find your page id, then put it in `config.yaml`:
    ```sh
    .venv/bin/social-bot whoami        # lists "Name (id 123456...) "
-   # config.yaml:  graph.page_id: "123456"
+   .venv/bin/social-bot destinations  # which platforms are routed/configured
+   # config.yaml:  destinations.facebook.account_id: "123456"
    ```
 
 Local run:
@@ -85,31 +88,44 @@ python3 -m venv .venv
 ## Configuration (config.yaml)
 
 ```yaml
-graph:
-  base_url: https://graph.facebook.com   # override for tests/proxies
-  api_version: v26.0                     # pin the version; bump deliberately
-  timeout_seconds: 30.0
-  page_id: ""                            # set from `whoami`
+destinations:
+  facebook:
+    base_url: https://graph.facebook.com # override for tests/proxies
+    api_version: v26.0                   # pin the version; bump deliberately
+    timeout_seconds: 30.0
+    account_id: ""                       # the Page id, set from `whoami`
+  linkedin:                              # stubbed until the adapter is wired
+    base_url: https://api.linkedin.com
+    api_version: ""                      # LinkedIn-Version header
+    author_urn: ""                       # urn:li:organization:<id>
 feed:
   limit: 10                              # default posts shown by `feed`
   dir: data/feed                         # cache written by `refresh`, served by `serve`
 ```
 
-The access token is a secret and lives in `credentials.yaml` (git-ignored),
-never in `config.yaml`:
+`destinations` holds one connection block per platform; `publish.destinations`
+selects which of them a new draft is routed to. `social-bot destinations` prints
+each one's routed/configured state.
+
+The tokens are secrets and live in `credentials.yaml` (git-ignored), never in
+`config.yaml`:
 
 ```yaml
-graph:
-  token: "EAA..."                        # or export SOCIAL_BOT_TOKEN
+destinations:
+  facebook:
+    token: "EAA..."                      # or export SOCIAL_BOT_TOKEN
+  linkedin:
+    token: ""                            # unused until LinkedIn is implemented
 ```
 
-Resolution order: `--token` > `SOCIAL_BOT_TOKEN` > `credentials.yaml`. A
-`credentials.yaml` is read from next to whichever `config.yaml` is in use, so
+Resolution order, per destination: `--token` > `SOCIAL_BOT_<NAME>_TOKEN` >
+`SOCIAL_BOT_TOKEN` (global fallback) > `credentials.yaml`. A `credentials.yaml`
+is read from next to whichever `config.yaml` is in use, so
 `--config /path/to/config.yaml` looks for `/path/to/credentials.yaml`.
 
 Meta supports a rolling window of Graph API versions (current and two
-previous majors), so `graph.api_version` should be bumped consciously rather
-than left to rot.
+previous majors), so `destinations.facebook.api_version` should be bumped
+consciously rather than left to rot.
 
 ## Run with Docker (service mode)
 
@@ -181,8 +197,8 @@ docker compose run --rm social-bot post --photo https://example.com/pic.jpg
 ```
 
 `config.yaml` and `credentials.yaml` are mounted read-only, so the token never
-enters the image and `graph.page_id` edits need no rebuild. `SOCIAL_BOT_TOKEN`
-overrides the mounted credentials file when set.
+enters the image and `destinations.facebook.account_id` edits need no rebuild.
+`SOCIAL_BOT_TOKEN` overrides the mounted credentials file when set.
 
 ## Content pipeline (source feeds → human-approved posts)
 
@@ -254,10 +270,12 @@ not a dry run — it does create a post object, just an unpublished one.
 | `GET /api/status` | JSON: full pipeline snapshot — sources, drafts by state, seen, published, schedules, lifecycle. `publish.next_draft` names the oldest approved draft the poster will send next (`publish.approved` counts them, `publish.interval_remaining` is the days still to wait). |
 | `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `image_prompt`). |
 
-**LinkedIn** is wired as a destination adapter but not implemented — the
+**Destinations** are pluggable: each platform is a package under
+`src/social_bot/destinations/` and is registered in `destinations/registry.py`.
+LinkedIn is wired as a destination adapter but not implemented — the
 company-page path needs LinkedIn's Community Management API approval. Add a
-token and implement `LinkedInPublisher.publish` to switch it on; no pipeline
-changes required.
+token + `author_urn` and implement `LinkedInPublisher.publish` to switch it on;
+no pipeline, CLI, or UI changes required.
 
 ## Tests
 

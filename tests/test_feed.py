@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import datetime as dt
 
-from social_bot.feed import format_feed_md, parse_fb_datetime, parse_feed_response
+from social_bot.destinations.facebook.feed import (
+    format_feed_md,
+    parse_fb_datetime,
+    parse_feed_response,
+)
 
 SAMPLE = {
     "data": [

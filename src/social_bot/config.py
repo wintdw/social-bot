@@ -21,17 +21,29 @@ CONFIG_PATH = ROOT / "config.yaml"
 # /elsewhere/credentials.yaml. Template: credentials.example.yaml.
 CREDENTIALS_NAME = "credentials.yaml"
 
-# Token resolution order: --token flag > SOCIAL_BOT_TOKEN env > graph.token
+# Token resolution order (per destination): --token flag > SOCIAL_BOT_<NAME>_TOKEN
+# env > SOCIAL_BOT_TOKEN env (global fallback) > destinations.<name>.token
 # (which credentials.yaml populates).
 TOKEN_ENV = "SOCIAL_BOT_TOKEN"
 
 DEFAULTS: dict[str, Any] = {
-    "graph": {
-        "base_url": "https://graph.facebook.com",
-        "api_version": "v26.0",
-        "timeout_seconds": 30.0,
-        "page_id": "",
-        "token": "",  # populated by credentials.yaml (git-ignored), not config.yaml
+    # One block per destination the factory can publish to — connection settings
+    # only. `publish.destinations` below selects where new drafts are routed.
+    # Secrets (tokens) live in credentials.yaml, never in the committed config.
+    "destinations": {
+        "facebook": {
+            "base_url": "https://graph.facebook.com",
+            "api_version": "v26.0",
+            "timeout_seconds": 30.0,
+            "account_id": "",  # the Page id
+            "token": "",  # populated by credentials.yaml (git-ignored)
+        },
+        "linkedin": {
+            "base_url": "https://api.linkedin.com",
+            "api_version": "",  # LinkedIn-Version header, e.g. "202601"
+            "author_urn": "",  # urn:li:organization:<id>
+            "token": "",  # populated by credentials.yaml (git-ignored)
+        },
     },
     "feed": {
         "limit": 10,  # default number of feed posts shown by `feed`
@@ -167,15 +179,20 @@ def load_config(path: str | os.PathLike[str] | None = None) -> dict:
     return cfg
 
 
-def resolve_token(token: str | None, cfg: dict) -> str:
-    """The access token from --token, the environment, or the credentials file;
-    '' if absent."""
-    token = (
+def resolve_token(name: str, cfg: dict, token: str | None = None) -> str:
+    """The access token for a destination; '' if none is configured.
+
+    Order: an explicit token > ``SOCIAL_BOT_<NAME>_TOKEN`` > ``SOCIAL_BOT_TOKEN``
+    (global fallback) > ``destinations.<name>.token`` from credentials.yaml.
+    """
+    env_specific = os.environ.get(f"SOCIAL_BOT_{name.upper()}_TOKEN", "")
+    resolved = (
         token
+        or env_specific
         or os.environ.get(TOKEN_ENV, "")
-        or str(cfg.get("graph", {}).get("token", ""))
+        or str(cfg.get("destinations", {}).get(name, {}).get("token", ""))
     )
-    return token.strip()
+    return resolved.strip()
 
 
 def _hhmm_minutes(value: str, field: str) -> int:
@@ -191,13 +208,13 @@ def _hhmm_minutes(value: str, field: str) -> int:
 
 def validate(cfg: dict) -> None:
     """Raise ValueError on obviously unusable configuration."""
-    graph = cfg.get("graph", {})
-    if not str(graph.get("api_version", "")).startswith("v"):
-        raise ValueError("config: graph.api_version must look like 'v26.0'")
-    if not str(graph.get("base_url", "")).startswith("https://"):
-        raise ValueError("config: graph.base_url must be an https URL")
-    if graph.get("timeout_seconds", 30) <= 0:
-        raise ValueError("config: graph.timeout_seconds must be positive")
+    # Imported here (not at module scope) to avoid a config <-> destinations
+    # import cycle: the registry pulls in the platform packages, which import
+    # resolve_token from this module.
+    from .destinations import names as destination_names
+    from .destinations import validate_destinations
+
+    validate_destinations(cfg)
     if cfg.get("feed", {}).get("limit", 10) < 1:
         raise ValueError("config: feed.limit must be >= 1")
 
@@ -222,8 +239,9 @@ def validate(cfg: dict) -> None:
     destinations = publish.get("destinations")
     if not isinstance(destinations, list) or not destinations:
         raise ValueError("config: publish.destinations must be a non-empty list")
+    known = set(destination_names())
     for destination in destinations:
-        if destination not in ("facebook", "linkedin"):
+        if destination not in known:
             raise ValueError(f"config: unknown publish destination {destination!r}")
     if int(publish.get("post_per_slot", 1)) < 1:
         raise ValueError("config: publish.post_per_slot must be >= 1")

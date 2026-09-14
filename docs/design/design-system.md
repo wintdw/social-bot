@@ -22,8 +22,10 @@ Everything the browser gets comes from **`src/social_bot/ui.py`**:
 
 Page modules render **fragments only** and hand them to `layout()`:
 `dashboard_html.py` (Factory, Published, Status), `draft_html.py` (Review,
-Draft), `feed_html.py` (Feed). No page defines its own CSS, and no page writes
-an inline `style="…"` (a test enforces this).
+Draft), `destinations/facebook/feed_html.py` (Feed). No page defines its own CSS,
+and no page writes an inline `style="…"` (a test enforces this). Core page
+modules never import a platform module: the dashboard takes a pre-rendered
+`feed_section` from `web.py`, which builds it from the destination reader.
 
 **Rules for a new page or component**
 

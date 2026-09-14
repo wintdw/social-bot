@@ -166,8 +166,12 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 ### 4. Publish (`draft_pipeline.publish_draft`)
 - Triggered by `POST /review/{id}/publish` (the review page's **Post now**) or,
   for approved drafts, by the posting scheduler / `POST /publish/run` /
-  `blog publish`. Parsed in `web.py`. Validates `can_publish()`, then selects a
-  publisher per destination from `publishers.PUBLISHERS`.
+  `blog publish`. Parsed in `web.py`. Validates `can_publish()`, then resolves a
+  publisher per destination through `destinations.publisher_for` (the registry).
+- Each destination posts independently: one already posted publicly is skipped,
+  so a re-run after a partial failure only fills the gaps. The draft turns
+  `posted` only once every target has a public record; each result is stored
+  under `Draft.posts[destination]`.
 - `FacebookPublisher` posts `Draft.post_text` (**caption + hashtags**) — a photo
   post via `create_photo_post` when `image` is set, else a link post via
   `create_post`.
@@ -193,6 +197,13 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 - On demand: `POST /publish/run` (the dashboard/review "Post approved now"
   button, content-negotiated like `/scan`) and `social-bot blog publish
   [--limit N] [--dry-run]`.
+- The poster can be **paused** at runtime (`POST /publish/pause`, resumed with
+  `POST /publish/resume`; the dashboard shows one button or the other). A paused
+  loop still wakes at its slots but skips them — it consumes each slot's marker,
+  so resuming posts from the *next* slot rather than firing a backlog. The pause
+  is persisted (`data/state.json`) so a restart keeps the hold. Only the
+  scheduler is paused: "Post approved now", a draft's Post now, and
+  `blog publish` still send, because those are explicit human actions.
 - After a run that actually posted, `serve` also refreshes the feed cache
   (`refresh_feed`), so the new post shows on the dashboard immediately instead
   of waiting for the next `--refresh-at` slot. A run that posted nothing
@@ -239,7 +250,9 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | GET | `/api/status` | Full pipeline snapshot (JSON); `publish.next_draft` is the oldest approved draft the poster will send next. |
 | POST | `/refresh` | Refresh the feed now. |
 | POST | `/scan` | Scan sources now (JSON, or a 303 back to `/review` for browsers). |
-| POST | `/publish/run` | Drain the approved queue now (JSON, or a 303 back to `/review`). |
+| POST | `/publish/run` | Drain the approved queue now (JSON, or a 303 back to `/review`). Still works while paused. |
+| POST | `/publish/pause` | Pause the posting scheduler — it skips its slots until resumed (JSON, or a 303 back to `/`); persisted across restarts. |
+| POST | `/publish/resume` | Resume the posting scheduler (JSON, or a 303 back to `/`). |
 | POST | `/review/{id}/save` | Save the compose edits (caption, hashtags, image prompt); never posts. |
 | POST | `/review/{id}/publish` | Publish (form; `dry_run=1` to preview). With `approve=1` it saves the edits and queues the draft as `approved` instead of posting. |
 | POST | `/review/{id}/reject` | Reject. |
@@ -257,11 +270,14 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 `tests/test_source.py`. Fetching itself rarely changes — `source_api` returns
 text.
 
-**A new destination.** Add a class in `publishers.py` with `name`, `describe`,
-and `publish(draft) -> {destination, post_id, permalink}`, register it in
-`PUBLISHERS`, and add the name to the allowed set in `config.validate`.
-`LinkedInPublisher` is a stub showing the shape; company-page posting needs
-LinkedIn Community Management API approval.
+**A new destination.** Add a package under `src/social_bot/destinations/` with a
+`Publisher` subclass (`name`, `label`, `describe`, `publish -> PublishResult`),
+register it in `destinations/registry.py`, and add its
+`DEFAULTS["destinations"]["<name>"]` block + credentials entry.
+`config.validate` accepts any registered name. Its `posts[destination]` records
+and audit rows flow through unchanged. `linkedin/publisher.py` is a stub showing
+the shape; company-page posting needs LinkedIn Community Management API
+approval.
 
 **Changing the caption text.** The published text is `Draft.post_text`
 (caption + hashtags). Keep hashtags in the `hashtags` field, not the caption.

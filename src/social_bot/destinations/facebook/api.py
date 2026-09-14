@@ -16,7 +16,8 @@ import urllib.parse
 import urllib.request
 from typing import Any
 
-from .config import resolve_token
+from ...config import resolve_token
+from ..base import DestinationError
 
 UA = "social-bot/0.1 (Graph API client)"
 
@@ -30,7 +31,7 @@ FEED_FIELDS = (
 )
 
 
-class ApiError(Exception):
+class ApiError(DestinationError):
     """A Graph API error: HTTP failure or an FB error payload."""
 
     def __init__(
@@ -69,13 +70,13 @@ class ApiError(Exception):
 
 
 def api_from_config(cfg: dict, token: str | None = None) -> "GraphApi":
-    """Build a GraphApi from config, resolving the token (flag/env/credentials)."""
-    graph = cfg["graph"]
-    tok = resolve_token(token, cfg)
+    """Build a GraphApi from the facebook destination config, resolving the token."""
+    graph = cfg["destinations"]["facebook"]
+    tok = resolve_token("facebook", cfg, token)
     if not tok:
         raise ValueError(
             "no access token: set SOCIAL_BOT_TOKEN, pass --token, "
-            "or fill graph.token in credentials.yaml"
+            "or fill destinations.facebook.token in credentials.yaml"
         )
     return GraphApi(
         token=tok,

@@ -22,7 +22,12 @@ from social_bot.drafts import (
 
 
 def _draft(**kw):
-    base = {"id": "post-one", "source": "atento-blog", "url": "https://x/blog/post-one"}
+    base = {
+        "id": "post-one",
+        "source": "atento-blog",
+        "url": "https://x/blog/post-one",
+        "destinations": ["facebook"],
+    }
     base.update(kw)
     return Draft(**base)
 
@@ -53,7 +58,7 @@ class TestState:
     def test_cannot_approve_a_posted_draft(self):
         draft = _draft()
         draft.apply_rewrite(caption="c")
-        draft.mark_posted(post_id="1_2")
+        draft.mark_posted("facebook", post_id="1_2")
         with pytest.raises(ValueError):
             draft.approve()
 
@@ -65,11 +70,34 @@ class TestState:
     def test_mark_posted(self):
         draft = _draft()
         draft.apply_rewrite(caption="c")
-        draft.mark_posted(post_id="123_9", permalink="https://www.facebook.com/123_9")
+        draft.mark_posted(
+            "facebook", post_id="123_9", permalink="https://www.facebook.com/123_9"
+        )
         assert draft.state == POSTED
         assert draft.post_id == "123_9"
         assert draft.permalink.endswith("123_9")
         assert draft.posted_at
+        assert draft.posts["facebook"]["post_id"] == "123_9"
+
+    def test_per_destination_records(self):
+        draft = _draft(destinations=["facebook", "linkedin"])
+        draft.apply_rewrite(caption="c")
+        draft.mark_posted("facebook", post_id="1_2", permalink="u1")
+        assert draft.state == AI_DRAFT  # not fully posted until every target is done
+        assert draft.pending_destinations() == ["linkedin"]
+        draft.mark_posted("linkedin", post_id="li1", permalink="u2")
+        assert draft.state == POSTED
+        assert draft.posted_destinations() == ["facebook", "linkedin"]
+        assert draft.post_id == "1_2"  # facebook preferred for the flat accessor
+        assert draft.posts["linkedin"]["permalink"] == "u2"
+
+    def test_private_send_does_not_complete_the_draft(self):
+        draft = _draft()
+        draft.apply_rewrite(caption="c")
+        draft.mark_posted("facebook", post_id="1_2", private=True)
+        assert draft.state == AI_DRAFT
+        assert draft.post_id == ""  # private records are not "posted"
+        assert draft.pending_destinations() == ["facebook"]
 
     def test_reject(self):
         draft = _draft()
@@ -150,6 +178,22 @@ class TestPersistence:
     def test_from_dict_ignores_unknown_keys(self):
         draft = Draft.from_dict({"id": "x", "title": "t", "legacy": 1})
         assert draft.id == "x" and draft.title == "t"
+
+    def test_from_dict_migrates_legacy_flat_post_fields(self):
+        draft = Draft.from_dict(
+            {
+                "id": "x",
+                "destinations": ["facebook"],
+                "state": "posted",
+                "post_id": "1_2",
+                "permalink": "https://www.facebook.com/1_2",
+                "posted_at": "2026-09-10T12:00:00+07:00",
+            }
+        )
+        assert draft.posts["facebook"]["post_id"] == "1_2"
+        assert draft.post_id == "1_2"
+        assert draft.permalink == "https://www.facebook.com/1_2"
+        assert draft.state == POSTED
 
     def test_find(self):
         drafts = [_draft(), _draft(id="post-two")]

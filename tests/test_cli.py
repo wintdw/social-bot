@@ -14,7 +14,11 @@ PHOTO = "https://example.com/a.jpg"
 @pytest.fixture
 def stub_config(monkeypatch):
     """Bypass config loading so _cmd_post can be driven in isolation."""
-    monkeypatch.setattr(cli, "_load_config", lambda args: {"graph": {"page_id": "123"}})
+    monkeypatch.setattr(
+        cli,
+        "_load_config",
+        lambda args: {"destinations": {"facebook": {"account_id": "123"}}},
+    )
 
 
 class TestPostArgs:
@@ -90,7 +94,10 @@ class TestPostPrivateMode:
         monkeypatch.setattr(
             cli,
             "_load_config",
-            lambda args: {"graph": {"page_id": "123"}, "publish": {"private": True}},
+            lambda args: {
+                "destinations": {"facebook": {"account_id": "123"}},
+                "publish": {"private": True},
+            },
         )
 
     def test_dry_run_marks_the_post_unpublished(

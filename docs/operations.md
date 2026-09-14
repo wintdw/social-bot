@@ -11,10 +11,11 @@ python3 -m venv .venv
 cp credentials.example.yaml credentials.yaml   # put the Page token in it (git-ignored)
 ```
 
-Token resolution: `--token` > `SOCIAL_BOT_TOKEN` > `credentials.yaml`
-(`graph.token`). It is never in code or committed config. Config resolution:
-`config.yaml` at the project root (or `--config`), with a `credentials.yaml`
-next to it merged last.
+Token resolution, per destination: `--token` > `SOCIAL_BOT_<NAME>_TOKEN` >
+`SOCIAL_BOT_TOKEN` (global fallback) > `credentials.yaml`
+(`destinations.<name>.token`). It is never in code or committed config. Config
+resolution: `config.yaml` at the project root (or `--config`), with a
+`credentials.yaml` next to it merged last.
 
 ## Run locally
 
@@ -35,6 +36,11 @@ slot may also be a window `HH:MM-HH:MM`), `--boot-refresh`, `--boot-scan`. There
 is deliberately no `--boot-publish`: posting never starts on boot. A posting run
 that actually sent something also refreshes the feed cache, so the new post is
 on the dashboard without waiting for the next `--refresh-at`.
+
+Timed posting can be paused from the dashboard (**Pause posting**) or
+`POST /publish/pause`, and resumed the same way. The pause is persisted, so a
+redeploy keeps the hold; it only stops the *scheduler* — **Post approved now**
+and `blog publish` still send.
 
 ## Deploy (Docker)
 
@@ -69,7 +75,9 @@ curl -s  https://<host>/health              # liveness + last run info
 curl -s  https://<host>/live                # liveness probe (never touches state)
 curl -s -o /dev/null -w '%{http_code}\n' https://<host>/ready   # readiness probe
 curl -X POST https://<host>/scan            # scan sources now
-curl -X POST https://<host>/publish/run     # post the approved queue now
+curl -X POST https://<host>/publish/run     # post the approved queue now (even while paused)
+curl -X POST https://<host>/publish/pause   # pause the posting scheduler (persisted)
+curl -X POST https://<host>/publish/resume  # resume it
 curl -s  https://<host>/api/drafts          # open drafts (paged; ?limit=&offset=)
 ```
 
@@ -94,7 +102,7 @@ above that window so a slow post is not killed mid-flight.
 | `data/review/queue.json` | The review queue. |
 | `data/review/seen.json` | Dedupe ledger (`source:slug`). |
 | `data/publish/published.jsonl` | Publish audit log. |
-| `data/state.json` | Last refresh/scan run (so the dashboard survives a restart). |
+| `data/state.json` | Last refresh/scan run and whether posting is paused (so the dashboard and the pause survive a restart). |
 
 Ownership: the container writes as **uid 1000** by default — the same as a
 typical host user — so `./data` needs no chown and the CLI run as your host user
@@ -111,7 +119,7 @@ same id.
 | `/api/status` 404 | Old image — rebuild (`docker compose up -d --build`). |
 | OAuth error on post | The Page token expired — check `/status` (validity + expiry), mint a fresh one, update `credentials.yaml`, `whoami` to verify. |
 | Approved but nothing shows on the Page | First, the posting schedule: an `approved` draft waits for the next `publish.post_at` slot. Drain it now with **Post approved now** / `POST /publish/run` / `blog publish`, or check `publish.private: true` — a private post is unpublished (page admins only) and stays in the queue. Set `private: false` to post publicly. |
-| Approved drafts never post on schedule | `publish.post_at` is empty (timed posting off), `publish.enabled: false`, or `publish.interval_days` hasn't elapsed (a `2` means it skips until two days after the last public post). The dashboard **Next post** card and the `/status` **Post schedule** line both name the draft (`publish.next_draft`; `publish.interval_remaining` counts the days still to wait), and the **Next post** card's time is the first slot that can actually send — so `in 1 day(s)` means today's wake will be skipped, not that it posts later today. |
+| Approved drafts never post on schedule | The poster is **paused** (dashboard **Pause posting** / `POST /publish/pause`; the **Post schedule** row reads `paused` and **Next post** shows `—`), `publish.post_at` is empty (timed posting off), `publish.enabled: false`, or `publish.interval_days` hasn't elapsed (a `2` means it skips until two days after the last public post). The dashboard **Next post** card and the `/status` **Post schedule** line both name the draft (`publish.next_draft`; `publish.interval_remaining` counts the days still to wait), and the **Next post** card's time is the first slot that can actually send — so `in 1 day(s)` means today's wake will be skipped, not that it posts later today. |
 | Hashtags missing from a post | Ensure the image includes the `Draft.post_text` fix (rebuild). Hashtags are appended to the caption at publish time. |
 | Draft stuck `extracted` | No rewrite yet — the external agent must `POST /api/drafts/{id}/rewrite`. |
 | Draft has no image after a rewrite | `serve` generates it in the background; a restart (or a provider 5xx) can leave it empty. Check the **Image jobs** section on `/status` (or the dashboard, or `GET /api/status` → `images`), then run `social-bot blog image` or the **Generate image** button on `/review/{id}`. |
@@ -133,6 +141,10 @@ or a shared-secret middleware you add in `web.py`).
   `publish.post_at: []` disables timed posting.
 - `publish.enabled: false` disables publishing; `publish.interval_days`
   enforces a minimum gap between public posts (`1` = at most one per day).
+- Posting can be **paused** without changing config: **Pause posting** on the
+  dashboard / `POST /publish/pause` (resume with `POST /publish/resume`). It stops
+  only the scheduler — an explicit **Post approved now** / `blog publish` still
+  sends, and the pause persists across restarts (it lives in `data/state.json`).
 - `publish.private: true` sends every post **unpublished** (page admins only).
   It is a real Graph write, not a dry run — but it never goes public, it leaves
   the draft in the queue, and it doesn't count toward `interval_days`. This is

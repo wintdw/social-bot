@@ -385,19 +385,19 @@ details.dna summary { cursor: pointer; font-size: .85rem; font-weight: 650; }
 details.dna pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem;
         overflow: auto; margin: .6rem 0 0; font-size: .78rem; line-height: 1.55;
         color: var(--fg); }
-.fb-preview { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
+.post-preview { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
               background: var(--surface); }
-.fb-preview .head { display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem; }
-.fb-preview .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent);
+.post-preview .head { display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem; }
+.post-preview .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--accent);
               color: var(--accent-fg); display: grid; place-items: center; font-weight: 800;
               flex: 0 0 auto; }
-.fb-preview .meta { display: grid; gap: .15rem; }
-.fb-preview .name { font-weight: 700; }
-.fb-preview .when { color: var(--muted); font-size: .8rem; }
-.fb-preview .body { padding: 0 1rem .5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-.fb-preview .tags { padding: .5rem 1rem .75rem; color: var(--accent); overflow-wrap: anywhere;
+.post-preview .meta { display: grid; gap: .15rem; }
+.post-preview .name { font-weight: 700; }
+.post-preview .when { color: var(--muted); font-size: .8rem; }
+.post-preview .body { padding: 0 1rem .5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.post-preview .tags { padding: .5rem 1rem .75rem; color: var(--accent); overflow-wrap: anywhere;
               border-top: 1px solid var(--border); font-size: .85rem; font-weight: 600; }
-.fb-preview .media { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block;
+.post-preview .media { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block;
               border-top: 1px solid var(--border); }
 .action-bar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap;
               gap: .5rem; align-items: center; margin-top: 1.5rem; padding: .8rem .2rem;

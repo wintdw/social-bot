@@ -18,9 +18,9 @@ from __future__ import annotations
 import datetime as dt
 import html
 
-from .caption import leading_masthead, split_title
+from ...caption import leading_masthead, split_title
+from ...ui import layout
 from .feed import FeedItem
-from .ui import layout
 
 
 def _render_created(created: dt.datetime | None) -> str:
