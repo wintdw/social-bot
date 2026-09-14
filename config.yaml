@@ -104,6 +104,11 @@ publish:
       - "[Mỗi ngày 1 kiến thức mới]"   # một mẩu kiến thức ngắn, một ý
     default: "[Đọc báo cùng Atento]"
   dna_file: docs/atento-dna.md  # Atento brand-voice brief; surfaced via GET /api/drafts
+  # How many recently-written captions to give the rewriter with the open drafts
+  # (GET /api/drafts `recent`) so it doesn't reopen the same way twice — and the
+  # same set the pipeline lints a new caption against (the tells shown on
+  # /review/{id}). 0 turns both off.
+  recent_captions: 12
   dir: data/publish           # publish audit log (/publish)
   log_name: published.jsonl   # append-only publish audit
 
@@ -140,7 +145,18 @@ image_gen:
   enabled: true
   provider: pollinations
   base_url: https://gen.pollinations.ai/image
-  style_file: docs/atento-image-style.md  # brand look; prepended to every prompt
+  style_file: docs/atento-image-style.md  # shared palette/finish floor; prepended to every prompt
+  # Visual treatments, chosen per post by the rewriter like the masthead (DNA
+  # §9.2). Each key names a file under docs/image-styles/ whose text is appended
+  # to the shared palette brief (style_file). `default_style` is the fallback
+  # when the rewriter omits a key. Clear `styles` to fall back to the single
+  # style_file look.
+  styles:
+    technical: docs/image-styles/technical.md   # System Design / Architecture, nền tảng
+    editorial: docs/image-styles/editorial.md   # nền tảng/nghề/mindset chung (mặc định)
+    sketch: docs/image-styles/sketch.md         # essay cá nhân / ý kiến
+    bulletin: docs/image-styles/bulletin.md     # thông báo, sự kiện, tin tức
+  default_style: editorial
   overwrite: false            # only fill drafts with no image; keep covers
   # Provider-qualified model on the gen.pollinations.ai gateway. gpt-image-1-mini
   # follows the style brief's "no text / no people" negatives far better than

@@ -1,5 +1,8 @@
-Brand look for Atento images: palette, mood and finish only. The subject (given
-per image) decides the composition — vary it, don't reuse one layout.
+Shared brand floor for Atento images: palette, mood and finish only. It is
+prepended to every prompt. The subject comes from the post's `image_prompt`, and
+the *treatment* (medium and composition family) comes from the post's chosen
+style file — see `docs/image-styles/`. The floor deliberately prescribes no
+composition of its own: the treatment decides how the idea is drawn.
 
 Palette: warm off-white paper background with charcoal, deep navy, muted green
 and subtle earthy accents. Low saturation, timeless. No neon, no glowing
@@ -10,9 +13,8 @@ intellectual and restrained. Structure over chaos, clarity emerging from
 complexity. Soft directional light, generous negative space, quiet and
 contemplative.
 
-Vary the composition from image to image: sometimes one centred object,
-sometimes a wide low layout, sometimes a repeating rhythm, sometimes a single
-line drawing. Do not render a literal architectural block model every time.
+Whichever treatment applies, vary the composition from image to image rather
+than repeating one layout.
 
 Avoid literal UI screenshots, cloud-and-arrow flowcharts and stock icon sets.
 Avoid robots, humanoid AI, glowing brains, holographic screens, circuit-board

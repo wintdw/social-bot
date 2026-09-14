@@ -14,8 +14,11 @@ your task.
   The generated visual preview is `design/styleframe.html`.
 - **[atento-dna.md](atento-dna.md)** — the Atento brand-voice playbook the
   rewriter agent applies (referenced by `publish.dna_file`).
-- **[atento-image-style.md](atento-image-style.md)** — the short visual brief
-  prepended to every generated image prompt (`image_gen.style_file`).
+- **[atento-image-style.md](atento-image-style.md)** — the shared palette/finish
+  floor prepended to every generated image prompt (`image_gen.style_file`). The
+  per-post **treatments** it composes with live in
+  **[image-styles/](image-styles/)** (`image_gen.styles`, chosen by the rewriter
+  like the masthead, DNA §9.2).
 
 `AGENTS.md` (repo root) is the short brief; these docs are the detail.
 
@@ -29,8 +32,9 @@ your task.
 | Change how a source is fetched (HTTP/retries) | `src/social_bot/source_api.py` |
 | Change the Draft model, states, or persistence | `src/social_bot/drafts.py`, `tests/test_drafts.py` |
 | Change scan / rewrite / publish orchestration | `src/social_bot/draft_pipeline.py`, `tests/test_draft_pipeline.py` |
+| Change the AI-tell checks shown on /review (advisory lint) | `src/social_bot/caption_lint.py`, `tests/test_caption_lint.py` |
 | Change AI image generation (prompt, endpoint, provider) | `src/social_bot/image_gen.py`, `tests/test_image_gen.py` |
-| Change the image look / brand style | `docs/atento-image-style.md`, then `image_gen.style_file` in `config.yaml` |
+| Change the image look / brand style | `docs/atento-image-style.md` (shared floor) + `docs/image-styles/*.md` (per-post treatments), then `image_gen.style_file` / `image_gen.styles` in `config.yaml` |
 | Add a social destination (LinkedIn, …) | new package under `src/social_bot/destinations/`, register it in `destinations/registry.py`, then `tests/test_destinations.py` / `tests/test_publishers.py` |
 | Change one platform's publishing / transport / feed | `src/social_bot/destinations/<name>/` (facebook: `api.py`, `publisher.py`, `reader.py`, `feed.py`, `feed_html.py`) |
 | Change the review UI (HTML) | `src/social_bot/draft_html.py`, `tests/test_draft_html.py` |

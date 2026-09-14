@@ -339,10 +339,21 @@ _DETAIL = Draft(
         "a funnel splitting small parcels onto three conveyor belts of different widths, "
         "only the heaviest parcel reaching the widest belt"
     ),
+    image_style="technical",
     commentary=(
         "Register technical (giọng Dũng), format D (đám đông rồi lật), drama vừa. Có nêu trade-off "
         "under/over-routing để không hype con số 10x."
     ),
+    lint=[
+        {
+            "code": "antithesis",
+            "message": "Câu đối lập “không phải X mà là Y” xuất hiện nhiều lần — giữ lại một lần cho đắt.",
+        },
+        {
+            "code": "repeated-closer",
+            "message": "Câu chốt trùng với một caption gần đây: “Routing tốt không phải chọn model mạnh nhất.” Đổi câu kết.",
+        },
+    ],
     created_at="2026-09-10T07:28:25+00:00",
     updated_at="2026-09-10T10:00:00+00:00",
 )
@@ -406,6 +417,8 @@ def render_pages() -> list[tuple[str, str]]:
                 dna=_DNA,
                 image_enabled=True,
                 image_status={"status": "ok"},
+                image_styles=["technical", "editorial", "sketch", "bulletin"],
+                default_image_style="editorial",
                 next_id="do-you-even-need-a-presentation",
                 scheduling=True,
                 next_post="2026-09-10 19:51",

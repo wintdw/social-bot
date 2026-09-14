@@ -64,9 +64,21 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 
 ### 2. Rewrite (`draft_pipeline.receive_rewrite`)
 - The agent calls `GET /api/drafts` (open drafts + `publish.dna_file` contents
-  as `dna`; paged — pass `limit`/`offset` and follow `next_offset`) and
+  as `dna` + the most recently written captions as `recent`; paged — pass
+  `limit`/`offset` and follow `next_offset`) and
   `POST /api/drafts/{id}/rewrite` with
-  `{caption, hashtags, cta, commentary, image_prompt}`.
+  `{caption, hashtags, cta, commentary, image_prompt, image_style}`.
+- `recent` (capped by `publish.recent_captions`, 0 = off) exists so the rewriter
+  can see what it just wrote and not reopen the same way twice — the "mọi bài
+  một màu" failure is invisible in one draft and obvious across several (DNA §12).
+- **The caption is linted, advisory only** (`caption_lint.lint_caption`, alongside
+  `receive_rewrite`/`edit_draft`). It names the AI-writing tells — a repeated
+  hook/closer versus `recent`, a stock opener, the "không phải X mà là Y" engine,
+  a flat sentence rhythm, the rule of three ("nhanh, gọn, chính xác"), a cliché
+  transition, empty hype — and stores them on the draft (`lint`), shown on
+  `/review/{id}` and returned in the rewrite response. It **never edits the
+  caption and never blocks** a rewrite or a post: rule-based auto-"humanizing"
+  just swaps one tell for another. The fixes belong in `docs/atento-dna.md` §12.
 - Stored via `Draft.apply_rewrite`; the draft becomes `ai_draft`.
 - `publish.mastheads` (config.yaml) sets the series masthead on line 1 of every
   caption. The label is a **content judgment, not a source default**: the
@@ -75,6 +87,18 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   `mastheads.default` is only the fallback the pipeline prepends when the
   rewriter omits one. It lands in `caption`, so the review preview, the
   character count, and the posted text all include it.
+- `image_gen.styles` (config.yaml) is the same pattern for the image's **visual
+  treatment**: a menu of `key → docs/image-styles/<key>.md`, of which the
+  rewriter picks one per post by content and tone (DNA §9.2). The key is stored
+  on the draft as `image_style`; `image_gen.default_style` is the fallback when
+  the rewriter omits one. The chosen treatment is appended to the shared
+  `style_file` floor at prompt time (`draft_pipeline.image_style_text`), so the
+  palette stays constant while the medium and composition vary per post. A valid
+  key is kept, an unknown one falls back to the default — and it is
+  **overridable on `/review/{id}`** before regenerating, where the select's hint
+  is each style file's own opening paragraph (`draft_pipeline.image_style_hints`)
+  so the operator reads the same "when to use" guidance as the docs. Clearing
+  `styles` restores the single `style_file` look.
 - A Facebook post has no title field, so a post's title can only be the caption's
   leading line — the **hook under the series masthead** (the masthead is a
   standing label, not a title). `caption.split_title` promotes that line for
@@ -94,8 +118,9 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   `POST /api/drafts/{id}/image`. The rewriter supplies `image_prompt` — a
   concrete English visual concept for that post — and that is what gets
   illustrated. It is also the image's alt text (there is no separate Vietnamese
-  alt), and it is **editable on `/review/{id}`** (saved with the caption); edit
-  it before hitting **Regenerate image**. The button only appears when
+  alt), and it is **editable on `/review/{id}`** (saved with the caption), as is
+  the draft's `image_style` treatment; edit both before hitting **Regenerate
+  image**. The button only appears when
   `image_gen.enabled` is true.
 - The review/API paths run synchronously (the request waits for the provider,
   which can take minutes with `gpt-image` models); `blog image` batches.
@@ -125,9 +150,10 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   API. To deliberately replace one, opt in: `blog image --overwrite`,
   `POST /api/drafts/{id}/image?overwrite=true`, the **Regenerate image** button
   on `/review/{id}`, or `image_gen.overwrite: true` in config.
-- The prompt (`image_gen.build_prompt`) is the `image_gen.style_file` brand
-  look (palette/mood only) + `image_prompt` (subject + composition) + hard
-  negatives (no people, no text). `image_gen.base_url` selects the endpoint
+- The prompt (`image_gen.build_prompt`) is the `image_gen.style_file` shared
+  brand floor (palette/mood only) + the draft's chosen `image_style` treatment
+  (medium/composition — `docs/image-styles/<key>.md`) + `image_prompt` (subject)
+  + hard negatives (no people, no text). `image_gen.base_url` selects the endpoint
   (`gen.pollinations.ai/image` — clean output, needs `api_key`;
   `image.pollinations.ai/prompt` — keyless but watermarked and `sana`-only).
 - A failure is recorded in the summary `errors` and the draft keeps its
@@ -257,7 +283,7 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | POST | `/review/{id}/publish` | Publish (form; `dry_run=1` to preview). With `approve=1` it saves the edits and queues the draft as `approved` instead of posting. |
 | POST | `/review/{id}/reject` | Reject. |
 | POST | `/review/{id}/image` | Generate/regenerate a draft's image (form; redirects back). |
-| GET | `/api/drafts` | Open drafts + DNA, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
+| GET | `/api/drafts` | Open drafts + DNA + `recent` captions, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
 | POST | `/api/drafts/{id}/rewrite` | Store the rewrite. |
 | POST | `/api/drafts/{id}/image` | Generate an image for one draft (JSON), for the rewriter/operator. |
 
@@ -287,9 +313,13 @@ The series masthead is `publish.mastheads` (clear `choices` to disable).
 reads) and keep `publish.dna_file` pointed at it; the contents ride along in
 `GET /api/drafts`.
 
-**Changing the image look.** Edit `docs/atento-image-style.md` (the visual brief
-prepended to every image prompt) and keep `image_gen.style_file` pointed at it.
-Swap the image endpoint/provider with `image_gen.base_url` + `image_gen.model`.
+**Changing the image look.** Edit `docs/atento-image-style.md` (the shared
+palette/finish floor prepended to every image prompt) and keep
+`image_gen.style_file` pointed at it. The per-post **treatment** menu is
+`image_gen.styles` → `docs/image-styles/<key>.md` with `image_gen.default_style`;
+add, edit, or remove a treatment there (the DNA §9.2 table documents the menu for
+the rewriter). Swap the image endpoint/provider with `image_gen.base_url` +
+`image_gen.model`.
 
 **Changing what a draft stores.** Edit the `Draft` dataclass in `drafts.py`;
 `from_dict` ignores unknown keys, so old `queue.json` files still load.

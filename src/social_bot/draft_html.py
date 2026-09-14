@@ -90,6 +90,15 @@ _DETAIL_SCRIPT = """<script>
       event.preventDefault();
     }
   });
+  // Swap the style guidance as the treatment changes; the server renders the
+  // selected hint, so this only keeps it in step without a reload.
+  var styleSel = document.getElementById('image_style');
+  var styleHint = document.getElementById('image_style_hint');
+  if (styleSel && styleHint) styleSel.addEventListener('change', function () {
+    var option = styleSel.options[styleSel.selectedIndex];
+    var hint = option && option.getAttribute('data-hint');
+    if (hint) styleHint.textContent = hint;
+  });
 })();
 </script>"""
 
@@ -414,6 +423,25 @@ def render_drafts_html(
     )
 
 
+def _lint_notice(draft: Draft) -> str:
+    """The advisory AI-tell warnings on a rewritten caption ('' when clean).
+
+    Lint is advice, never a gate: it never blocks an approval or a post, so it
+    renders as a warning notice above the caption the reviewer is about to edit.
+    """
+    if not draft.lint:
+        return ""
+    items = "".join(
+        f'<li>{html.escape(str(warning.get("message", "")))}</li>'
+        for warning in draft.lint
+    )
+    return (
+        '<div class="notice notice-warn">'
+        "<strong>AI tells to check</strong>"
+        f'<ul class="lint-list">{items}</ul></div>'
+    )
+
+
 def _stepper(draft: Draft) -> str:
     """The draft's position in the pipeline: extracted -> ai_draft -> approved -> posted."""
     order = [key for key, _ in _PIPELINE_STEPS]
@@ -452,6 +480,9 @@ def render_draft_html(
     private: bool = False,
     image_enabled: bool = False,
     image_status: dict | None = None,
+    image_styles: list[str] | None = None,
+    default_image_style: str = "",
+    image_style_hints: dict[str, str] | None = None,
     generated_at: dt.datetime | None = None,
     next_id: str | None = None,
     scheduling: bool = False,
@@ -520,6 +551,35 @@ def render_draft_html(
     prompt = html.escape(draft.image_prompt or "")
     action = html.escape(f"/review/{draft.id}")
 
+    # The visual treatment menu (image_gen.styles): the rewriter picks one per
+    # post like the masthead; an operator can override before regenerating. The
+    # hint under it is the chosen style file's own guidance, so the page says
+    # what each treatment is for instead of keeping a second copy of the docs.
+    style_field = ""
+    if image_styles:
+        hints = image_style_hints or {}
+        chosen = (
+            draft.image_style
+            if draft.image_style in image_styles
+            else (default_image_style or "")
+        )
+        options = "".join(
+            f'<option value="{html.escape(key)}"{" selected" if key == chosen else ""}'
+            f' data-hint="{html.escape(hints.get(key, ""))}">{html.escape(key)}</option>'
+            for key in image_styles
+        )
+        hint = hints.get(chosen) or (
+            "Visual treatment for the generated image, chosen per post by the "
+            "rewriter. Override it before regenerating."
+        )
+        style_field = (
+            '<div class="field"><label for="image_style">Image style</label>'
+            '<select id="image_style" name="image_style" '
+            f'aria-describedby="image_style_hint">{options}</select>'
+            f'<div class="field-hint" id="image_style_hint">{html.escape(hint)}</div>'
+            "</div>"
+        )
+
     form = (
         f'<form id="publish-form" class="form-block" method="post" action="{action}/publish"'
         f' data-private="{"true" if private else "false"}">'
@@ -537,6 +597,7 @@ def render_draft_html(
         '<div class="field-hint">Subject and composition for the generated image — '
         "also the image's alt text. Falls back to the source title when blank."
         "</div></div>"
+        f"{style_field}"
         "</form>"
     )
 
@@ -550,7 +611,7 @@ def render_draft_html(
         '<section class="panel">'
         '<div class="panel-head"><span class="label">Compose</span>'
         f"{masthead_pill}</div>"
-        f'<div class="composer">{image_note}{form}</div></section>'
+        f'<div class="composer">{_lint_notice(draft)}{image_note}{form}</div></section>'
     )
 
     preview_media = ""

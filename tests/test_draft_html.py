@@ -300,6 +300,58 @@ class TestRenderDraftHtml:
         out = render_draft_html(draft)
         assert 'onfocus="alert(1)"' not in out
 
+    def test_image_style_select_lists_options_and_selects_the_draft(self):
+        draft = Draft(id="p", title="T", image="https://img/x.jpg", image_style="sketch")
+        out = render_draft_html(
+            draft, image_styles=["technical", "sketch"], default_image_style="technical"
+        )
+        assert 'id="image_style"' in out and 'name="image_style"' in out
+        assert '<option value="technical" data-hint="">technical</option>' in out
+        assert '<option value="sketch" selected data-hint="">sketch</option>' in out
+
+    def test_image_style_marks_the_default_when_the_draft_has_none(self):
+        out = render_draft_html(
+            Draft(id="p", title="T"),
+            image_styles=["technical", "editorial"],
+            default_image_style="editorial",
+        )
+        assert '<option value="editorial" selected data-hint="">editorial</option>' in out
+
+    def test_style_hint_shows_the_selected_treatments_guidance(self):
+        draft = Draft(id="p", title="T", image_style="sketch")
+        out = render_draft_html(
+            draft,
+            image_styles=["technical", "sketch"],
+            default_image_style="technical",
+            image_style_hints={"sketch": "Loose ink for opinion."},
+        )
+        assert 'data-hint="Loose ink for opinion."' in out
+        assert (
+            '<div class="field-hint" id="image_style_hint">Loose ink for opinion.</div>'
+            in out
+        )
+
+    def test_style_hint_falls_back_to_the_generic_line(self):
+        out = render_draft_html(
+            Draft(id="p", title="T"),
+            image_styles=["technical"],
+            default_image_style="technical",
+        )
+        assert "chosen per post by the rewriter" in out
+
+    def test_style_hint_is_escaped(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", image_style="sketch"),
+            image_styles=["sketch"],
+            default_image_style="sketch",
+            image_style_hints={"sketch": '<script>alert(1)</script>'},
+        )
+        assert "<script>alert(1)</script>" not in out
+
+    def test_no_image_style_field_without_a_menu(self):
+        out = render_draft_html(Draft(id="p", title="T"))
+        assert 'name="image_style"' not in out
+
     def test_detail_titles_the_hook_and_keeps_the_source_title_in_the_rail(self):
         draft = Draft(
             id="p",
@@ -500,6 +552,27 @@ class TestRenderDraftHtml:
     def test_review_list_hides_post_approved_now_by_default(self):
         out = render_drafts_html([], generated_at=GENERATED)
         assert 'action="/publish/run"' not in out
+
+
+class TestDraftLint:
+    def test_renders_the_warnings(self):
+        draft = Draft(
+            id="p",
+            caption="[Học cùng Atento]\n\nMột caption.",
+            lint=[{"code": "hype", "message": "Tránh hype rỗng: “cách mạng”."}],
+        )
+        out = render_draft_html(draft, generated_at=GENERATED)
+        assert "AI tells to check" in out
+        assert "Tránh hype rỗng" in out
+
+    def test_no_panel_without_warnings(self):
+        out = render_draft_html(Draft(id="p", caption="Một caption."), generated_at=GENERATED)
+        assert "AI tells to check" not in out
+
+    def test_message_is_escaped(self):
+        draft = Draft(id="p", caption="x", lint=[{"code": "hype", "message": "<b>boom</b>"}])
+        out = render_draft_html(draft, generated_at=GENERATED)
+        assert "&lt;b&gt;boom&lt;/b&gt;" in out
 
 
 class TestMessageHtml:

@@ -36,12 +36,16 @@ class TestState:
     def test_apply_rewrite_moves_to_ai_draft(self):
         draft = _draft()
         draft.apply_rewrite(
-            caption="Hello", hashtags=["#a", "#b"], image_prompt="a long ledger"
+            caption="Hello",
+            hashtags=["#a", "#b"],
+            image_prompt="a long ledger",
+            image_style="sketch",
         )
         assert draft.state == AI_DRAFT
         assert draft.caption == "Hello"
         assert draft.hashtags == ["#a", "#b"]
         assert draft.image_prompt == "a long ledger"
+        assert draft.image_style == "sketch"
         assert draft.updated_at  # touched
 
     def test_cannot_approve_from_extracted(self):
@@ -178,6 +182,11 @@ class TestPersistence:
     def test_from_dict_ignores_unknown_keys(self):
         draft = Draft.from_dict({"id": "x", "title": "t", "legacy": 1})
         assert draft.id == "x" and draft.title == "t"
+
+    def test_lint_defaults_to_empty_and_round_trips(self):
+        assert Draft(id="x").lint == []
+        draft = Draft(id="x", lint=[{"code": "hype", "message": "m"}])
+        assert Draft.from_dict(draft.to_dict()).lint == [{"code": "hype", "message": "m"}]
 
     def test_from_dict_migrates_legacy_flat_post_fields(self):
         draft = Draft.from_dict(

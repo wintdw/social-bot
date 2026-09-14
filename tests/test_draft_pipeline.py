@@ -113,6 +113,20 @@ def _set_mastheads(cfg, *, choices=(HOC, DOC_BAO, MOI_NGAY), default=DOC_BAO):
     return cfg
 
 
+def _set_styles(cfg, *, styles=None, default="editorial"):
+    """Configure the image_gen.styles menu on a test config."""
+    cfg["image_gen"] = {
+        **DEFAULTS["image_gen"],
+        "styles": (
+            styles
+            if styles is not None
+            else {"technical": "technical.md", "editorial": "editorial.md", "sketch": "sketch.md"}
+        ),
+        "default_style": default,
+    }
+    return cfg
+
+
 class TestScanSources:
     def test_adds_new_drafts_then_dedupes(self, tmp_path):
         cfg = _cfg(tmp_path)
@@ -345,6 +359,39 @@ class TestRewriteIntake:
         draft = pipeline.edit_draft(cfg, "post-one", caption="edited")
         assert draft.image_prompt == "a lone tree"
 
+    def test_receive_rewrite_keeps_a_valid_image_style(self, tmp_path):
+        cfg = _set_styles(_seed_draft(tmp_path))
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "c", "image_style": "technical"}
+        )
+        assert draft.image_style == "technical"
+
+    def test_receive_rewrite_falls_back_on_an_unknown_image_style(self, tmp_path):
+        cfg = _set_styles(_seed_draft(tmp_path))
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "c", "image_style": "nonsense"}
+        )
+        assert draft.image_style == "editorial"
+
+    def test_receive_rewrite_drops_the_style_when_no_menu_is_configured(self, tmp_path):
+        cfg = _seed_draft(tmp_path)  # DEFAULTS: no styles configured
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "c", "image_style": "technical"}
+        )
+        assert draft.image_style == ""
+
+    def test_edit_sets_the_image_style(self, tmp_path):
+        cfg = _set_styles(_seed_draft(tmp_path))
+        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c"})
+        draft = pipeline.edit_draft(cfg, "post-one", image_style="sketch")
+        assert draft.image_style == "sketch"
+
+    def test_edit_leaves_the_image_style_when_omitted(self, tmp_path):
+        cfg = _set_styles(_seed_draft(tmp_path))
+        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "image_style": "sketch"})
+        draft = pipeline.edit_draft(cfg, "post-one", caption="edited")
+        assert draft.image_style == "sketch"
+
     def test_reject(self, tmp_path):
         cfg = _seed_draft(tmp_path)
         assert pipeline.reject_draft(cfg, "post-one").state == REJECTED
@@ -352,6 +399,81 @@ class TestRewriteIntake:
     def test_unknown_draft_raises(self, tmp_path):
         with pytest.raises(ValueError):
             pipeline.receive_rewrite(_cfg(tmp_path), "nope", {"caption": "x"})
+
+
+class TestRecentCaptions:
+    def _seed(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg),
+            [
+                Draft(id="old", state=AI_DRAFT, caption="Cũ", updated_at="2026-09-01T00:00:00+00:00"),
+                Draft(id="new", state=AI_DRAFT, caption="Mới", updated_at="2026-09-09T00:00:00+00:00"),
+                Draft(id="none", state=EXTRACTED),
+            ],
+        )
+        return cfg
+
+    def test_written_captions_newest_first(self, tmp_path):
+        cfg = self._seed(tmp_path)
+        assert [d.id for d in pipeline.recent_captions(cfg)] == ["new", "old"]
+
+    def test_excludes_a_draft_and_respects_the_cap(self, tmp_path):
+        cfg = self._seed(tmp_path)
+        assert [d.id for d in pipeline.recent_captions(cfg, exclude_id="new")] == ["old"]
+        assert [d.id for d in pipeline.recent_captions(cfg, limit=1)] == ["new"]
+
+    def test_zero_disables_it(self, tmp_path):
+        cfg = self._seed(tmp_path)
+        cfg["publish"]["recent_captions"] = 0
+        assert pipeline.recent_captions(cfg) == []
+
+
+class TestRewriteLint:
+    def test_stores_lint_on_the_draft(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "Đây là một cuộc cách mạng."}
+        )
+        assert [w["code"] for w in draft.lint] == ["hype"]
+        # The warnings round-trip through the queue, so /review/{id} can show them.
+        assert pipeline.get_draft(cfg, "post-one").lint
+
+    def test_clean_caption_has_no_warnings(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        draft = pipeline.receive_rewrite(
+            cfg,
+            "post-one",
+            {"caption": "Cuộc họp vừa bắt đầu.\n\nMột câu dài hơn hẳn ở đây để nhịp không đều chút nào."},
+        )
+        assert draft.lint == []
+
+    def test_flags_a_repeated_hook_against_recent_captions(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg),
+            [
+                Draft(
+                    id="prior",
+                    state=AI_DRAFT,
+                    caption="Cuộc họp vừa bắt đầu.\n\nThân bài khác hẳn.",
+                    updated_at="2026-09-09T00:00:00+00:00",
+                ),
+                Draft(id="post-one", state=EXTRACTED, destinations=["facebook"]),
+            ],
+        )
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "Cuộc họp vừa bắt đầu.\n\nMột thân bài hoàn toàn mới."}
+        )
+        assert "repeated-hook" in [w["code"] for w in draft.lint]
+
+    def test_edit_re_lints_the_caption(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "Một câu sạch.\n\nThêm một dòng khác hẳn độ dài."}
+        )
+        draft = pipeline.edit_draft(cfg, "post-one", caption="Đây là một cuộc cách mạng.")
+        assert [w["code"] for w in draft.lint] == ["hype"]
 
 
 class TestApplyMasthead:
@@ -1222,6 +1344,81 @@ class TestImageStyle:
 
     def test_unset_is_empty(self, tmp_path):
         assert pipeline.image_style_text(_cfg(tmp_path)) == ""
+
+    def _menu_cfg(self, tmp_path):
+        floor = tmp_path / "floor.md"
+        floor.write_text("Shared palette.", encoding="utf-8")
+        technical = tmp_path / "technical.md"
+        technical.write_text("Blueprint lines.", encoding="utf-8")
+        editorial = tmp_path / "editorial.md"
+        editorial.write_text("Quiet still life.", encoding="utf-8")
+        cfg = _cfg(tmp_path)
+        cfg["image_gen"] = {
+            **DEFAULTS["image_gen"],
+            "enabled": True,
+            "style_file": str(floor),
+            "styles": {"technical": str(technical), "editorial": str(editorial)},
+            "default_style": "editorial",
+        }
+        return cfg
+
+    def test_menu_composes_the_floor_and_the_chosen_treatment(self, tmp_path):
+        cfg = self._menu_cfg(tmp_path)
+        assert (
+            pipeline.image_style_text(cfg, "technical")
+            == "Shared palette.\n\nBlueprint lines."
+        )
+
+    def test_unknown_or_blank_key_falls_back_to_the_default(self, tmp_path):
+        cfg = self._menu_cfg(tmp_path)
+        expected = "Shared palette.\n\nQuiet still life."
+        assert pipeline.image_style_text(cfg, "nope") == expected
+        assert pipeline.image_style_text(cfg) == expected
+
+    def test_choices_and_default_read_the_menu(self, tmp_path):
+        cfg = self._menu_cfg(tmp_path)
+        assert pipeline.image_style_choices(cfg) == ["technical", "editorial"]
+        assert pipeline.default_image_style(cfg) == "editorial"
+
+    def test_hints_are_each_files_opening_paragraph(self, tmp_path):
+        cfg = self._menu_cfg(tmp_path)
+        (tmp_path / "technical.md").write_text(
+            "Treatment: drafted *schematic*.\nFor structure over chaos.\n\nLong body.",
+            encoding="utf-8",
+        )
+        assert pipeline.image_style_hints(cfg) == {
+            "technical": "drafted schematic. For structure over chaos.",
+            "editorial": "Quiet still life.",
+        }
+
+    def test_hints_skip_a_missing_or_empty_file(self, tmp_path):
+        cfg = self._menu_cfg(tmp_path)
+        (tmp_path / "technical.md").unlink()
+        (tmp_path / "editorial.md").write_text("\n\n", encoding="utf-8")
+        assert pipeline.image_style_hints(cfg) == {}
+
+    def test_hints_are_empty_without_a_menu(self, tmp_path):
+        assert pipeline.image_style_hints(_cfg(tmp_path)) == {}
+
+    def test_each_draft_uses_its_own_style(self, tmp_path, monkeypatch):
+        cfg = self._menu_cfg(tmp_path)
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg),
+            [
+                Draft(id="a", title="A", state=EXTRACTED, image_style="technical"),
+                Draft(id="b", title="B", state=EXTRACTED, image_style="editorial"),
+            ],
+        )
+        seen = {}
+
+        def fake(title, excerpt, **kwargs):
+            seen[title] = kwargs["style"]
+            return "https://gen/x.jpg"
+
+        monkeypatch.setattr(pipeline, "generate_for_draft", fake)
+        pipeline.generate_images(cfg)
+        assert seen["A"] == "Shared palette.\n\nBlueprint lines."
+        assert seen["B"] == "Shared palette.\n\nQuiet still life."
 
     def test_style_is_passed_to_generation(self, tmp_path, monkeypatch):
         style = tmp_path / "style.md"

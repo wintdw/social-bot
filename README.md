@@ -235,7 +235,7 @@ Then, with `serve` running, hand the drafts to your rewriter and approve:
 curl localhost:8083/api/drafts                          # drafts + your DNA text
 curl -X POST localhost:8083/api/drafts/post-one/rewrite \
      -H 'content-type: application/json' \
-     -d '{"caption":"...","hashtags":["#Atento"],"image_prompt":"a lone tree by a river"}'
+     -d '{"caption":"...","hashtags":["#Atento"],"image_prompt":"a lone tree by a river","image_style":"editorial"}'
 open http://localhost:8083/review                       # edit + Post now / Approve & schedule
 ```
 
@@ -260,7 +260,7 @@ not a dry run — it does create a post object, just an unpublished one.
 |---|---|
 | `GET /` | Dashboard: controls + counts + scheduler state + cached feed. |
 | `GET /review` | HTML review list of open drafts (with a **Scan sources now** button). |
-| `GET /review/{id}` | HTML detail with an editable caption, hashtags, and English image prompt + Approve/Reject. |
+| `GET /review/{id}` | HTML detail with an editable caption, hashtags, image prompt, and image style + Approve/Reject. |
 | `GET /publish` | HTML audit log of what has been posted (public and private). |
 | `GET /status` | HTML status page (sources, drafts by state, publish settings, runs). |
 | `POST /scan` | Trigger a source scan now (`{"started": true}`, or `409` if one is running). |
@@ -268,7 +268,7 @@ not a dry run — it does create a post object, just an unpublished one.
 | `POST /review/{id}/reject` | Mark the draft rejected. |
 | `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
 | `GET /api/status` | JSON: full pipeline snapshot — sources, drafts by state, seen, published, schedules, lifecycle. `publish.next_draft` names the oldest approved draft the poster will send next (`publish.approved` counts them, `publish.interval_remaining` is the days still to wait). |
-| `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `image_prompt`). |
+| `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `image_prompt`, `image_style`). |
 
 **Destinations** are pluggable: each platform is a package under
 `src/social_bot/destinations/` and is registered in `destinations/registry.py`.

@@ -77,6 +77,15 @@ class Draft:
     # looked alike). Optional: image_gen falls back to the title when this is
     # empty. Editable on /review/{id}.
     image_prompt: str = ""
+    # The visual treatment for the image (image_gen.styles key), chosen per post
+    # by the rewriter by content and tone — like the masthead (DNA §9.2). Empty
+    # or unknown falls back to image_gen.default_style at generation time.
+    # Overridable on /review/{id}.
+    image_style: str = ""
+    # Advisory AI-tell warnings from caption_lint, written at rewrite/edit time
+    # and shown on /review/{id}. Never blocks a rewrite or a post; empty when the
+    # caption reads clean. Each entry is {"code", "message"}.
+    lint: list[dict] = field(default_factory=list)
     # Publish bookkeeping. `posts` is keyed by destination name, one record per
     # platform the draft has been sent to, so a multi-destination draft keeps
     # each platform's own post_id/permalink/time:
@@ -122,6 +131,7 @@ class Draft:
         cta: str = "",
         commentary: str = "",
         image_prompt: str = "",
+        image_style: str = "",
     ) -> None:
         if caption:
             self.caption = caption
@@ -133,6 +143,8 @@ class Draft:
             self.commentary = commentary
         if image_prompt:
             self.image_prompt = image_prompt
+        if image_style:
+            self.image_style = image_style
         self.state = AI_DRAFT
         self.touch()
 

@@ -100,6 +100,11 @@ DEFAULTS: dict[str, Any] = {
         # Empty `choices` + `default` disables the masthead.
         "mastheads": {"choices": [], "default": ""},
         "dna_file": "",
+        # How many recently-written captions to hand the rewriter alongside the
+        # open drafts (GET /api/drafts `recent`), so it can avoid repeating the
+        # same opener/closer/vocabulary across posts (the pipeline lints against
+        # the same set). 0 sends none.
+        "recent_captions": 12,
         "dir": "data/publish",
         "log_name": "published.jsonl",
     },
@@ -127,6 +132,10 @@ DEFAULTS: dict[str, Any] = {
     # in credentials.yaml). The legacy `https://image.pollinations.ai/prompt`
     # needs no key but is watermarked and locked to the older `sana` model.
     # `style_file` is a short brand-look brief prepended to every prompt.
+    # `styles` is a menu of per-post visual treatments (key -> file): the
+    # rewriter picks one per post like the masthead, and the chosen treatment is
+    # appended to the `style_file` floor. `default_style` is the fallback key.
+    # An empty `styles` disables the menu (the `style_file` look alone).
     # `model` must be one the endpoint serves: the gen.pollinations.ai gateway
     # takes provider-qualified names (e.g. "openai/gpt-image-1-mini"); the
     # legacy endpoint ignores it entirely. The default follows the negative
@@ -136,6 +145,8 @@ DEFAULTS: dict[str, Any] = {
         "provider": "pollinations",
         "base_url": "https://gen.pollinations.ai/image",
         "style_file": "",
+        "styles": {},
+        "default_style": "",
         "overwrite": False,
         "model": "openai/gpt-image-1-mini",
         "width": 1080,
@@ -247,6 +258,8 @@ def validate(cfg: dict) -> None:
         raise ValueError("config: publish.post_per_slot must be >= 1")
     if int(publish.get("interval_days", 0)) < 0:
         raise ValueError("config: publish.interval_days must be >= 0")
+    if int(publish.get("recent_captions", 0)) < 0:
+        raise ValueError("config: publish.recent_captions must be >= 0")
     post_at = publish.get("post_at", [])
     if not isinstance(post_at, list):
         raise ValueError("config: publish.post_at must be a list of HH:MM")

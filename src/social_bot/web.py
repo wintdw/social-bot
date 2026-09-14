@@ -1158,6 +1158,9 @@ def create_app(
                 private=private,
                 image_enabled=image_enabled and draft.state in pipeline.REVIEW_STATES,
                 image_status=state["images"].get(draft_id),
+                image_styles=pipeline.image_style_choices(cfg),
+                default_image_style=pipeline.default_image_style(cfg),
+                image_style_hints=pipeline.image_style_hints(cfg),
                 next_id=next_id,
                 scheduling=bool(post_times),
                 next_post=_next_post_label(),
@@ -1179,6 +1182,9 @@ def create_app(
                 caption=str(form.get("caption", "") or ""),
                 hashtags=None if hashtags is None else str(hashtags),
                 image_prompt=str(form.get("image_prompt", "") or ""),
+                image_style=(
+                    str(form["image_style"]) if "image_style" in form else None
+                ),
             )
             if approve:
                 # Approve & schedule: save the edits, then queue for the poster.
@@ -1255,6 +1261,9 @@ def create_app(
                 caption=str(form.get("caption", "") or ""),
                 hashtags=None if hashtags is None else str(hashtags),
                 image_prompt=str(form.get("image_prompt", "") or ""),
+                image_style=(
+                    str(form["image_style"]) if "image_style" in form else None
+                ),
             )
         except ValueError as exc:
             return _page(render_message_html("Cannot save", str(exc)), 400)
@@ -1334,20 +1343,31 @@ def create_app(
 
         Newest first, bounded so a caller can't pull an unbounded queue in one
         request; ``total``/``has_more``/``next_offset`` let it page through.
+        ``recent`` carries the most recently written captions
+        (``publish.recent_captions``) so the rewriter can avoid repeating an
+        opener/closer/vocabulary across posts (DNA §12).
         """
         limit = _clamp(limit, 1, API_MAX_LIMIT, API_DEFAULT_LIMIT)
         offset = max(0, offset)
 
         def _load():
-            return pipeline.list_drafts(cfg, pipeline.OPEN_STATES), pipeline.dna_text(cfg)
+            return (
+                pipeline.list_drafts(cfg, pipeline.OPEN_STATES),
+                pipeline.dna_text(cfg),
+                pipeline.recent_captions(cfg),
+            )
 
-        drafts, dna = await asyncio.to_thread(_load)
+        drafts, dna, recent = await asyncio.to_thread(_load)
         total = len(drafts)
         window = drafts[offset : offset + limit]
         consumed = offset + len(window)
         return JSONResponse(
             {
                 "dna": dna,
+                "recent": [
+                    {"id": draft.id, "source": draft.source, "caption": draft.caption}
+                    for draft in recent
+                ],
                 "drafts": [d.to_dict() for d in window],
                 "total": total,
                 "offset": offset,

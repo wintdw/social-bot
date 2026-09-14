@@ -27,6 +27,7 @@ src/social_bot/
 ├── cli.py            # entry point (social-bot): whoami, destinations, feed, post, refresh, blog scan/image/masthead/publish, serve
 ├── config.py         # DEFAULTS + config.yaml + credentials.yaml; per-destination token resolution
 ├── caption.py        # pure caption text rule: series masthead + hook row title
+├── caption_lint.py   # advisory AI-tell checks on a rewrite (no auto-edit)
 ├── source.py         # pure parse of sitemap / RSS / Atom -> Item (no network)
 ├── source_api.py     # urllib source fetcher: retries + SourceError
 ├── drafts.py         # Draft model + state machine + per-destination post records + atomic persistence
@@ -139,18 +140,25 @@ entirely, leaving approval as the only publish path.**
   text". **`openai/gpt-image-1-mini` is the default** because it follows the
   style brief's negatives, and it is cheap. Verify a new model on a real draft
   before switching.
-- **Image variety comes from `image_prompt`, not from the style brief.** The
-  rewriter supplies a concrete English visual concept per post (rewrite
-  contract §9.1). Illustrating a raw `title`/excerpt — an abstraction, and in
-  Vietnamese — made every image look the same: the model cannot picture
-  "Consumer Group", so it fell back to whatever composition the style brief
-  suggested, every time. Never build the subject from the title; ask for it.
-  `image_prompt` is also the image's alt text (no separate Vietnamese `alt_text`
-  exists) and is **editable on `/review/{id}`**; the `/review` form saves it via
-  `edit_draft`, so edit it before regenerating.
+- **Image variety comes from two per-post choices: `image_prompt` (subject) and
+  `image_style` (treatment).** The rewriter supplies a concrete English visual
+  concept per post (rewrite contract §9.1). Illustrating a raw `title`/excerpt —
+  an abstraction, and in Vietnamese — made every image look the same: the model
+  cannot picture "Consumer Group", so it fell back to whatever composition the
+  style brief suggested, every time. Never build the subject from the title; ask
+  for it. `image_prompt` is also the image's alt text (no separate Vietnamese
+  `alt_text` exists) and is **editable on `/review/{id}`**; the `/review` form
+  saves it via `edit_draft`, so edit it before regenerating.
+  `image_style` picks a treatment from `image_gen.styles` (`key →
+  docs/image-styles/<key>.md`): `technical` / `editorial` / `sketch` / `bulletin`,
+  one per post by content and tone, exactly like the masthead (DNA §9.2).
+  `draft_pipeline.image_style_text(cfg, key)` composes the shared
+  `image_gen.style_file` floor + that treatment; an unknown/blank key falls back
+  to `image_gen.default_style`, and clearing `styles` restores the single
+  `style_file` look. It too is **overridable on `/review/{id}`**.
   Two related traps: translating the title to English alone is *worse* (it
-  yields literal cloud-and-arrow flowcharts and people), and the style brief
-  must not prescribe one composition.
+  yields literal cloud-and-arrow flowcharts and people), and the shared floor
+  must not prescribe one composition (the per-post treatment does).
 - Every post is a photo post, so images are generated **after** the rewrite,
   never during scan — at scan time there is no `image_prompt` yet, which is the
   whole problem. `serve` fills a draft's image in the background as its rewrite

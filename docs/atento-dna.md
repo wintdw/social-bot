@@ -19,10 +19,13 @@ unchanged.
 3. Pick the **opening format** from the menu (§5) that fits this item best — the
    format follows the content, not a rotation schedule. Write the caption in
    **Vietnamese** following §4–§7. Keep technical terms in **English** (§4.3).
+   Read the response's **`recent`** captions first and don't reuse their openers,
+   closers, or vocabulary (§12).
 4. If the item is an **external source** (anything other than `atento-blog`),
    credit the original author and site in the caption (§7.3).
-5. Return JSON: `caption`, `hashtags`, `cta`, `commentary`, `image_prompt` (§9).
-6. Self-check against §10 before submitting.
+5. Return JSON: `caption`, `hashtags`, `cta`, `commentary`, `image_prompt`,
+   `image_style` (§9).
+6. Self-check against §10 (and the AI tells in §12) before submitting.
 
 Blog items (`sources: atento-blog`) are *Atento's own* articles — the caption's
 job is to sell the idea and send readers to the post. Event/recruit items are
@@ -392,6 +395,7 @@ Ví dụ:
 | `cta` | string | Câu kêu gọi hành động — **chỉ để người duyệt đọc**, không được đăng; bản tương ứng phải có trong `caption`. |
 | `commentary` | string | 2–4 câu cho người duyệt: register nào, **format/hook** là gì, mức drama, có gì cần xác nhận. |
 | `image_prompt` | string | **Tiếng Anh.** Một ý tưởng thị giác CỤ THỂ cho ảnh của riêng bài này (§9.1). Cũng là alt text của ảnh — không cần bản dịch tiếng Việt. |
+| `image_style` | string | Phong cách vẽ cho ảnh, chọn **một** khóa theo bài như masthead (§9.2): `technical` / `editorial` / `sketch` / `bulletin`. Bỏ trống thì pipeline dùng mặc định. |
 
 ### 9.1 `image_prompt` — ảnh phải cụ thể, và phải khác nhau
 
@@ -407,8 +411,8 @@ Ví dụ:
   nhiều bài — đây là lỗi dễ mắc nhất.
 - **Không** để lộ chữ/số trong ảnh, không người/mặt, không icon cloud-mũi-tên,
   không sơ đồ kiểu screenshot UI. Palette và chất liệu đã do
-  `docs/atento-image-style.md` lo — **không nhắc lại**, chỉ tập trung chủ thể và
-  bố cục.
+  `docs/atento-image-style.md` lo; **bố cục** do `image_style` quyết (§9.2) —
+  **không nhắc lại** cả hai, chỉ tập trung chủ thể.
 
 Ví dụ tốt (cụ thể, khác nhau, có ẩn dụ):
 
@@ -433,9 +437,30 @@ Ví dụ:
   "hashtags": ["#Atento", "#fromfoundationtoexcellence", "#systemdesign"],
   "cta": "Link khoá học System Design ở dưới comment nha. 🥰",
   "commentary": "Register technical (giọng Dũng), format D (đám đông rồi lật), drama vừa. Luận điểm để ở cuối. Cần xác nhận link đăng ký trước khi duyệt.",
-  "image_prompt": "a wide drawing board holding one clean system sketch, surrounded by far larger discarded sketches crumpled on the floor"
+  "image_prompt": "a wide drawing board holding one clean system sketch, surrounded by far larger discarded sketches crumpled on the floor",
+  "image_style": "technical"
 }
 ```
+
+### 9.2 `image_style` — chọn phong cách theo bài
+
+Cùng một ý tưởng thị giác, vẽ theo các *chất liệu* khác nhau sẽ ra ảnh rất khác
+nhau. Mỗi bài chọn **đúng một** `image_style` theo nội dung và tông — giống như
+chọn masthead (§4.5), chọn theo **bài**, không theo vòng xoay. Palette và các
+điều cấm thì không đổi (đã có ở `docs/atento-image-style.md`).
+
+| `image_style` | Dùng khi |
+|---|---|
+| `technical` | Bài System Design / Architecture, foundation — giải thích cấu trúc, cơ chế, trade-off. Nét vẽ kỹ thuật, đo đạc, có lưới và kết cấu. |
+| `editorial` *(mặc định)* | Bài nền tảng / nghề nghiệp / mindset chung — một ý trừu tượng cần ẩn dụ tĩnh. Tĩnh vật editorial, ấm và trầm. |
+| `sketch` | Essay cá nhân / ý kiến (giọng Đạt) — kể chuyện, tự vấn. Nét bút chì nhanh, hơi thô, đời thường. |
+| `bulletin` | Thông báo, sự kiện, cộng đồng, tin tức — cần đọc nhanh. Bố cục poster tối giản, mảng phẳng, rõ trọng tâm. |
+
+- Viết **đúng một** trong bốn khóa trên — không tự chế khóa mới, không dịch.
+- Chọn theo **bài viết**, không chọn cho "đa dạng": một bài technical nên là
+  `technical` kể cả khi bài trước cũng đã dùng `technical`.
+- Pipeline có mặc định (`default_style`) nếu bạn quên, nhưng **bạn phải tự chọn**.
+- Người duyệt có thể đổi lại trên `/review/{id}` trước khi sinh ảnh.
 
 ---
 
@@ -453,9 +478,12 @@ Ví dụ:
 - [ ] Nguồn ngoài: đã ghi tên **tác giả** (không kèm tên miền) và CTA dùng *"Đọc bài gốc"* (§7.3).
 - [ ] Caption **không** chứa URL hay tên miền (`seangoedecke.com`) — link bài ở comment (§7.2).
 - [ ] Không hype, không bịa, không engagement bait / clickbait.
+- [ ] Không lặp lại opener/closer/cách dùng từ của các caption trong `recent` (§12).
+- [ ] Không có tell AI: không khép bài bằng châm ngôn theo nghi thức, "không phải X mà là Y" dùng ≤1 lần, nhịp câu có so le (§12.1).
 - [ ] Emoji đúng liều theo register.
 - [ ] `commentary` đã điền (nêu rõ format + mức drama).
 - [ ] `image_prompt` đã điền: **tiếng Anh**, cụ thể, và **khác** ẩn dụ với các bài khác (cũng là alt text của ảnh).
+- [ ] `image_style` đã chọn: **một** khóa hợp bài (§9.2).
 
 ---
 
@@ -476,3 +504,67 @@ nha. 🥰"; "Ai còn quên chưa đăng ký thì nhanh tay… 📩".
 
 **Scene openings (dùng lại được):** "2 giờ sáng."; "Cuộc họp vừa bắt đầu.";
 "Buổi phỏng vấn."; "Đơn hàng đã thanh toán xong."; "30 phút sau…"; "Im lặng.".
+
+---
+
+## 12. Đừng viết như AI — các "tell" phải tránh
+
+Một bài đọc "như AI" không phải vì nó sai, mà vì nó **đều và sạch quá** — cùng
+một nhịp câu, cùng một câu chốt, cùng một mô-típ đối lập, lặp qua nhiều bài. Chỉ
+cần liếc qua là thấy một tài khoản mà bài nào cũng na ná nhau. Người đọc không
+gọi tên được, nhưng cảm giác đó làm giảm độ tin.
+
+`GET /api/drafts` trả thêm trường **`recent`** — vài caption mới viết gần nhất
+(đã có masthead). **Đọc nó trước khi viết**, để không lặp lại cách mở bài / câu
+chốt / từ vựng của các bài liền trước.
+
+### 12.1 Những mô-típ dễ lộ nhất (tránh dùng như mặc định)
+
+- **Câu chốt châm ngôn khép mọi bài.** Không phải bài nào cũng cần một câu
+  *"X không nằm ở A. X là B."* Kết bằng một chi tiết cụ thể, một câu hỏi để lửng,
+  hoặc dừng ngay sau luận điểm — cũng đủ. Đừng biến "câu chốt đắt" thành nghi
+  thức bắt buộc cho từng bài.
+- **Đối lập "không phải X, mà là Y".** Dùng **tối đa một lần** trong một bài; nếu
+  đã dùng ở câu mở thì đừng lặp lại ở câu chốt.
+- **Nhịp câu đều tăm tắp.** Tránh bài mà câu nào cũng dài tầm nhau. Cố ý đặt một
+  câu cụt ba chữ, một câu dài nhiều mệnh đề, một câu hỏi ngắn — sự so le đó là
+  thứ người viết thật luôn có.
+- **Mở bài bằng công thức quen:** *"Ai cũng biết…"*, *"Ai cũng nói…"*,
+  *"Bạn có bao giờ…"*, *"Hãy tưởng tượng…"*, *"Trong thế giới…"*. Nếu định dùng,
+  gắn ngay một chi tiết cụ thể; tốt hơn là vào thẳng khoảnh khắc (§5.1).
+- **Liệt kê danh từ trừu tượng:** *"trusted, contextual, traceable, governed and
+  operational"*. Một chuỗi ba-bốn tính từ/cụm danh từ nghe rất "AI". Chọn một cái
+  đáng nói nhất rồi mổ nó ra.
+- **Ba vế đối xứng ("rule of three"):** *"nhanh, gọn, chính xác"*, *"đơn giản,
+  nhanh, rẻ"*. Ba vế cùng hình dạng là một tell rất rõ — rút còn **hai vế**, hoặc
+  chọn một vế đắt nhất rồi khai thác. Liệt kê thật theo *"Thứ nhất…, Thứ hai…"* thì
+  được, miễn mỗi vế có nội dung riêng chứ không phải ba tính từ đồng nghĩa.
+- **Cụm chuyển ý vô nghĩa:** *"về cơ bản"*, *"trong bối cảnh hiện nay"*, *"có thể
+  nói rằng"*, *"một cách tổng quát"*. Cắt thẳng vào ý. (Vài cụm trong §11 —
+  *"Hãy tưởng tượng…"*, *"Điều quan trọng cần chú ý là…"* — là giọng đặc trưng,
+  không phải tell.)
+- **Đối xứng hoàn hảo.** Đoạn nào cũng mở-thân-kết gọn ghẽ, không chỗ nào gồ ghề.
+  Cho phép một câu dang dở, một chỗ tự sửa lại ý, một câu hỏi chưa được trả lời.
+- **Hype rỗng:** "cách mạng", "đột phá", "thay đổi mọi thứ", "tốt nhất" (§8).
+
+### 12.2 Cách sửa: cụ thể hoá, đừng chỉ đổi từ đồng nghĩa
+
+Vấn đề gốc thường không nằm ở tính từ mà ở **thiếu chi tiết cụ thể**. Một bài có
+chi tiết thật thì tự khắc khác nhau.
+
+| Kém (chung chung, dễ lộ AI) | Tốt hơn (cụ thể) |
+|---|---|
+| "Kafka giúp hệ thống mở rộng tốt hơn." | "Order service ngừng gọi Inventory. Nó chỉ đẩy một event rồi đi làm việc khác." |
+| "Nhiều kỹ sư thiếu foundation." | "Đọc hàng nghìn CV, phỏng vấn hàng trăm ứng viên — vẫn cùng một câu hỏi không ai trả lời được." |
+| "Đổi lại đều có giá." | "Từ 32 bit xuống 8 bit gần như không thấy khác. Xuống 4 bit thì model bắt đầu quên fact." |
+
+### 12.3 Không được tự sinh thêm tell khi sửa
+
+Đừng "chống AI" bằng cách chèn khẩu ngữ rẻ tiền, emoji, hay câu cụt vô nghĩa.
+Register và xưng hô vẫn theo §3–§4; masthead, CTA và ghi nguồn (§7) không đổi.
+**Mục tiêu là một bài mà người thật đọc thấy tự nhiên** — không phải một bài trông
+cố tỏ ra "người".
+
+Pipeline chỉ **đọc và ghi nhận** các tell này (advisory) và hiện nhắc trên
+`/review/{id}`; nó **không tự sửa caption**. Sửa hay không là việc của bạn và
+người duyệt.

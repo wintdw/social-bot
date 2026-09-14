@@ -12,6 +12,7 @@ import json
 import pathlib
 
 from .caption import display_title
+from .caption_lint import lint_caption
 from .config import ROOT, load_config
 from .destinations import DestinationError, describe_all, publisher_for
 from .drafts import (
@@ -120,9 +121,80 @@ def dna_text(cfg: dict) -> str:
     return _read_optional_file(cfg.get("publish", {}).get("dna_file"))
 
 
-def image_style_text(cfg: dict) -> str:
-    """Contents of image_gen.style_file — the brand look prepended to prompts."""
-    return _read_optional_file(image_gen_config(cfg).get("style_file"))
+def image_style_map(cfg: dict) -> dict[str, str]:
+    """The configured style menu ``image_gen.styles`` as {key: file path}."""
+    raw = image_gen_config(cfg).get("styles")
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        str(key).strip(): str(path).strip()
+        for key, path in raw.items()
+        if str(key).strip() and str(path).strip()
+    }
+
+
+def image_style_choices(cfg: dict) -> list[str]:
+    """The treatment keys a rewriter may pick from (DNA §9.2)."""
+    return list(image_style_map(cfg))
+
+
+def default_image_style(cfg: dict) -> str:
+    """The treatment key the pipeline uses when the rewriter omits one."""
+    return str(image_gen_config(cfg).get("default_style") or "").strip()
+
+
+def _resolve_image_style(cfg: dict, key) -> str:
+    """Keep a valid treatment key; otherwise the default; '' when no menu."""
+    choices = image_style_choices(cfg)
+    key = str(key or "").strip()
+    if key in choices:
+        return key
+    fallback = default_image_style(cfg)
+    return fallback if fallback in choices else ""
+
+
+def image_style_text(cfg: dict, key: str = "") -> str:
+    """The resolved brand-look text for one draft's chosen style.
+
+    The shared palette/finish floor (``image_gen.style_file``) plus the
+    treatment named by ``key`` (``image_gen.styles``). An unknown or blank key
+    falls back to ``image_gen.default_style``; with no menu configured this is
+    just the floor — the pre-styles behaviour.
+    """
+    floor = _read_optional_file(image_gen_config(cfg).get("style_file")).strip()
+    styles = image_style_map(cfg)
+    if not styles:
+        return floor
+    chosen = _resolve_image_style(cfg, key)
+    treatment = _read_optional_file(styles.get(chosen)).strip() if chosen else ""
+    return "\n\n".join(part for part in (floor, treatment) if part)
+
+
+def _first_paragraph(text: str) -> str:
+    """A file's opening paragraph collapsed to one line ('' when empty)."""
+    lines: list[str] = []
+    for line in text.strip().splitlines():
+        if not line.strip():
+            break
+        lines.append(line)
+    return " ".join(" ".join(lines).split())
+
+
+def image_style_hints(cfg: dict) -> dict[str, str]:
+    """Operator guidance per treatment: ``{key: the file's opening paragraph}``.
+
+    The hint is each style file's own "when to use" paragraph, so the review page
+    describes the treatments from ``docs/image-styles/`` rather than keeping a
+    second copy that drifts. A key whose file is missing or empty is omitted.
+    """
+    hints: dict[str, str] = {}
+    for key, path in image_style_map(cfg).items():
+        paragraph = _first_paragraph(_read_optional_file(path))
+        if paragraph:
+            # Drop the "Treatment: " lead-in and the files' markdown emphasis,
+            # which would otherwise show literally as asterisks in the UI.
+            hints[key] = paragraph.removeprefix("Treatment: ").replace("*", "")
+    return hints
 
 
 # -- AI image generation -------------------------------------------------
@@ -137,7 +209,7 @@ def _generate_image(
     *,
     title: str,
     excerpt: str,
-    style: str = "",
+    image_style: str = "",
     image_prompt: str = "",
     errors: list[dict],
     label: str,
@@ -150,7 +222,7 @@ def _generate_image(
         return generate_for_draft(
             title,
             excerpt,
-            style=style,
+            style=image_style_text(cfg, image_style),
             image_prompt=image_prompt,
             base_url=str(ig.get("base_url") or "").strip() or DEFAULT_BASE_URL,
             width=int(ig.get("width", 1080)),
@@ -208,13 +280,12 @@ def generate_images(
 
     errors: list[dict] = []
     generated: dict[str, str] = {}
-    style = image_style_text(cfg)
     for draft in selected:
         url = _generate_image(
             cfg,
             title=draft.title,
             excerpt=draft.excerpt,
-            style=style,
+            image_style=draft.image_style,
             image_prompt=draft.image_prompt,
             errors=errors,
             label=draft.id,
@@ -585,27 +656,73 @@ def _ensure_masthead(caption: str, fallback: str, choices: list[str]) -> str:
     return f"{fallback}\n\n{caption}" if caption else fallback
 
 
-def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
-    """Store the AI rewrite (from the Command Code agent) on a draft."""
+def recent_caption_limit(cfg: dict) -> int:
+    """``publish.recent_captions`` as an int (0 = don't send any)."""
+    return int(cfg.get("publish", {}).get("recent_captions", 0) or 0)
 
+
+def _recent_written(drafts: list[Draft], exclude_id: str = "") -> list[Draft]:
+    """Drafts that already have a caption, most recently written first."""
+    written = [draft for draft in drafts if draft.caption and draft.id != exclude_id]
+    return sorted(
+        written,
+        key=lambda d: parse_when(d.updated_at) or parse_when(d.created_at) or _EPOCH,
+        reverse=True,
+    )
+
+
+def recent_captions(
+    cfg: dict, *, limit: int | None = None, exclude_id: str = ""
+) -> list[Draft]:
+    """The most recently written captions, newest first, for anti-repetition.
+
+    A rewriter only sees the *open* drafts it is asked to rewrite, so without
+    this it can't tell it has opened three posts in a row the same way. Capped by
+    ``publish.recent_captions`` (0 = off); the rewriter reads them and avoids
+    reusing an opener, a closer, or the same vocabulary (DNA §12).
+    """
+    cap = recent_caption_limit(cfg) if limit is None else int(limit)
+    if cap <= 0:
+        return []
+    return _recent_written(load_drafts(queue_path(cfg)), exclude_id)[:cap]
+
+
+def _recent_texts(drafts: list[Draft], cfg: dict, exclude_id: str = "") -> list[str]:
+    """The recent captions to lint against, as plain text ([] when disabled)."""
+    cap = recent_caption_limit(cfg)
+    if cap <= 0:
+        return []
+    return [draft.caption for draft in _recent_written(drafts, exclude_id)[:cap]]
+
+
+def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
+    """Store the AI rewrite (from the Command Code agent) on a draft.
+
+    The caption is also *linted* — advisory only. The tells a run of posts
+    converges on (a repeated hook or closer, a stock opener, a flat rhythm, the
+    rule of three) are stored on the draft for the reviewer to see; the pipeline
+    never edits the text itself (DNA §12).
+    """
     choices = masthead_choices(cfg)
     fallback = default_masthead(cfg)
-
-    def mutate(draft: Draft) -> None:
-        if not draft.can_receive_rewrite():
-            raise ValueError(f"draft {draft_id!r} in state {draft.state!r} cannot be rewritten")
-        hashtags = body.get("hashtags")
-        draft.apply_rewrite(
-            caption=_ensure_masthead(
-                str(body.get("caption", "") or ""), fallback, choices
-            ),
-            hashtags=hashtags if hashtags is None else hashtags,
-            cta=str(body.get("cta", "") or ""),
-            commentary=str(body.get("commentary", "") or ""),
-            image_prompt=str(body.get("image_prompt", "") or ""),
-        )
-
-    return _save_one(cfg, draft_id, mutate)
+    drafts = load_drafts(queue_path(cfg))
+    draft = find(drafts, draft_id)
+    if draft is None:
+        raise ValueError(f"no draft {draft_id!r}")
+    if not draft.can_receive_rewrite():
+        raise ValueError(f"draft {draft_id!r} in state {draft.state!r} cannot be rewritten")
+    hashtags = body.get("hashtags")
+    draft.apply_rewrite(
+        caption=_ensure_masthead(str(body.get("caption", "") or ""), fallback, choices),
+        hashtags=hashtags if hashtags is None else hashtags,
+        cta=str(body.get("cta", "") or ""),
+        commentary=str(body.get("commentary", "") or ""),
+        image_prompt=str(body.get("image_prompt", "") or ""),
+        image_style=_resolve_image_style(cfg, body.get("image_style")),
+    )
+    draft.lint = lint_caption(draft.caption, recent=_recent_texts(drafts, cfg, draft_id))
+    save_drafts(queue_path(cfg), drafts)
+    return draft
 
 
 def edit_draft(
@@ -615,19 +732,31 @@ def edit_draft(
     caption: str | None = None,
     hashtags: str | None = None,
     image_prompt: str | None = None,
+    image_style: str | None = None,
 ) -> Draft:
-    """Human edits from the review page (caption, hashtags, image prompt)."""
+    """Human edits from the review page (caption, hashtags, image prompt, style).
 
-    def mutate(draft: Draft) -> None:
-        if caption is not None:
-            draft.caption = caption
-        if hashtags is not None:
-            draft.hashtags = _split_hashtags(hashtags)
-        if image_prompt is not None:
-            draft.image_prompt = image_prompt
-        draft.touch()
+    Re-lints the caption so the /review/{id} warnings track what a human just
+    wrote too, not only what the rewriter submitted.
+    """
 
-    return _save_one(cfg, draft_id, mutate)
+    drafts = load_drafts(queue_path(cfg))
+    draft = find(drafts, draft_id)
+    if draft is None:
+        raise ValueError(f"no draft {draft_id!r}")
+    if caption is not None:
+        draft.caption = caption
+    if hashtags is not None:
+        draft.hashtags = _split_hashtags(hashtags)
+    if image_prompt is not None:
+        draft.image_prompt = image_prompt
+    if image_style is not None:
+        draft.image_style = image_style
+    draft.touch()
+    if draft.caption:
+        draft.lint = lint_caption(draft.caption, recent=_recent_texts(drafts, cfg, draft_id))
+    save_drafts(queue_path(cfg), drafts)
+    return draft
 
 
 def reject_draft(cfg: dict, draft_id: str) -> Draft:
@@ -831,6 +960,9 @@ def status(cfg: dict | None = None) -> dict:
             "overwrite": bool(image_gen_config(cfg).get("overwrite", True)),
             "key_set": bool(str(image_gen_config(cfg).get("api_key") or "").strip()),
             "style_file_set": bool(image_style_text(cfg).strip()),
+            "styles_set": bool(image_style_choices(cfg)),
+            "style_choices": image_style_choices(cfg),
+            "default_style": default_image_style(cfg),
             "with_image": sum(1 for draft in drafts if draft.image),
         },
     }

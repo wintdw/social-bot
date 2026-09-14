@@ -155,6 +155,8 @@ header .sub, .meta { color: var(--muted); font-size: .85rem; margin-top: .25rem;
 .notice-ok { border-left-color: var(--ok); }
 .notice-warn { border-left-color: var(--warn); }
 .notice-error { border-left-color: var(--danger); }
+.lint-list { margin: .5rem 0 0; padding-left: 1.1rem; display: grid; gap: .25rem;
+             font-size: .85rem; color: var(--ink-2); }
 
 /* ---------- pipeline strip ---------- */
 .pipeline { display: grid; grid-template-columns: repeat(4, 1fr);

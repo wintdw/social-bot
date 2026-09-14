@@ -178,6 +178,7 @@ def test_defaults_include_pipeline_sections(tmp_path):
     assert cfg["publish"]["post_at"] == []  # timed posting is off by default
     assert cfg["publish"]["post_per_slot"] == 1
     assert cfg["publish"]["interval_days"] == 0  # no minimum gap by default
+    assert cfg["publish"]["recent_captions"] == 12  # anti-repetition context for the rewriter
     assert cfg["blog"]["scan_at"] == ["06:00"]
     assert cfg["blog"]["max_age_days"] == 0  # no age window by default
     assert cfg["review"]["dir"] == "data/review"
@@ -191,6 +192,8 @@ def test_image_gen_disabled_by_default(tmp_path):
     assert cfg["image_gen"]["base_url"] == "https://gen.pollinations.ai/image"
     assert cfg["image_gen"]["model"] == "openai/gpt-image-1-mini"
     assert cfg["image_gen"]["width"] == 1080 and cfg["image_gen"]["height"] == 1350
+    assert cfg["image_gen"]["styles"] == {}  # no per-post menu by default
+    assert cfg["image_gen"]["default_style"] == ""
 
 
 def test_credentials_file_supplies_image_key(tmp_path):
@@ -221,6 +224,7 @@ def test_credentials_file_supplies_image_key(tmp_path):
         {"publish": {"destinations": ["facebook"], "post_at": "09:00"}},
         {"publish": {"destinations": ["facebook"], "post_per_slot": 0}},
         {"publish": {"destinations": ["facebook"], "interval_days": -1}},
+        {"publish": {"destinations": ["facebook"], "recent_captions": -1}},
         {"blog": {"scan_at": ["nope"]}},
         {"blog": {"scan_at": []}},
         {"blog": {"timeout_seconds": 0}},
@@ -246,6 +250,7 @@ def test_credentials_file_supplies_image_key(tmp_path):
         "post-at-not-a-list",
         "zero-post-per-slot",
         "negative-interval-days",
+        "negative-recent-captions",
         "bad-scan-at",
         "empty-scan-at",
         "bad-blog-timeout",
