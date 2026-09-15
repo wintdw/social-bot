@@ -11,9 +11,9 @@ import pytest
 
 from social_bot import draft_pipeline as pipeline
 from social_bot.config import DEFAULTS
+from social_bot.destinations import PublisherError, PublishResult
 from social_bot.drafts import AI_DRAFT, APPROVED, EXTRACTED, POSTED, REJECTED, Draft
 from social_bot.image_gen import DEFAULT_BASE_URL
-from social_bot.destinations import PublishResult, PublisherError
 from social_bot.source_api import SourceError
 
 SITEMAP = """<?xml version="1.0" encoding="UTF-8"?>
@@ -127,6 +127,15 @@ def _set_styles(cfg, *, styles=None, default="editorial"):
     return cfg
 
 
+def _set_voices(cfg, *, voices=None, default="technical"):
+    """Configure the publish.voices menu on a test config."""
+    cfg["publish"]["voices"] = (
+        voices if voices is not None else {"technical": "technical.md", "funny": "funny.md"}
+    )
+    cfg["publish"]["default_voice"] = default
+    return cfg
+
+
 class TestScanSources:
     def test_adds_new_drafts_then_dedupes(self, tmp_path):
         cfg = _cfg(tmp_path)
@@ -149,9 +158,7 @@ class TestScanSources:
             '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
             "<url><loc>https://atento.vn/blog/flaky</loc></url></urlset>"
         )
-        client = FakeClient(
-            {SOURCE_URL: xml}, fail=["https://atento.vn/blog/flaky"]
-        )
+        client = FakeClient({SOURCE_URL: xml}, fail=["https://atento.vn/blog/flaky"])
         result = pipeline.scan_sources(cfg, client=client)
         assert result["added"] == 1
         assert pipeline.get_draft(cfg, "flaky").title == ""
@@ -212,12 +219,12 @@ class TestScanMaxAge:
 
     @staticmethod
     def _ago(days: int) -> str:
-        when = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+        when = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
         return when.isoformat()
 
     @staticmethod
     def _rfc822(days: int) -> str:
-        when = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)
+        when = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
         return format_datetime(when)
 
     @staticmethod
@@ -277,7 +284,7 @@ class TestScanMaxAge:
             '"url":"https://atento.vn/blog/old-post"}]}}</script></head></html>'
         )
         post_html = (
-            "<html><head><script type=\"application/ld+json\">"
+            '<html><head><script type="application/ld+json">'
             '{"@type":"BlogPosting","headline":"Old post","datePublished":"'
             + self._ago(200)
             + '"}</script></head></html>'
@@ -309,9 +316,7 @@ class TestScanMaxAge:
 class TestRewriteIntake:
     def test_receive_rewrite(self, tmp_path):
         cfg = _seed_draft(tmp_path)
-        draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "Hello", "hashtags": ["#a"]}
-        )
+        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "Hello", "hashtags": ["#a"]})
         assert draft.state == AI_DRAFT
         assert draft.caption == "Hello"
 
@@ -353,9 +358,7 @@ class TestRewriteIntake:
 
     def test_edit_leaves_the_image_prompt_when_omitted(self, tmp_path):
         cfg = _seed_draft(tmp_path)
-        pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "c", "image_prompt": "a lone tree"}
-        )
+        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "image_prompt": "a lone tree"})
         draft = pipeline.edit_draft(cfg, "post-one", caption="edited")
         assert draft.image_prompt == "a lone tree"
 
@@ -392,6 +395,33 @@ class TestRewriteIntake:
         draft = pipeline.edit_draft(cfg, "post-one", caption="edited")
         assert draft.image_style == "sketch"
 
+    def test_receive_rewrite_keeps_a_valid_voice(self, tmp_path):
+        cfg = _set_voices(_seed_draft(tmp_path))
+        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "voice": "funny"})
+        assert draft.voice == "funny"
+
+    def test_receive_rewrite_falls_back_on_an_unknown_voice(self, tmp_path):
+        cfg = _set_voices(_seed_draft(tmp_path))
+        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "voice": "nonsense"})
+        assert draft.voice == "technical"
+
+    def test_receive_rewrite_drops_the_voice_when_no_menu_is_configured(self, tmp_path):
+        cfg = _seed_draft(tmp_path)  # DEFAULTS: no voices configured
+        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "voice": "funny"})
+        assert draft.voice == ""
+
+    def test_edit_sets_the_voice(self, tmp_path):
+        cfg = _set_voices(_seed_draft(tmp_path))
+        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c"})
+        draft = pipeline.edit_draft(cfg, "post-one", voice="funny")
+        assert draft.voice == "funny"
+
+    def test_edit_leaves_the_voice_when_omitted(self, tmp_path):
+        cfg = _set_voices(_seed_draft(tmp_path))
+        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "voice": "funny"})
+        draft = pipeline.edit_draft(cfg, "post-one", caption="edited")
+        assert draft.voice == "funny"
+
     def test_reject(self, tmp_path):
         cfg = _seed_draft(tmp_path)
         assert pipeline.reject_draft(cfg, "post-one").state == REJECTED
@@ -407,8 +437,12 @@ class TestRecentCaptions:
         pipeline.save_drafts(
             pipeline.queue_path(cfg),
             [
-                Draft(id="old", state=AI_DRAFT, caption="Cũ", updated_at="2026-09-01T00:00:00+00:00"),
-                Draft(id="new", state=AI_DRAFT, caption="Mới", updated_at="2026-09-09T00:00:00+00:00"),
+                Draft(
+                    id="old", state=AI_DRAFT, caption="Cũ", updated_at="2026-09-01T00:00:00+00:00"
+                ),
+                Draft(
+                    id="new", state=AI_DRAFT, caption="Mới", updated_at="2026-09-09T00:00:00+00:00"
+                ),
                 Draft(id="none", state=EXTRACTED),
             ],
         )
@@ -432,9 +466,7 @@ class TestRecentCaptions:
 class TestRewriteLint:
     def test_stores_lint_on_the_draft(self, tmp_path):
         cfg = _seed_draft(tmp_path)
-        draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "Đây là một cuộc cách mạng."}
-        )
+        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "Đây là một cuộc cách mạng."})
         assert [w["code"] for w in draft.lint] == ["hype"]
         # The warnings round-trip through the queue, so /review/{id} can show them.
         assert pipeline.get_draft(cfg, "post-one").lint
@@ -444,7 +476,9 @@ class TestRewriteLint:
         draft = pipeline.receive_rewrite(
             cfg,
             "post-one",
-            {"caption": "Cuộc họp vừa bắt đầu.\n\nMột câu dài hơn hẳn ở đây để nhịp không đều chút nào."},
+            {
+                "caption": "Cuộc họp vừa bắt đầu.\n\nMột câu dài hơn hẳn ở đây để nhịp không đều chút nào."
+            },
         )
         assert draft.lint == []
 
@@ -582,9 +616,7 @@ class TestApplyMasthead:
 
     def test_unconfigured_raises(self, tmp_path):
         cfg = _cfg(tmp_path)  # DEFAULTS: no mastheads
-        pipeline.save_drafts(
-            pipeline.queue_path(cfg), [Draft(id="a", state=AI_DRAFT, caption="A")]
-        )
+        pipeline.save_drafts(pipeline.queue_path(cfg), [Draft(id="a", state=AI_DRAFT, caption="A")])
         with pytest.raises(ValueError):
             pipeline.apply_masthead(cfg)
 
@@ -714,8 +746,11 @@ class TestQueueListing:
         # The row's displayed title is the caption's hook, so it must be
         # searchable — otherwise an operator can't find what they can see.
         drafts = [
-            Draft(id="1", title="Source headline",
-                  caption="[Học cùng Atento]\n\nConsumer Group là gì?"),
+            Draft(
+                id="1",
+                title="Source headline",
+                caption="[Học cùng Atento]\n\nConsumer Group là gì?",
+            ),
             Draft(id="2", title="Consumer Group"),
         ]
         assert [d.id for d in pipeline.filter_drafts(drafts, q="consumer group")] == ["1", "2"]
@@ -990,19 +1025,27 @@ class TestPublishScheduled:
 
     def _stub(self, monkeypatch, publisher=None):
         fake = publisher or FakePublisher()
-        monkeypatch.setattr(
-            pipeline, "publisher_for", lambda name, cfg, token=None: fake
-        )
+        monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: fake)
         return fake
 
     def test_posts_only_approved_oldest_first(self, tmp_path, monkeypatch):
         cfg = self._seed(
             tmp_path,
             [
-                Draft(id="new", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at="2026-09-10T00:00:00+00:00"),
-                Draft(id="old", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at="2026-09-01T00:00:00+00:00"),
+                Draft(
+                    id="new",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at="2026-09-10T00:00:00+00:00",
+                ),
+                Draft(
+                    id="old",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at="2026-09-01T00:00:00+00:00",
+                ),
                 Draft(id="ai", state=AI_DRAFT, caption="c", destinations=["facebook"]),
                 Draft(id="ext", state=EXTRACTED, destinations=["facebook"]),
             ],
@@ -1019,10 +1062,20 @@ class TestPublishScheduled:
         cfg = self._seed(
             tmp_path,
             [
-                Draft(id="new", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at="2026-09-10T00:00:00+00:00"),
-                Draft(id="old", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at="2026-09-01T00:00:00+00:00"),
+                Draft(
+                    id="new",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at="2026-09-10T00:00:00+00:00",
+                ),
+                Draft(
+                    id="old",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at="2026-09-01T00:00:00+00:00",
+                ),
                 Draft(id="ai", state=AI_DRAFT, caption="c", destinations=["facebook"]),
             ],
         )
@@ -1036,10 +1089,20 @@ class TestPublishScheduled:
         cfg = self._seed(
             tmp_path,
             [
-                Draft(id="b", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at="2026-09-05T00:00:00+00:00"),
-                Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at="2026-09-01T00:00:00+00:00"),
+                Draft(
+                    id="b",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at="2026-09-05T00:00:00+00:00",
+                ),
+                Draft(
+                    id="a",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at="2026-09-01T00:00:00+00:00",
+                ),
                 Draft(id="ai", state=AI_DRAFT, caption="c", destinations=["facebook"]),
             ],
         )
@@ -1049,8 +1112,13 @@ class TestPublishScheduled:
         cfg = self._seed(
             tmp_path,
             [
-                Draft(id=f"d{i}", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at=f"2026-09-0{i + 1}T00:00:00+00:00")
+                Draft(
+                    id=f"d{i}",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at=f"2026-09-0{i + 1}T00:00:00+00:00",
+                )
                 for i in range(3)
             ],
         )
@@ -1064,8 +1132,13 @@ class TestPublishScheduled:
         cfg = self._seed(
             tmp_path,
             [
-                Draft(id=f"d{i}", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at=f"2026-09-0{i + 1}T00:00:00+00:00")
+                Draft(
+                    id=f"d{i}",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at=f"2026-09-0{i + 1}T00:00:00+00:00",
+                )
                 for i in range(3)
             ],
         )
@@ -1119,10 +1192,20 @@ class TestPublishScheduled:
         cfg = self._seed(
             tmp_path,
             [
-                Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at="2026-09-01T00:00:00+00:00"),
-                Draft(id="b", state=APPROVED, caption="c", destinations=["facebook"],
-                      created_at="2026-09-02T00:00:00+00:00"),
+                Draft(
+                    id="a",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at="2026-09-01T00:00:00+00:00",
+                ),
+                Draft(
+                    id="b",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    created_at="2026-09-02T00:00:00+00:00",
+                ),
             ],
         )
         cfg["publish"]["post_per_slot"] = 5
@@ -1173,6 +1256,59 @@ class TestDna:
         assert pipeline.dna_text(_cfg(tmp_path)) == ""
 
 
+class TestVoice:
+    def _menu(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        technical = tmp_path / "technical.md"
+        technical.write_text("Voice: calm engineer.\n\n# technical\nbrief", encoding="utf-8")
+        funny = tmp_path / "funny.md"
+        funny.write_text("Voice: deadpan satirist.\n\n# funny\nbrief", encoding="utf-8")
+        cfg["publish"]["voices"] = {"technical": str(technical), "funny": str(funny)}
+        cfg["publish"]["default_voice"] = "technical"
+        return cfg
+
+    def test_choices_are_the_menu_keys(self, tmp_path):
+        assert pipeline.voice_choices(self._menu(tmp_path)) == ["technical", "funny"]
+
+    def test_default_voice_is_config(self, tmp_path):
+        assert pipeline.default_voice(self._menu(tmp_path)) == "technical"
+
+    def test_text_uses_the_chosen_key(self, tmp_path):
+        assert "deadpan" in pipeline.voice_text(self._menu(tmp_path), "funny")
+
+    def test_blank_key_uses_the_default(self, tmp_path):
+        assert "calm engineer" in pipeline.voice_text(self._menu(tmp_path))
+
+    def test_unknown_key_falls_back_to_the_default(self, tmp_path):
+        cfg = self._menu(tmp_path)
+        assert pipeline.voice_text(cfg, "nope") == pipeline.voice_text(cfg, "technical")
+
+    def test_missing_file_is_empty(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        cfg["publish"]["voices"] = {"gone": str(tmp_path / "nope.md")}
+        cfg["publish"]["default_voice"] = "gone"
+        assert pipeline.voice_text(cfg, "gone") == ""
+
+    def test_unset_menu_is_empty(self, tmp_path):
+        assert pipeline.voice_text(_cfg(tmp_path)) == ""
+        assert pipeline.voice_choices(_cfg(tmp_path)) == []
+
+    def test_hints_use_the_opening_line(self, tmp_path):
+        hints = pipeline.voice_hints(self._menu(tmp_path))
+        assert hints["technical"] == "calm engineer."
+        assert "deadpan" in hints["funny"]
+
+    def test_file_is_re_read_when_it_changes(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        voice = tmp_path / "voice.md"
+        voice.write_text("voice one", encoding="utf-8")
+        cfg["publish"]["voices"] = {"technical": str(voice)}
+        cfg["publish"]["default_voice"] = "technical"
+        assert pipeline.voice_text(cfg) == "voice one"
+        voice.write_text("voice two", encoding="utf-8")
+        assert pipeline.voice_text(cfg) == "voice two"
+
+
 class TestGenerateImages:
     def _cfg_with_gen(self, tmp_path, **overrides):
         cfg = _seed_draft(tmp_path)
@@ -1186,9 +1322,7 @@ class TestGenerateImages:
 
     def test_generates_and_stores_image(self, tmp_path, monkeypatch):
         cfg = self._cfg_with_gen(tmp_path)
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/one.jpg"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/one.jpg")
         result = pipeline.generate_images(cfg)
         assert result["generated"] == 1
         assert result["ids"] == ["post-one"]
@@ -1200,9 +1334,7 @@ class TestGenerateImages:
         draft = pipeline.get_draft(cfg, "post-one")
         draft.state = APPROVED
         pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/new.jpg"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/new.jpg")
         result = pipeline.generate_images(cfg, draft_ids=["post-one"], overwrite=True)
         assert result["generated"] == 1
         assert pipeline.get_draft(cfg, "post-one").image == "https://gen/new.jpg"
@@ -1214,9 +1346,7 @@ class TestGenerateImages:
         draft.state = APPROVED
         pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
         calls = []
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x")
         result = pipeline.generate_images(cfg, overwrite=True)
         assert result["generated"] == 0
         assert calls == []
@@ -1226,9 +1356,7 @@ class TestGenerateImages:
         draft = pipeline.get_draft(cfg, "post-one")
         draft.image = "https://blog/cover.jpg"
         pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/new.jpg"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/new.jpg")
         pipeline.generate_images(cfg, overwrite=True)
         assert pipeline.get_draft(cfg, "post-one").image == "https://gen/new.jpg"
 
@@ -1237,9 +1365,7 @@ class TestGenerateImages:
         draft = pipeline.get_draft(cfg, "post-one")
         draft.image = "https://blog/cover.jpg"
         pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/new.jpg"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/new.jpg")
         result = pipeline.generate_images(cfg, overwrite=False)
         assert result["generated"] == 0
         assert pipeline.get_draft(cfg, "post-one").image == "https://blog/cover.jpg"
@@ -1251,17 +1377,26 @@ class TestGenerateImages:
         draft.image = "https://blog/cover.jpg"
         pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
         calls = []
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x")
         result = pipeline.generate_images(cfg)
         assert result["generated"] == 0
         assert calls == []
         assert pipeline.get_draft(cfg, "post-one").image == "https://blog/cover.jpg"
 
-    def test_does_not_clobber_a_write_that_lands_during_generation(
-        self, tmp_path, monkeypatch
-    ):
+    def test_a_source_cover_is_never_generated_over(self, tmp_path, monkeypatch):
+        """A post that published its own image never gets an AI one automatically."""
+        cfg = self._cfg_with_gen(tmp_path)
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.source_image = "https://blog/cover.jpg"
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        calls = []
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x")
+        result = pipeline.generate_images(cfg)
+        assert result["generated"] == 0
+        assert calls == []
+        assert pipeline.get_draft(cfg, "post-one").image == ""
+
+    def test_does_not_clobber_a_write_that_lands_during_generation(self, tmp_path, monkeypatch):
         """Generation is slow: a rewrite arriving mid-call must survive the save.
 
         serve fills a draft's image in the background while rewriter batches are
@@ -1362,16 +1497,13 @@ class TestImageStyle:
         }
         return cfg
 
-    def test_menu_composes_the_floor_and_the_chosen_treatment(self, tmp_path):
+    def test_menu_leads_with_the_treatment_then_the_floor(self, tmp_path):
         cfg = self._menu_cfg(tmp_path)
-        assert (
-            pipeline.image_style_text(cfg, "technical")
-            == "Shared palette.\n\nBlueprint lines."
-        )
+        assert pipeline.image_style_text(cfg, "technical") == "Blueprint lines.\n\nShared palette."
 
     def test_unknown_or_blank_key_falls_back_to_the_default(self, tmp_path):
         cfg = self._menu_cfg(tmp_path)
-        expected = "Shared palette.\n\nQuiet still life."
+        expected = "Quiet still life.\n\nShared palette."
         assert pipeline.image_style_text(cfg, "nope") == expected
         assert pipeline.image_style_text(cfg) == expected
 
@@ -1417,8 +1549,8 @@ class TestImageStyle:
 
         monkeypatch.setattr(pipeline, "generate_for_draft", fake)
         pipeline.generate_images(cfg)
-        assert seen["A"] == "Shared palette.\n\nBlueprint lines."
-        assert seen["B"] == "Shared palette.\n\nQuiet still life."
+        assert seen["A"] == "Blueprint lines.\n\nShared palette."
+        assert seen["B"] == "Quiet still life.\n\nShared palette."
 
     def test_style_is_passed_to_generation(self, tmp_path, monkeypatch):
         style = tmp_path / "style.md"
@@ -1444,15 +1576,21 @@ class TestScanImageGen:
     def test_scan_does_not_generate_images(self, tmp_path, monkeypatch):
         """Images are generated after the rewrite supplies an image_prompt."""
         calls = []
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x")
         cfg = _cfg(tmp_path)
         cfg["image_gen"] = {**DEFAULTS["image_gen"], "enabled": True}
         pipeline.scan_sources(cfg, client=FakeClient())
         assert calls == []
         # The source image from enrichment is kept untouched.
         assert pipeline.get_draft(cfg, "post-one").image == "https://img/cover.jpg"
+
+    def test_scan_keeps_the_source_image_as_the_original(self, tmp_path):
+        """The cover the post published is recorded, so it can always be restored."""
+        cfg = _cfg(tmp_path)
+        pipeline.scan_sources(cfg, client=FakeClient())
+        draft = pipeline.get_draft(cfg, "post-one")
+        assert draft.source_image == "https://img/cover.jpg"
+        assert draft.source_image == draft.image
 
 
 class TestImagePrompt:
@@ -1509,9 +1647,7 @@ class TestGenerateMissingImage:
 
     def test_disabled_returns_none_without_generating(self, tmp_path, monkeypatch):
         calls = []
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x")
         cfg = _seed_draft(tmp_path)  # image_gen disabled by default
         assert pipeline.generate_missing_image(cfg, "post-one") is None
         assert calls == []
@@ -1522,9 +1658,7 @@ class TestGenerateMissingImage:
 
     def test_generates_when_image_is_missing(self, tmp_path, monkeypatch):
         cfg = self._cfg_with_gen(tmp_path)
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/one.jpg"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: "https://gen/one.jpg")
         result = pipeline.generate_missing_image(cfg, "post-one")
         assert result["generated"] == 1
         assert pipeline.get_draft(cfg, "post-one").image == "https://gen/one.jpg"
@@ -1535,12 +1669,23 @@ class TestGenerateMissingImage:
         draft.image = "https://blog/cover.jpg"
         pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
         calls = []
-        monkeypatch.setattr(
-            pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x"
-        )
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x")
         result = pipeline.generate_missing_image(cfg, "post-one")
         assert result["generated"] == 0
         assert calls == []  # a re-submitted rewrite must not regenerate
+        assert pipeline.get_draft(cfg, "post-one").image == "https://blog/cover.jpg"
+
+    def test_keeps_the_source_post_own_cover(self, tmp_path, monkeypatch):
+        cfg = self._cfg_with_gen(tmp_path)
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.source_image = "https://blog/cover.jpg"
+        draft.image = "https://blog/cover.jpg"
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        calls = []
+        monkeypatch.setattr(pipeline, "generate_for_draft", lambda *a, **kw: calls.append(1) or "x")
+        result = pipeline.generate_missing_image(cfg, "post-one")
+        assert result["generated"] == 0
+        assert calls == []
         assert pipeline.get_draft(cfg, "post-one").image == "https://blog/cover.jpg"
 
     def test_failure_is_recorded_not_raised(self, tmp_path, monkeypatch):
@@ -1556,6 +1701,118 @@ class TestGenerateMissingImage:
         assert result["errors"][0]["error"].startswith("image post-one")
 
 
+class TestImageIsGenerated:
+    """Telling an AI image apart from the source post's own picture."""
+
+    def _cfg(self, tmp_path, **overrides):
+        cfg = _seed_draft(tmp_path)
+        cfg["image_gen"] = {**DEFAULTS["image_gen"], "enabled": True, **overrides}
+        return cfg
+
+    def test_a_generated_url_is_recognised(self, tmp_path):
+        draft = Draft(id="p", image=f"{DEFAULT_BASE_URL}/a%20shape?width=1080")
+        assert pipeline.image_is_generated(self._cfg(tmp_path), draft) is True
+
+    def test_the_configured_endpoint_is_recognised(self, tmp_path):
+        cfg = self._cfg(tmp_path, base_url="https://images.example/generate")
+        assert (
+            pipeline.image_is_generated(
+                cfg, Draft(id="p", image="https://images.example/generate/thing")
+            )
+            is True
+        )
+
+    def test_the_legacy_endpoint_is_recognised(self, tmp_path):
+        draft = Draft(id="p", image="https://image.pollinations.ai/prompt/thing")
+        assert pipeline.image_is_generated(self._cfg(tmp_path), draft) is True
+
+    def test_a_source_cover_is_not_generated(self, tmp_path):
+        draft = Draft(id="p", image="https://substackcdn.com/image/fetch/x.jpg")
+        assert pipeline.image_is_generated(self._cfg(tmp_path), draft) is False
+
+    def test_no_image_is_not_generated(self, tmp_path):
+        assert pipeline.image_is_generated(self._cfg(tmp_path), Draft(id="p")) is False
+
+    def test_a_recorded_source_image_decides(self, tmp_path):
+        cfg = self._cfg(tmp_path)
+        kept = Draft(id="p", image="https://blog/cover.jpg", source_image="https://blog/cover.jpg")
+        replaced = Draft(
+            id="p", image=f"{DEFAULT_BASE_URL}/x", source_image="https://blog/cover.jpg"
+        )
+        assert pipeline.image_is_generated(cfg, kept) is False
+        assert pipeline.image_is_generated(cfg, replaced) is True
+
+
+class TestRestoreSourceImage:
+    """Putting the source post's own picture back after a generated one."""
+
+    class _NoFetch:
+        """A source client that fails the test if it is asked for anything."""
+
+        def get_text(self, url):
+            raise AssertionError(f"should not fetch {url}")
+
+    def _save(self, cfg, **fields):
+        draft = pipeline.get_draft(cfg, "post-one")
+        for name, value in fields.items():
+            setattr(draft, name, value)
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        return draft
+
+    def test_restores_the_stored_source_image(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        self._save(cfg, source_image="https://blog/cover.jpg", image="https://gen/one.jpg")
+        pipeline.restore_source_image(cfg, "post-one", client=self._NoFetch())
+        assert pipeline.get_draft(cfg, "post-one").image == "https://blog/cover.jpg"
+
+    def test_leaves_the_caption_untouched(self, tmp_path):
+        cfg = _seed_draft(tmp_path, caption="Giữ nguyên caption")
+        self._save(cfg, source_image="https://blog/cover.jpg", image="https://gen/one.jpg")
+        pipeline.restore_source_image(cfg, "post-one", client=self._NoFetch())
+        assert pipeline.get_draft(cfg, "post-one").caption == "Giữ nguyên caption"
+
+    def test_recovers_the_source_image_from_the_page(self, tmp_path):
+        """A draft scanned before the source image was kept can still get it back."""
+        cfg = _seed_draft(tmp_path)
+        self._save(cfg, image="https://gen/one.jpg")
+        pipeline.restore_source_image(cfg, "post-one", client=FakeClient())
+        fresh = pipeline.get_draft(cfg, "post-one")
+        assert fresh.image == "https://img/cover.jpg"
+        assert fresh.source_image == "https://img/cover.jpg"
+
+    def test_a_recovered_image_is_reused_without_fetching_again(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        self._save(cfg, image="https://gen/one.jpg")
+        pipeline.restore_source_image(cfg, "post-one", client=FakeClient())
+        self._save(cfg, image="https://gen/two.jpg")
+        pipeline.restore_source_image(cfg, "post-one", client=self._NoFetch())
+        assert pipeline.get_draft(cfg, "post-one").image == "https://img/cover.jpg"
+
+    def test_unknown_draft_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="no draft"):
+            pipeline.restore_source_image(_seed_draft(tmp_path), "nope")
+
+    def test_no_source_url_raises(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        self._save(cfg, url="")
+        with pytest.raises(ValueError, match="no source URL"):
+            pipeline.restore_source_image(cfg, "post-one")
+
+    def test_a_page_without_an_image_raises(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        client = FakeClient(
+            docs={"https://atento.vn/blog/post-one": "<html><body>hi</body></html>"}
+        )
+        with pytest.raises(ValueError, match="publishes no image"):
+            pipeline.restore_source_image(cfg, "post-one", client=client)
+
+    def test_an_unreachable_page_raises(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        client = FakeClient(fail={"https://atento.vn/blog/post-one"})
+        with pytest.raises(ValueError, match="could not read the source page"):
+            pipeline.restore_source_image(cfg, "post-one", client=client)
+
+
 class TestStatus:
     def test_counts_after_scan(self, tmp_path):
         cfg = _cfg(tmp_path)
@@ -1568,20 +1825,34 @@ class TestStatus:
         assert snapshot["sources"][0]["name"] == "atento-blog"
         assert snapshot["publish"]["destinations"] == ["facebook"]
         assert snapshot["publish"]["dna_file_set"] is False
+        assert snapshot["publish"]["voices_set"] is False
+        assert snapshot["publish"]["voice_choices"] == []
+        assert snapshot["publish"]["default_voice"] == ""
 
     def test_next_draft_is_the_oldest_approved(self, tmp_path):
         cfg = _cfg(tmp_path)
         pipeline.save_drafts(
             pipeline.queue_path(cfg),
             [
-                Draft(id="new", state=APPROVED, title="Newest",
-                      caption="[Học cùng Atento]\n\nBài mới",
-                      destinations=["facebook"], published="2026-09-10T00:00:00+00:00"),
-                Draft(id="old", state=APPROVED, title="Oldest",
-                      caption="[Học cùng Atento]\n\nBài cũ",
-                      destinations=["facebook"], published="2026-09-01T00:00:00+00:00"),
-                Draft(id="drafting", state=AI_DRAFT, title="Not approved",
-                      destinations=["facebook"]),
+                Draft(
+                    id="new",
+                    state=APPROVED,
+                    title="Newest",
+                    caption="[Học cùng Atento]\n\nBài mới",
+                    destinations=["facebook"],
+                    published="2026-09-10T00:00:00+00:00",
+                ),
+                Draft(
+                    id="old",
+                    state=APPROVED,
+                    title="Oldest",
+                    caption="[Học cùng Atento]\n\nBài cũ",
+                    destinations=["facebook"],
+                    published="2026-09-01T00:00:00+00:00",
+                ),
+                Draft(
+                    id="drafting", state=AI_DRAFT, title="Not approved", destinations=["facebook"]
+                ),
             ],
         )
         publish = pipeline.status(cfg)["publish"]
@@ -1607,8 +1878,13 @@ class TestStatus:
         pipeline.save_drafts(
             pipeline.queue_path(cfg),
             [
-                Draft(id="a", state=APPROVED, caption="c", destinations=["facebook"],
-                      image="https://img/cover.jpg"),
+                Draft(
+                    id="a",
+                    state=APPROVED,
+                    caption="c",
+                    destinations=["facebook"],
+                    image="https://img/cover.jpg",
+                ),
             ],
         )
         publish = pipeline.status(cfg)["publish"]
@@ -1625,3 +1901,179 @@ class TestStatus:
         assert snapshot["published"]["recent"][0]["post_id"] == "123_9"
         assert snapshot["drafts"]["by_state"]["posted"] == 1
         assert snapshot["drafts"]["open"] == 0
+
+
+class TestQueueOrdering:
+    """Manual ordering of the post queue (the Post queue tab's queue controls).
+
+    The default (oldest source date first) must be untouched until an operator
+    reorders something; a manual rank then lifts a draft ahead of the FIFO tail.
+    """
+
+    def _seed(self, tmp_path, drafts):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(pipeline.queue_path(cfg), drafts)
+        return cfg
+
+    @staticmethod
+    def _approved(draft_id, day, **kw):
+        return Draft(
+            id=draft_id,
+            state=APPROVED,
+            caption="c",
+            destinations=["facebook"],
+            created_at=f"2026-09-{day:02d}T00:00:00+00:00",
+            **kw,
+        )
+
+    def _queue_ids(self, cfg):
+        return [d.id for d in pipeline.scheduled_queue(cfg)]
+
+    def test_unranked_queue_is_unchanged_oldest_first(self, tmp_path):
+        cfg = self._seed(tmp_path, [self._approved("b", 5), self._approved("a", 1)])
+        assert self._queue_ids(cfg) == ["a", "b"]
+
+    def test_a_ranked_draft_moves_ahead_of_the_fifo_tail(self, tmp_path):
+        # b is newer, but ranked, so it posts before the older unranked a.
+        cfg = self._seed(tmp_path, [self._approved("a", 1), self._approved("b", 5, queue_order=1)])
+        assert self._queue_ids(cfg) == ["b", "a"]
+
+    def test_ranks_order_the_ranked_block(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                self._approved("a", 1, queue_order=2),
+                self._approved("b", 5, queue_order=1),
+                self._approved("c", 9),
+            ],
+        )
+        assert self._queue_ids(cfg) == ["b", "a", "c"]
+
+    def test_a_later_approved_unranked_draft_sorts_last(self, tmp_path):
+        # c is the oldest source but unranked, so it follows the ranked block.
+        cfg = self._seed(
+            tmp_path,
+            [
+                self._approved("a", 5, queue_order=1),
+                self._approved("b", 6, queue_order=2),
+                self._approved("c", 1),
+            ],
+        )
+        assert self._queue_ids(cfg) == ["a", "b", "c"]
+
+    def test_next_scheduled_follows_the_manual_order(self, tmp_path):
+        cfg = self._seed(tmp_path, [self._approved("a", 1), self._approved("b", 5, queue_order=1)])
+        assert pipeline.next_scheduled(pipeline.load_drafts(pipeline.queue_path(cfg))).id == "b"
+        assert pipeline.status(cfg)["publish"]["next_draft"]["id"] == "b"
+
+    def test_non_queued_drafts_are_ignored(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                self._approved("a", 1, queue_order=2),
+                self._approved("b", 5, queue_order=1),
+                Draft(id="ai", state=AI_DRAFT, caption="c", destinations=["facebook"]),
+                Draft(id="posted", state=POSTED, destinations=["facebook"]),
+            ],
+        )
+        assert self._queue_ids(cfg) == ["b", "a"]
+
+    def test_move_up_swaps_with_the_neighbour(self, tmp_path):
+        cfg = self._seed(
+            tmp_path, [self._approved("a", 1), self._approved("b", 2), self._approved("c", 3)]
+        )
+        pipeline.move_in_queue(cfg, "c", "up")
+        assert self._queue_ids(cfg) == ["a", "c", "b"]
+
+    def test_move_down_swaps_with_the_neighbour(self, tmp_path):
+        cfg = self._seed(
+            tmp_path, [self._approved("a", 1), self._approved("b", 2), self._approved("c", 3)]
+        )
+        pipeline.move_in_queue(cfg, "a", "down")
+        assert self._queue_ids(cfg) == ["b", "a", "c"]
+
+    def test_move_to_top(self, tmp_path):
+        cfg = self._seed(
+            tmp_path, [self._approved("a", 1), self._approved("b", 2), self._approved("c", 3)]
+        )
+        pipeline.move_in_queue(cfg, "c", "top")
+        assert self._queue_ids(cfg) == ["c", "a", "b"]
+
+    def test_move_to_bottom(self, tmp_path):
+        cfg = self._seed(
+            tmp_path, [self._approved("a", 1), self._approved("b", 2), self._approved("c", 3)]
+        )
+        pipeline.move_in_queue(cfg, "a", "bottom")
+        assert self._queue_ids(cfg) == ["b", "c", "a"]
+
+    def test_move_at_the_ends_is_a_noop(self, tmp_path):
+        cfg = self._seed(tmp_path, [self._approved("a", 1), self._approved("b", 2)])
+        pipeline.move_in_queue(cfg, "a", "up")
+        pipeline.move_in_queue(cfg, "b", "down")
+        assert self._queue_ids(cfg) == ["a", "b"]
+
+    def test_move_unknown_direction_raises(self, tmp_path):
+        cfg = self._seed(tmp_path, [self._approved("a", 1)])
+        with pytest.raises(ValueError):
+            pipeline.move_in_queue(cfg, "a", "sideways")
+
+    def test_move_rejects_a_draft_outside_the_queue(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                self._approved("a", 1),
+                Draft(id="ai", state=AI_DRAFT, caption="c", destinations=["facebook"]),
+            ],
+        )
+        with pytest.raises(ValueError, match="not in the post queue"):
+            pipeline.move_in_queue(cfg, "ai", "up")
+
+    def test_move_normalizes_the_ranks(self, tmp_path):
+        cfg = self._seed(
+            tmp_path, [self._approved("a", 1), self._approved("b", 2), self._approved("c", 3)]
+        )
+        pipeline.move_in_queue(cfg, "c", "top")
+        ranks = {d.id: d.queue_order for d in pipeline.load_drafts(pipeline.queue_path(cfg))}
+        assert ranks == {"c": 1, "a": 2, "b": 3}
+
+    def test_set_queue_order_takes_a_subset(self, tmp_path):
+        # A drag on one page sends only the visible rows; the rest keep their
+        # relative place (d and b swap into the slots they already occupy).
+        cfg = self._seed(
+            tmp_path,
+            [
+                self._approved("a", 1),
+                self._approved("b", 2),
+                self._approved("c", 3),
+                self._approved("d", 4),
+            ],
+        )
+        pipeline.set_queue_order(cfg, ["d", "b"])
+        assert self._queue_ids(cfg) == ["a", "d", "c", "b"]
+
+    def test_set_queue_order_rejects_unknown_and_duplicate_ids(self, tmp_path):
+        cfg = self._seed(tmp_path, [self._approved("a", 1), self._approved("b", 2)])
+        with pytest.raises(ValueError, match="not in the post queue"):
+            pipeline.set_queue_order(cfg, ["a", "nope"])
+        with pytest.raises(ValueError, match="duplicate"):
+            pipeline.set_queue_order(cfg, ["a", "a"])
+
+    def test_reset_queue_order_restores_the_default(self, tmp_path):
+        cfg = self._seed(
+            tmp_path, [self._approved("a", 1, queue_order=2), self._approved("b", 5, queue_order=1)]
+        )
+        assert self._queue_ids(cfg) == ["b", "a"]
+        assert pipeline.reset_queue_order(cfg) == 2
+        assert self._queue_ids(cfg) == ["a", "b"]
+        # Nothing left to clear the second time.
+        assert pipeline.reset_queue_order(cfg) == 0
+
+    def test_queue_view_lists_the_queue_in_posting_order(self, tmp_path):
+        cfg = self._seed(
+            tmp_path,
+            [
+                self._approved("a", 1, title="Alpha"),
+                self._approved("b", 5, title="Bravo", queue_order=1),
+            ],
+        )
+        assert [row["id"] for row in pipeline.queue_view(cfg)] == ["b", "a"]

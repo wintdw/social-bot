@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
+
 import pytest
 
 from social_bot.source import (
@@ -124,7 +126,7 @@ class TestParseSource:
         assert src.type == "sitemap" and src.name == "n"
 
     def test_bad_xml_raises(self):
-        with pytest.raises(Exception):
+        with pytest.raises(ET.ParseError):
             parse_sitemap("not xml", "/blog/")
 
 

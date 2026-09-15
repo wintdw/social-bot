@@ -9,7 +9,6 @@ import pytest
 from social_bot.drafts import (
     AI_DRAFT,
     APPROVED,
-    EXTRACTED,
     POSTED,
     REJECTED,
     Draft,
@@ -40,12 +39,14 @@ class TestState:
             hashtags=["#a", "#b"],
             image_prompt="a long ledger",
             image_style="sketch",
+            voice="technical",
         )
         assert draft.state == AI_DRAFT
         assert draft.caption == "Hello"
         assert draft.hashtags == ["#a", "#b"]
         assert draft.image_prompt == "a long ledger"
         assert draft.image_style == "sketch"
+        assert draft.voice == "technical"
         assert draft.updated_at  # touched
 
     def test_cannot_approve_from_extracted(self):
@@ -74,9 +75,7 @@ class TestState:
     def test_mark_posted(self):
         draft = _draft()
         draft.apply_rewrite(caption="c")
-        draft.mark_posted(
-            "facebook", post_id="123_9", permalink="https://www.facebook.com/123_9"
-        )
+        draft.mark_posted("facebook", post_id="123_9", permalink="https://www.facebook.com/123_9")
         assert draft.state == POSTED
         assert draft.post_id == "123_9"
         assert draft.permalink.endswith("123_9")
@@ -188,6 +187,11 @@ class TestPersistence:
         draft = Draft(id="x", lint=[{"code": "hype", "message": "m"}])
         assert Draft.from_dict(draft.to_dict()).lint == [{"code": "hype", "message": "m"}]
 
+    def test_voice_defaults_to_empty_and_round_trips(self):
+        assert Draft(id="x").voice == ""
+        draft = Draft(id="x", voice="funny")
+        assert Draft.from_dict(draft.to_dict()).voice == "funny"
+
     def test_from_dict_migrates_legacy_flat_post_fields(self):
         draft = Draft.from_dict(
             {
@@ -203,6 +207,20 @@ class TestPersistence:
         assert draft.post_id == "1_2"
         assert draft.permalink == "https://www.facebook.com/1_2"
         assert draft.state == POSTED
+
+    def test_queue_order_defaults_and_round_trips(self):
+        # A draft that predates the field keeps working: 0 means "default order".
+        assert Draft(id="x").queue_order == 0
+        draft = Draft(id="x", queue_order=3)
+        assert Draft.from_dict(draft.to_dict()).queue_order == 3
+        assert Draft.from_dict({"id": "x"}).queue_order == 0
+
+    def test_rank_coerces_rubbish_to_unset(self):
+        # A hand-edited queue.json must never break the sort.
+        assert Draft(id="x", queue_order=4).rank == 4
+        assert Draft(id="x", queue_order=0).rank == 0
+        assert Draft(id="x", queue_order=-2).rank == 0
+        assert Draft.from_dict({"id": "x", "queue_order": "later"}).rank == 0
 
     def test_find(self):
         drafts = [_draft(), _draft(id="post-two")]

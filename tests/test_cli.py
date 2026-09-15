@@ -44,28 +44,20 @@ class TestPostValidation:
 
 
 class TestPostExecution:
-    def test_photo_dry_run_targets_photos_endpoint(
-        self, stub_config, monkeypatch, capsys
-    ):
+    def test_photo_dry_run_targets_photos_endpoint(self, stub_config, monkeypatch, capsys):
         monkeypatch.setattr(cli, "api_from_config", lambda cfg, token: object())
-        args = cli._parse_args(
-            ["post", "--message", "hi", "--photo", PHOTO, "--dry-run"]
-        )
+        args = cli._parse_args(["post", "--message", "hi", "--photo", PHOTO, "--dry-run"])
         assert cli._cmd_post(args) == 0
         lines = capsys.readouterr().out.splitlines()
         assert lines[0] == "dry-run: would POST to /123/photos"
         assert json.loads("\n".join(lines[1:])) == {"url": PHOTO, "caption": "hi"}
 
-    def test_photo_post_sends_caption_and_prints_permalink(
-        self, stub_config, monkeypatch, capsys
-    ):
+    def test_photo_post_sends_caption_and_prints_permalink(self, stub_config, monkeypatch, capsys):
         calls = {}
 
         class FakeApi:
             def create_photo_post(self, page_id, caption, url, published=True):
-                calls.update(
-                    page_id=page_id, caption=caption, url=url, published=published
-                )
+                calls.update(page_id=page_id, caption=caption, url=url, published=published)
                 return {"id": "999", "post_id": "123_456"}
 
         monkeypatch.setattr(cli, "api_from_config", lambda cfg, token: FakeApi())
@@ -100,13 +92,9 @@ class TestPostPrivateMode:
             },
         )
 
-    def test_dry_run_marks_the_post_unpublished(
-        self, private_config, monkeypatch, capsys
-    ):
+    def test_dry_run_marks_the_post_unpublished(self, private_config, monkeypatch, capsys):
         monkeypatch.setattr(cli, "api_from_config", lambda cfg, token: object())
-        args = cli._parse_args(
-            ["post", "--message", "hi", "--photo", PHOTO, "--dry-run"]
-        )
+        args = cli._parse_args(["post", "--message", "hi", "--photo", PHOTO, "--dry-run"])
         assert cli._cmd_post(args) == 0
         lines = capsys.readouterr().out.splitlines()
         assert lines[0] == "dry-run: would POST to /123/photos (unpublished)"
@@ -116,9 +104,7 @@ class TestPostPrivateMode:
             "published": "false",
         }
 
-    def test_private_post_sends_published_false(
-        self, private_config, monkeypatch, capsys
-    ):
+    def test_private_post_sends_published_false(self, private_config, monkeypatch, capsys):
         calls = {}
 
         class FakeApi:
@@ -180,7 +166,9 @@ class TestBlogImageCommand:
         monkeypatch.setattr(
             cli,
             "generate_images",
-            lambda cfg, **kw: captured.update(kw) or {"generated": 0, "candidates": 0, "ids": [], "errors": []},
+            lambda cfg, **kw: (
+                captured.update(kw) or {"generated": 0, "candidates": 0, "ids": [], "errors": []}
+            ),
         )
         cli._cmd_blog_image(cli._parse_args(["blog", "image"]))
         assert captured["overwrite"] is None
@@ -191,7 +179,9 @@ class TestBlogImageCommand:
         monkeypatch.setattr(
             cli,
             "generate_images",
-            lambda cfg, **kw: captured.update(kw) or {"generated": 0, "candidates": 0, "ids": [], "errors": []},
+            lambda cfg, **kw: (
+                captured.update(kw) or {"generated": 0, "candidates": 0, "ids": [], "errors": []}
+            ),
         )
         cli._cmd_blog_image(cli._parse_args(["blog", "image", "--overwrite"]))
         assert captured["overwrite"] is True
@@ -243,10 +233,11 @@ class TestBlogMastheadCommand:
         monkeypatch.setattr(
             cli,
             "apply_masthead",
-            lambda cfg, **kw: captured.update(kw)
-            or {"updated": 0, "ids": [], "masthead": ""},
+            lambda cfg, **kw: captured.update(kw) or {"updated": 0, "ids": [], "masthead": ""},
         )
-        cli._cmd_blog_masthead(cli._parse_args(["blog", "masthead", "--draft", "a", "--limit", "5"]))
+        cli._cmd_blog_masthead(
+            cli._parse_args(["blog", "masthead", "--draft", "a", "--limit", "5"])
+        )
         assert captured == {"draft_ids": ["a"], "limit": 5}
 
     def test_json_mode(self, monkeypatch, capsys):
@@ -268,9 +259,7 @@ class TestBlogMastheadCommand:
 class TestBlogScanCommand:
     def _stub(self, monkeypatch, result):
         monkeypatch.setattr(cli, "_load_config", lambda args: {})
-        monkeypatch.setattr(
-            cli, "scan_sources", lambda cfg, limit=None, source_names=None: result
-        )
+        monkeypatch.setattr(cli, "scan_sources", lambda cfg, limit=None, source_names=None: result)
 
     def test_reports_queued(self, monkeypatch, capsys):
         self._stub(

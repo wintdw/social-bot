@@ -26,9 +26,7 @@ UA = "social-bot/0.1 (Graph API client)"
 #   pages_manage_posts     -> post to the page
 #   pages_show_list        -> `whoami` lists the pages the token can manage
 
-FEED_FIELDS = (
-    "id,created_time,message,story,permalink_url,status_type,full_picture,from{name,id}"
-)
+FEED_FIELDS = "id,created_time,message,story,permalink_url,status_type,full_picture,from{name,id}"
 
 
 class ApiError(DestinationError):
@@ -50,7 +48,7 @@ class ApiError(DestinationError):
         self.fbtrace = fbtrace
 
     @classmethod
-    def from_payload(cls, body: dict, *, status: int | None = None) -> "ApiError":
+    def from_payload(cls, body: dict, *, status: int | None = None) -> ApiError:
         """Build an ApiError from a decoded Graph API error response."""
         err = body.get("error", {}) if isinstance(body, dict) else {}
         message = (
@@ -69,7 +67,7 @@ class ApiError(DestinationError):
         )
 
 
-def api_from_config(cfg: dict, token: str | None = None) -> "GraphApi":
+def api_from_config(cfg: dict, token: str | None = None) -> GraphApi:
     """Build a GraphApi from the facebook destination config, resolving the token."""
     graph = cfg["destinations"]["facebook"]
     tok = resolve_token("facebook", cfg, token)
@@ -92,11 +90,9 @@ def token_status_from_debug(data: dict, *, now: dt.datetime | None = None) -> di
     ``expires_at`` 0 means the token never expires (Graph's convention), so
     ``never_expires`` is True and the rest of the expiry fields are None.
     """
-    now = now or dt.datetime.now(dt.timezone.utc)
+    now = now or dt.datetime.now(dt.UTC)
     raw_expires = int(data.get("expires_at") or 0)
-    expires = (
-        dt.datetime.fromtimestamp(raw_expires, tz=dt.timezone.utc) if raw_expires else None
-    )
+    expires = dt.datetime.fromtimestamp(raw_expires, tz=dt.UTC) if raw_expires else None
     error = data.get("error")
     return {
         "valid": bool(data.get("is_valid")),

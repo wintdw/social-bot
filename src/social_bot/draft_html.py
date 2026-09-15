@@ -21,7 +21,7 @@ import urllib.parse
 from .caption import display_title, leading_masthead
 from .destinations import label_for, labels_for
 from .drafts import Draft, parse_when
-from .ui import BRAND_EYEBROW, badge, layout
+from .ui import BRAND_EYEBROW, badge, fmt_when, layout
 
 # Human labels for the status filter chips (the badge shows the raw state).
 _STATE_LABELS = {
@@ -33,11 +33,19 @@ _STATE_LABELS = {
 }
 
 # The pipeline stages a draft moves through, in order.
-_PIPELINE_STEPS = (("extracted", "Extracted"), ("ai_draft", "AI draft"),
-                   ("approved", "Approved"), ("posted", "Posted"))
+_PIPELINE_STEPS = (
+    ("extracted", "Extracted"),
+    ("ai_draft", "AI draft"),
+    ("approved", "Approved"),
+    ("posted", "Posted"),
+)
 
-# Sort orders offered on the queue. The default is the queue's own order.
-_SORTS = (("newest", "Newest first"), ("oldest", "Oldest first"))
+# Sort orders offered on the review list. Whether a draft posts, and when, is
+# not a review concern — that order lives on the Post queue tab.
+_SORTS = (
+    ("newest", "Newest first"),
+    ("oldest", "Oldest first"),
+)
 
 # Client-side enhancement for the detail page: keeps the post preview and the
 # character count in sync while editing, blocks a double submit, and asks for
@@ -70,7 +78,8 @@ _DETAIL_SCRIPT = """<script>
     var button = event.submitter;
     var isApprove = !!button && button.name === 'approve';
     var isSave = !!button && button.name === 'save';
-    if (!isApprove && !isSave && form.dataset.private !== 'true') {
+    var isRegen = !!button && button.name === 'regenerate';
+    if (!isApprove && !isSave && !isRegen && form.dataset.private !== 'true') {
       if (!window.confirm('Post this publicly to __DEST__?')) {
         event.preventDefault();
         return;
@@ -82,6 +91,7 @@ _DETAIL_SCRIPT = """<script>
     }
     if (isApprove) button.textContent = 'Approving\u2026';
     else if (isSave) button.textContent = 'Saving\u2026';
+    else if (isRegen) button.textContent = 'Generating\u2026';
     else if (button) button.textContent = 'Posting\u2026';
   });
   var reject = document.getElementById('reject-form');
@@ -90,33 +100,54 @@ _DETAIL_SCRIPT = """<script>
       event.preventDefault();
     }
   });
-  // Swap the style guidance as the treatment changes; the server renders the
-  // selected hint, so this only keeps it in step without a reload.
-  var styleSel = document.getElementById('image_style');
-  var styleHint = document.getElementById('image_style_hint');
-  if (styleSel && styleHint) styleSel.addEventListener('change', function () {
-    var option = styleSel.options[styleSel.selectedIndex];
-    var hint = option && option.getAttribute('data-hint');
-    if (hint) styleHint.textContent = hint;
-  });
+  // Swap the guidance as the image style or the voice changes; the server
+  // renders the selected hint, so this only keeps it in step without a reload.
+  function wireHint(selectId, hintId) {
+    var select = document.getElementById(selectId);
+    var hint = document.getElementById(hintId);
+    if (!select || !hint) return;
+    select.addEventListener('change', function () {
+      var option = select.options[select.selectedIndex];
+      var text = option && option.getAttribute('data-hint');
+      if (text) hint.textContent = text;
+    });
+  }
+  wireHint('image_style', 'image_style_hint');
+  wireHint('voice', 'voice_hint');
+  // A background image job is in flight: poll until it finishes, then reload so
+  // the new image shows. Never reload over unsaved edits — if the operator has
+  // typed, say the image is ready and let them reload.
+  var job = document.getElementById('image-job');
+  if (job) {
+    var dirty = false;
+    form.addEventListener('input', function () { dirty = true; });
+    var tries = 0;
+    var check = function () {
+      if (++tries > 120) return;
+      fetch('/api/status').then(function (r) { return r.json(); }).then(function (data) {
+        var jobs = (data && data.images && data.images.jobs) || [];
+        var mine = null;
+        for (var i = 0; i < jobs.length; i++) {
+          if (jobs[i].draft_id === job.getAttribute('data-draft-id')) mine = jobs[i];
+        }
+        if (mine && mine.status === 'running') { window.setTimeout(check, 3000); return; }
+        if (dirty) {
+          job.className = 'notice notice-ok';
+          job.textContent = 'Image ready \u2014 reload to see it.';
+          return;
+        }
+        // Drop the ?message= query so the "generating" flash does not linger.
+        window.location.href = window.location.pathname;
+      }).catch(function () { window.setTimeout(check, 5000); });
+    };
+    window.setTimeout(check, 3000);
+  }
 })();
 </script>"""
 
 
-def _fmt_date(value: str) -> str:
-    """An item timestamp as local 'YYYY-MM-DD HH:MM'.
-
-    Returns the raw text when unparseable — source feeds date their items in
-    several formats (RSS pubDate is RFC 822, Atom is ISO 8601).
-    """
-    parsed = parse_when(value)
-    if parsed is None:
-        return str(value or "").strip()
-    return parsed.astimezone().strftime("%Y-%m-%d %H:%M")
-
-
 def _draft_card(draft: Draft) -> str:
-    """One queue row: thumbnail, title, state/source/date, caption preview."""
+    """One review row: thumbnail, title, state/source/date, caption preview."""
     url = html.escape(f"/review/{draft.id}")
     title = html.escape(display_title(draft.caption, draft.title or draft.id))
     if draft.image:
@@ -133,11 +164,11 @@ def _draft_card(draft: Draft) -> str:
     masthead = leading_masthead(draft.caption)
     if masthead:
         meta.append(f'<span class="pill">{html.escape(masthead)}</span>')
-    # Show the item's own date — the one the queue is sorted by — falling back
+    # Show the item's own date — the one the list is sorted by — falling back
     # to when it was queued (a source without dates still shows something).
     stamp = draft.published or draft.created_at or draft.updated_at
     label = "published" if draft.published else "queued"
-    shown = _fmt_date(stamp)
+    shown = fmt_when(stamp)
     if shown:
         machine = parse_when(stamp)
         if machine:  # <time datetime> must be ISO 8601, not the raw RFC 822
@@ -197,15 +228,10 @@ def _segment(label: str, href: str, *, active: bool, count: int | None = None) -
     """One option in the status segmented control (a plain link, no JS)."""
     current = ' aria-current="true"' if active else ""
     num = f'<span class="count">{count}</span>' if count is not None else ""
-    return (
-        f'<a class="seg-item" href="{html.escape(href)}"{current}>'
-        f"{html.escape(label)}{num}</a>"
-    )
+    return f'<a class="seg-item" href="{html.escape(href)}"{current}>{html.escape(label)}{num}</a>'
 
 
-def _pagination_bar(
-    page: dict, source: str, status: str, *, q: str = "", sort: str = ""
-) -> str:
+def _pagination_bar(page: dict, source: str, status: str, *, q: str = "", sort: str = "") -> str:
     """Prev/next pager for the review list, preserving the active filters."""
     pages = int(page.get("pages") or 1)
     if pages <= 1:
@@ -310,7 +336,7 @@ def _search_form(
         hidden += f'<input type="hidden" name="per_page" value="{per_page}">'
     options = "".join(
         f'<option value="{html.escape(value)}"'
-        f'{" selected" if value == (sort or "newest") else ""}>'
+        f"{' selected' if value == (sort or 'newest') else ''}>"
         f"{html.escape(label)}</option>"
         for value, label in _SORTS
     )
@@ -342,7 +368,6 @@ def render_drafts_html(
     source_total: int | None = None,
     status_total: int | None = None,
     page: dict | None = None,
-    scheduling: bool = False,
     q: str = "",
     sort: str = "",
 ) -> str:
@@ -355,6 +380,9 @@ def render_drafts_html(
     the unfiltered queue size and ``matched`` the count matching the filters
     (defaults to the page size), so the header can read "3 of 12 open draft(s)".
     ``page`` is ``draft_pipeline.paginate``'s metadata (prev/next pager) or None.
+
+    Rows are plain links. The posting order is set on the Post queue tab, not
+    here, so a review row carries no reorder controls.
     """
     generated_at = generated_at or dt.datetime.now()
     matched = len(drafts) if matched is None else matched
@@ -363,21 +391,13 @@ def render_drafts_html(
     status_total = total if status_total is None else status_total
     per_page = int((page or {}).get("per_page") or 0)
     filtered = total != matched or bool(q)
-    count_text = (
-        f"{matched} of {total} open draft(s)" if filtered else f"{matched} open draft(s)"
-    )
+    count_text = f"{matched} of {total} open draft(s)" if filtered else f"{matched} open draft(s)"
     header = (
-        "<header><div><h1>Review</h1>"
+        "<header><div><h1>Review queue</h1>"
         f'<div class="sub">{count_text} · generated '
         f"{html.escape(generated_at.astimezone().strftime('%Y-%m-%d %H:%M %Z'))}</div></div>"
         '<div class="cmdbar">'
-        + (
-            '<form method="post" action="/publish/run">'
-            '<button type="submit">Post approved now</button></form>'
-            if scheduling
-            else ""
-        )
-        + '<form method="post" action="/scan">'
+        '<form method="post" action="/scan">'
         '<button type="submit" class="btn-primary">Scan sources now</button></form>'
         "</div></header>"
     )
@@ -432,8 +452,7 @@ def _lint_notice(draft: Draft) -> str:
     if not draft.lint:
         return ""
     items = "".join(
-        f'<li>{html.escape(str(warning.get("message", "")))}</li>'
-        for warning in draft.lint
+        f"<li>{html.escape(str(warning.get('message', '')))}</li>" for warning in draft.lint
     )
     return (
         '<div class="notice notice-warn">'
@@ -480,9 +499,14 @@ def render_draft_html(
     private: bool = False,
     image_enabled: bool = False,
     image_status: dict | None = None,
+    image_generated: bool = False,
     image_styles: list[str] | None = None,
     default_image_style: str = "",
     image_style_hints: dict[str, str] | None = None,
+    voices: list[str] | None = None,
+    default_voice: str = "",
+    voice_hints: dict[str, str] | None = None,
+    voice_text: str = "",
     generated_at: dt.datetime | None = None,
     next_id: str | None = None,
     scheduling: bool = False,
@@ -497,13 +521,11 @@ def render_draft_html(
         meta_bits.append(f'<span class="badge badge-source">{html.escape(draft.source)}</span>')
     if draft.published:
         # Sources date items several ways (RFC 822, ISO 8601); show it the same
-        # way the queue rows do rather than leaking the raw string.
-        meta_bits.append(f"<span>published {html.escape(_fmt_date(draft.published))}</span>")
+        # way the list rows do rather than leaking the raw string.
+        meta_bits.append(f"<span>published {html.escape(fmt_when(draft.published))}</span>")
     next_link = ""
     if next_id:
-        next_link = (
-            f'<a class="next" href="/review/{html.escape(next_id)}">Next draft →</a>'
-        )
+        next_link = f'<a class="next" href="/review/{html.escape(next_id)}">Next draft →</a>'
     header = (
         "<header><div>"
         '<a class="crumbs" href="/review">← Review queue</a>'
@@ -521,30 +543,36 @@ def render_draft_html(
             "</figure>"
         )
 
-    # The image is generated in the background after a rewrite, so say whether
-    # it is still coming, failed, or was never started — "no image" alone is
-    # ambiguous. Only shown while the draft still has no image.
+    # The image is generated in the background (after a rewrite, or from the
+    # Regenerate button), so report the job's own state — "no image" alone can't
+    # tell "still coming" from "failed" from "never started". Running and failed
+    # are shown even when an image already exists: a regeneration can fail and
+    # leave the previous image in place, and the operator needs to see that.
     image_note = ""
-    if not draft.image:
-        status = (image_status or {}).get("status")
-        if status == "running":
-            image_note = (
-                '<p class="muted">Generating the image in the background… '
-                "reload in a moment.</p>"
-            )
-        elif status == "error":
-            detail = html.escape(str((image_status or {}).get("error") or "unknown error"))
-            image_note = (
-                '<div class="notice notice-error">'
-                f"Image generation failed: {detail}</div>"
-            )
-        else:
-            hint = (
-                ' Use “Generate image” below.'
-                if image_enabled
-                else " Run `blog image --missing-only`, or the scheduled rewrite will fill it."
-            )
-            image_note = f'<p class="muted">No image yet — every post is a photo post.{hint}</p>'
+    status = (image_status or {}).get("status")
+    if status == "running":
+        image_note = (
+            '<div class="notice" id="image-job" role="status" '
+            f'data-draft-id="{html.escape(draft.id)}">'
+            '<span class="dot dot-warn" aria-hidden="true"></span>'
+            " Generating the image in the background — this page refreshes when "
+            "it is ready.</div>"
+        )
+    elif status == "error":
+        detail = html.escape(str((image_status or {}).get("error") or "unknown error"))
+        image_note = f'<div class="notice notice-error">Image generation failed: {detail}</div>'
+    elif not draft.image:
+        hint = (
+            " Use “Generate image” below."
+            if image_enabled
+            else " Run `blog image --missing-only`, or the scheduled rewrite will fill it."
+        )
+        image_note = f'<p class="muted">No image yet — every post is a photo post.{hint}</p>'
+    elif image_generated:
+        image_note = (
+            '<p class="muted">A generated image, not the source post’s own — '
+            "“Restore source image” below puts the original back.</p>"
+        )
 
     caption = html.escape(draft.caption or "")
     tags = html.escape(" ".join(draft.hashtags))
@@ -559,13 +587,17 @@ def render_draft_html(
     if image_styles:
         hints = image_style_hints or {}
         chosen = (
-            draft.image_style
-            if draft.image_style in image_styles
-            else (default_image_style or "")
+            draft.image_style if draft.image_style in image_styles else (default_image_style or "")
         )
+        # The applied treatment is marked in the list (and is the default
+        # selection), so it stays identifiable once a different treatment is
+        # picked. Hidden while a regeneration is running: the stored style is
+        # already the new one, but the image still shows the previous treatment.
+        applied = chosen if (draft.image and status != "running") else ""
         options = "".join(
             f'<option value="{html.escape(key)}"{" selected" if key == chosen else ""}'
-            f' data-hint="{html.escape(hints.get(key, ""))}">{html.escape(key)}</option>'
+            f' data-hint="{html.escape(hints.get(key, ""))}">{html.escape(key)}'
+            f"{' (current)' if key == applied else ''}</option>"
             for key in image_styles
         )
         hint = hints.get(chosen) or (
@@ -577,6 +609,38 @@ def render_draft_html(
             '<select id="image_style" name="image_style" '
             f'aria-describedby="image_style_hint">{options}</select>'
             f'<div class="field-hint" id="image_style_hint">{html.escape(hint)}</div>'
+            "</div>"
+        )
+
+    # The voice menu (publish.voices): the rewriter picks one register per post
+    # like the masthead; an operator can override it here. The hint under it is
+    # the chosen voice file's own "when to use" line, so the page says what each
+    # register is for instead of keeping a second copy of the docs.
+    voice_field = ""
+    if voices:
+        hints = voice_hints or {}
+        chosen = draft.voice if draft.voice in voices else (default_voice or "")
+        # The register the caption was actually rewritten in. A draft with no
+        # voice yet (still `extracted`) has none applied, so the default is the
+        # pending choice but claims nothing. The applied voice is the default
+        # selection *and* is labelled, so it stays identifiable after a
+        # different one is picked.
+        applied = chosen if draft.voice in voices else ""
+        options = "".join(
+            f'<option value="{html.escape(key)}"{" selected" if key == chosen else ""}'
+            f' data-hint="{html.escape(hints.get(key, ""))}">{html.escape(key)}'
+            f"{' (current)' if key == applied else ''}</option>"
+            for key in voices
+        )
+        hint = hints.get(chosen) or (
+            "Voice (register) for this caption, chosen per post by the rewriter. "
+            "Override it to rewrite the same idea in another voice."
+        )
+        voice_field = (
+            '<div class="field"><label for="voice">Voice</label>'
+            '<select id="voice" name="voice" '
+            f'aria-describedby="voice_hint">{options}</select>'
+            f'<div class="field-hint" id="voice_hint">{html.escape(hint)}</div>'
             "</div>"
         )
 
@@ -592,6 +656,7 @@ def render_draft_html(
         f'<input type="text" id="hashtags" name="hashtags" value="{tags}">'
         '<div class="field-hint">Appended to the caption when posted. '
         "Space or comma separated.</div></div>"
+        f"{voice_field}"
         '<div class="field"><label for="image_prompt">Image prompt · English</label>'
         f'<input type="text" id="image_prompt" name="image_prompt" value="{prompt}">'
         '<div class="field-hint">Subject and composition for the generated image — '
@@ -644,9 +709,22 @@ def render_draft_html(
     image_button = ""
     if image_enabled:
         label = "Regenerate image" if draft.image else "Generate image"
+        # Submit the compose form to /image (not a form of its own): the image
+        # prompt and style above are saved with the generation, so what the
+        # operator just picked is what the provider is asked for.
         image_button = (
-            f'<form id="image-form" method="post" action="{action}/image">'
-            f'<button type="submit" class="btn btn-quiet">{label}</button></form>'
+            f'<button type="submit" form="publish-form" formaction="{action}/image" '
+            f'name="regenerate" value="1" class="btn btn-quiet">{label}</button>'
+        )
+    # The current image came from image_gen, so the source post's own picture is
+    # still available (stored on the draft, or read back from the source page).
+    # Its own form: restoring the image must not save or post the caption edits.
+    restore_button = ""
+    if image_generated:
+        restore_button = (
+            f'<form id="restore-image-form" method="post" action="{action}/restore-image">'
+            '<button type="submit" class="btn btn-quiet">Restore source image</button>'
+            "</form>"
         )
     # Timed posting: a human approves here, the serve scheduler posts later.
     # The button submits the caption form too, so edits are saved with the
@@ -665,6 +743,7 @@ def render_draft_html(
         f'<button type="submit" form="publish-form" formaction="{action}/save" '
         'name="save" value="1" class="btn btn-quiet">Save</button>'
         f"{image_button}"
+        f"{restore_button}"
         f'<span class="hint">{target}</span>'
         '<span class="spacer"></span>'
         f'<form id="reject-form" method="post" action="{action}/reject">'
@@ -692,7 +771,7 @@ def render_draft_html(
             )
         else:
             schedule_note = (
-                "<p class=\"field-hint\">Approve &amp; schedule queues this for "
+                '<p class="field-hint">Approve &amp; schedule queues this for '
                 f"{html.escape(when)}; Post now sends it immediately.</p>"
             )
 
@@ -713,12 +792,10 @@ def render_draft_html(
     if draft.title:
         rail_parts.append(f"<p>{html.escape(draft.title)}</p>")
     if draft.url:
-        rail_parts.append(
-            f'<p><a href="{html.escape(draft.url)}">{html.escape(draft.url)}</a></p>'
-        )
+        rail_parts.append(f'<p><a href="{html.escape(draft.url)}">{html.escape(draft.url)}</a></p>')
     if draft.published:
         rail_parts.append(
-            f'<p class="muted">Published {html.escape(_fmt_date(draft.published))}</p>'
+            f'<p class="muted">Published {html.escape(fmt_when(draft.published))}</p>'
         )
     if draft.excerpt:
         rail_parts.append(f'<p class="excerpt">{html.escape(draft.excerpt)}</p>')
@@ -740,6 +817,13 @@ def render_draft_html(
             "<summary>Atento DNA · brand voice</summary>"
             f"<pre>{html.escape(dna)}</pre></details></div>"
         )
+    if voice_text:
+        voice_label = draft.voice if draft.voice in (voices or []) else (default_voice or "default")
+        rail_parts.append(
+            '<div class="rail-block"><details class="voice">'
+            f"<summary>Voice · {html.escape(voice_label)}</summary>"
+            f"<pre>{html.escape(voice_text)}</pre></details></div>"
+        )
     rail = '<aside class="panel">' + "".join(rail_parts) + "</aside>"
 
     pipeline_panel = (
@@ -748,10 +832,7 @@ def render_draft_html(
         f'<div class="panel-body">{_stepper(draft)}</div></section>'
     )
 
-    tail = (
-        '<p class="muted">Publishing is human-gated: only the buttons here send '
-        "anything.</p>"
-    )
+    tail = '<p class="muted">Publishing is human-gated: only the buttons here send anything.</p>'
 
     body = (
         header
@@ -782,10 +863,12 @@ def render_draft_html(
     )
 
 
-def render_message_html(title: str, message: str) -> str:
+def render_message_html(
+    title: str, message: str, *, back: str = "/review", back_label: str = "Back to review"
+) -> str:
     """A tiny standalone notice page (used for errors / not-found)."""
     body = (
         f"<h1>{html.escape(title)}</h1>\n<p>{html.escape(message)}</p>\n"
-        '<p><a class="btn" href="/review">Back to review</a></p>'
+        f'<p><a class="btn" href="{html.escape(back)}">{html.escape(back_label)}</a></p>'
     )
     return layout(title, body, active="")

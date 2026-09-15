@@ -78,14 +78,14 @@ publish:
   # list disables timed posting — approval then only posts on demand.
   #
   # A slot may be a window "HH:MM-HH:MM": the scheduler fires once that day at a
-  # random time inside it, so posts don't land at a fixed clock minute. 19:30 to
-  # 21:00 Vietnam time (compose sets TZ=Asia/Ho_Chi_Minh).
-  post_at: ["19:30-21:00"]
+  # random time inside it, so posts don't land at a fixed clock minute. 20:00 to
+  # 20:30 Vietnam time (compose sets TZ=Asia/Ho_Chi_Minh).
+  post_at: ["20:00-20:30"]
   post_per_slot: 1            # oldest approved drafts posted per slot
   # Minimum days between *public* posts. 2 = one post every other day, 1 = at
   # most one per day: the scheduler still wakes daily, but skips until the gap
   # has elapsed. Private (unpublished) test sends don't count toward it.
-  interval_days: 2
+  interval_days: 1
   # Private mode: every approve/post is a REAL Graph call but stays unpublished
   # (visible to page admins only). Private sends are audited, don't consume the
   # draft, and don't count toward interval_days — so this is the
@@ -104,6 +104,18 @@ publish:
       - "[Mỗi ngày 1 kiến thức mới]"   # một mẩu kiến thức ngắn, một ý
     default: "[Đọc báo cùng Atento]"
   dna_file: docs/atento-dna.md  # Atento brand-voice brief; surfaced via GET /api/drafts
+  # One file per voice under docs/voices/ (key -> path), like image_gen.styles:
+  # the rewriter picks a key per post (by content and tone) and returns it as
+  # `voice`; the file's brief + samples are delivered in GET /api/drafts `voices`.
+  # The DNA above still owns the structure (masthead, formats, hashtags, CTA,
+  # output contract); a voice refines how one register sounds. `default_voice`
+  # is the fallback when the rewriter omits one; empty `voices` disables it.
+  voices:
+    technical: docs/voices/technical.md        # giọng Dũng — System Design, foundation
+    essay: docs/voices/essay.md                # giọng Đạt — essay / mindset
+    announcement: docs/voices/announcement.md  # khai giảng, seminar, cộng đồng
+    funny: docs/voices/funny.md                # trào phúng / hài (giọng VOZ)
+  default_voice: technical
   # How many recently-written captions to give the rewriter with the open drafts
   # (GET /api/drafts `recent`) so it doesn't reopen the same way twice — and the
   # same set the pipeline lints a new caption against (the tells shown on
@@ -145,10 +157,11 @@ image_gen:
   enabled: true
   provider: pollinations
   base_url: https://gen.pollinations.ai/image
-  style_file: docs/atento-image-style.md  # shared palette/finish floor; prepended to every prompt
+  style_file: docs/atento-image-style.md  # shared palette/prohibition floor; prepended to every prompt
   # Visual treatments, chosen per post by the rewriter like the masthead (DNA
-  # §9.2). Each key names a file under docs/image-styles/ whose text is appended
-  # to the shared palette brief (style_file). `default_style` is the fallback
+  # §9.2). Each key names a file under docs/image-styles/ whose text LEADS the
+  # prompt, ahead of the shared palette brief (style_file), so it governs the
+  # medium. `default_style` is the fallback
   # when the rewriter omits a key. Clear `styles` to fall back to the single
   # style_file look.
   styles:

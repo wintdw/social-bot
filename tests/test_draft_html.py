@@ -193,9 +193,7 @@ class TestReviewPagination:
 
     def test_header_counts_matches_not_the_page_size(self):
         drafts, info = self._page(5, 1, 2)
-        out = render_drafts_html(
-            drafts, page=info, total=5, matched=5, generated_at=GENERATED
-        )
+        out = render_drafts_html(drafts, page=info, total=5, matched=5, generated_at=GENERATED)
         assert "5 open draft(s)" in out
         assert "2 of 5" not in out
 
@@ -235,9 +233,7 @@ class TestReviewSearch:
         assert 'value="kafka"' in out
 
     def test_search_term_is_escaped(self):
-        out = render_drafts_html(
-            [Draft(id="p", title="T")], q='"><script>', generated_at=GENERATED
-        )
+        out = render_drafts_html([Draft(id="p", title="T")], q='"><script>', generated_at=GENERATED)
         assert "<script>" not in out
 
     def test_search_narrows_the_header_count(self):
@@ -257,17 +253,16 @@ class TestReviewSearch:
         assert "q=kafka" in out
 
     def test_selected_sort_is_marked(self):
-        out = render_drafts_html(
-            [Draft(id="p", title="T")], sort="oldest", generated_at=GENERATED
-        )
+        out = render_drafts_html([Draft(id="p", title="T")], sort="oldest", generated_at=GENERATED)
         assert '<option value="oldest" selected>' in out
         assert '<option value="newest">' in out
 
 
 class TestRenderDraftHtml:
     def test_has_editable_caption_and_actions(self):
-        draft = Draft(id="p", title="T", url="https://x/blog/p", caption="Body <x>",
-                      state="ai_draft")
+        draft = Draft(
+            id="p", title="T", url="https://x/blog/p", caption="Body <x>", state="ai_draft"
+        )
         out = render_draft_html(draft, dna="Atento voice", generated_at=GENERATED)
         assert 'id="caption"' in out and 'name="caption"' in out
         assert 'lang="vi"' in out
@@ -276,18 +271,73 @@ class TestRenderDraftHtml:
         assert "/review/p/reject" in out
         assert "Atento voice" in out
 
-    def test_image_prompt_is_editable_in_english(self):
-        draft = Draft(
-            id="p", title="T", image_prompt="a lone tree", state="ai_draft"
+    def test_voice_menu_renders_with_the_chosen_voice(self):
+        draft = Draft(id="p", title="T", caption="Body", state="ai_draft", voice="funny")
+        out = render_draft_html(
+            draft,
+            voices=["technical", "funny"],
+            default_voice="technical",
+            voice_hints={"technical": "calm engineer", "funny": "deadpan satirist"},
+            voice_text="# funny — deadpan satirist",
         )
+        assert 'id="voice"' in out and 'name="voice"' in out
+        assert '<option value="funny" selected' in out
+        assert "deadpan satirist" in out  # the chosen voice's hint under the select
+        assert "Voice · funny" in out  # the rail block's summary
+
+    def test_voice_menu_absent_leaves_the_select_out(self):
+        out = render_draft_html(Draft(id="p", title="T", state="ai_draft"))
+        assert 'name="voice"' not in out
+
+    def test_voice_menu_marks_the_applied_voice_current(self):
+        # The applied register is the default selection *and* is labelled, so it
+        # stays identifiable after a different one is picked.
+        draft = Draft(id="p", title="T", caption="Body", state="ai_draft", voice="funny")
+        out = render_draft_html(
+            draft,
+            voices=["technical", "funny"],
+            default_voice="technical",
+            voice_hints={"technical": "calm engineer", "funny": "deadpan satirist"},
+        )
+        assert (
+            '<option value="funny" selected data-hint="deadpan satirist">funny (current)</option>'
+            in out
+        )
+        assert '<option value="technical" data-hint="calm engineer">technical</option>' in out
+
+    def test_voice_menu_selects_the_default_without_claiming_it_is_current(self):
+        # Not rewritten yet: the default is the pending choice, but no register
+        # has actually produced a caption, so none is labelled current.
+        out = render_draft_html(
+            Draft(id="p", title="T", state="extracted"),
+            voices=["technical", "funny"],
+            default_voice="technical",
+            voice_hints={"technical": "calm engineer"},
+        )
+        assert (
+            '<option value="technical" selected data-hint="calm engineer">technical</option>' in out
+        )
+        assert "(current)" not in out
+
+    def test_voice_hint_shows_the_selected_voices_guidance(self):
+        draft = Draft(id="p", title="T", caption="Body", state="ai_draft", voice="funny")
+        out = render_draft_html(
+            draft,
+            voices=["technical", "funny"],
+            default_voice="technical",
+            voice_hints={"funny": "deadpan satirist"},
+        )
+        assert 'data-hint="deadpan satirist"' in out
+        assert '<div class="field-hint" id="voice_hint">deadpan satirist</div>' in out
+
+    def test_image_prompt_is_editable_in_english(self):
+        draft = Draft(id="p", title="T", image_prompt="a lone tree", state="ai_draft")
         out = render_draft_html(draft)
         assert 'id="image_prompt"' in out and 'name="image_prompt"' in out
         assert 'value="a lone tree"' in out
 
     def test_image_prompt_is_the_image_alt(self):
-        draft = Draft(
-            id="p", title="T", image="https://img/x.jpg", image_prompt="a lone tree"
-        )
+        draft = Draft(id="p", title="T", image="https://img/x.jpg", image_prompt="a lone tree")
         out = render_draft_html(draft)
         assert 'alt="a lone tree"' in out
 
@@ -307,7 +357,17 @@ class TestRenderDraftHtml:
         )
         assert 'id="image_style"' in out and 'name="image_style"' in out
         assert '<option value="technical" data-hint="">technical</option>' in out
-        assert '<option value="sketch" selected data-hint="">sketch</option>' in out
+        assert '<option value="sketch" selected data-hint="">sketch (current)</option>' in out
+
+    def test_picker_marks_the_currently_applied_style(self):
+        # The applied treatment is the default selection *and* is labelled, so it
+        # stays identifiable after a different one is picked.
+        draft = Draft(id="p", title="T", image="https://img/x.jpg", image_style="technical")
+        out = render_draft_html(
+            draft, image_styles=["technical", "sketch"], default_image_style="technical"
+        )
+        assert '<option value="technical" selected data-hint="">technical (current)</option>' in out
+        assert '<option value="sketch" data-hint="">sketch</option>' in out
 
     def test_image_style_marks_the_default_when_the_draft_has_none(self):
         out = render_draft_html(
@@ -316,6 +376,36 @@ class TestRenderDraftHtml:
             default_image_style="editorial",
         )
         assert '<option value="editorial" selected data-hint="">editorial</option>' in out
+
+    def test_current_style_falls_back_to_the_default(self):
+        # No style on the draft (the rewriter omitted one): the image was made
+        # with the default, so that is the option marked as current.
+        draft = Draft(id="p", title="T", image="https://img/x.jpg")
+        out = render_draft_html(
+            draft,
+            image_styles=["technical", "editorial"],
+            default_image_style="editorial",
+        )
+        assert '<option value="editorial" selected data-hint="">editorial (current)</option>' in out
+
+    def test_no_current_marker_without_an_image(self):
+        out = render_draft_html(
+            Draft(id="p", title="T"),
+            image_styles=["technical"],
+            default_image_style="technical",
+        )
+        assert "(current)" not in out
+
+    def test_no_current_marker_while_generating(self):
+        # The stored style is already the new one, but the image on screen is
+        # still the old one — so no option may claim to be current yet.
+        out = render_draft_html(
+            Draft(id="p", title="T", image="https://img/x.jpg", image_style="sketch"),
+            image_styles=["technical", "sketch"],
+            default_image_style="technical",
+            image_status={"status": "running"},
+        )
+        assert "(current)" not in out
 
     def test_style_hint_shows_the_selected_treatments_guidance(self):
         draft = Draft(id="p", title="T", image_style="sketch")
@@ -326,10 +416,7 @@ class TestRenderDraftHtml:
             image_style_hints={"sketch": "Loose ink for opinion."},
         )
         assert 'data-hint="Loose ink for opinion."' in out
-        assert (
-            '<div class="field-hint" id="image_style_hint">Loose ink for opinion.</div>'
-            in out
-        )
+        assert '<div class="field-hint" id="image_style_hint">Loose ink for opinion.</div>' in out
 
     def test_style_hint_falls_back_to_the_generic_line(self):
         out = render_draft_html(
@@ -344,7 +431,7 @@ class TestRenderDraftHtml:
             Draft(id="p", title="T", image_style="sketch"),
             image_styles=["sketch"],
             default_image_style="sketch",
-            image_style_hints={"sketch": '<script>alert(1)</script>'},
+            image_style_hints={"sketch": "<script>alert(1)</script>"},
         )
         assert "<script>alert(1)</script>" not in out
 
@@ -366,8 +453,7 @@ class TestRenderDraftHtml:
         assert "<p>Source headline</p>" in out
 
     def test_shows_the_composed_post_text(self):
-        draft = Draft(id="p", title="T", caption="Hello", hashtags=["#Atento"],
-                      state="ai_draft")
+        draft = Draft(id="p", title="T", caption="Hello", hashtags=["#Atento"], state="ai_draft")
         out = render_draft_html(draft)
         assert 'id="preview-body"' in out and 'id="preview-tags"' in out
         assert 'id="caption-count"' in out
@@ -381,9 +467,7 @@ class TestRenderDraftHtml:
         assert 'data-private="false"' in out
 
     def test_public_action_lists_multiple_destinations(self):
-        draft = Draft(
-            id="p", title="T", caption="Hi", destinations=["facebook", "linkedin"]
-        )
+        draft = Draft(id="p", title="T", caption="Hi", destinations=["facebook", "linkedin"])
         out = render_draft_html(draft)
         assert "This publishes to Facebook, LinkedIn." in out
 
@@ -425,9 +509,7 @@ class TestRenderDraftHtml:
 
     def test_source_date_is_formatted_not_raw(self):
         # RSS pubDate is RFC 822; the header must not leak the raw string.
-        out = render_draft_html(
-            Draft(id="p", title="T", published="Thu, 10 Sep 2026 00:00:00 GMT")
-        )
+        out = render_draft_html(Draft(id="p", title="T", published="Thu, 10 Sep 2026 00:00:00 GMT"))
         assert "GMT" not in out
         assert "published 2026-09-10" in out
 
@@ -446,7 +528,11 @@ class TestRenderDraftHtml:
 
     def test_image_button_when_enabled(self):
         out = render_draft_html(Draft(id="p", title="T"), image_enabled=True)
-        assert 'action="/review/p/image"' in out
+        # Submits the compose form to /image, so the edited prompt/style are
+        # saved and used for the generation rather than the server's old copy.
+        assert 'formaction="/review/p/image"' in out
+        assert 'form="publish-form"' in out
+        assert 'name="regenerate"' in out
         assert "Generate image" in out
 
     def test_image_button_regenerates_when_image_present(self):
@@ -455,13 +541,55 @@ class TestRenderDraftHtml:
         )
         assert "Regenerate image" in out
 
+    def test_restore_button_for_a_generated_image(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", image="https://gen/x.jpg"), image_generated=True
+        )
+        # Its own form: restoring the image must not save or post the caption.
+        assert (
+            '<form id="restore-image-form" method="post" action="/review/p/restore-image">' in out
+        )
+        assert "Restore source image" in out
+
+    def test_restore_button_needs_no_image_generation_enabled(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", image="https://gen/x.jpg"), image_generated=True
+        )
+        assert "/review/p/image" not in out
+
+    def test_no_restore_button_without_a_generated_image(self):
+        out = render_draft_html(Draft(id="p", title="T", image="https://img/x.jpg"))
+        assert "/restore-image" not in out
+        assert "Restore source image" not in out
+
+    def test_generated_image_is_flagged_in_the_composer(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", image="https://gen/x.jpg"), image_generated=True
+        )
+        assert "A generated image, not the source post’s own" in out
+
+    def test_no_generated_flag_for_a_source_image(self):
+        out = render_draft_html(Draft(id="p", title="T", image="https://img/x.jpg"))
+        assert "A generated image, not the source post’s own" not in out
+
     def test_no_image_button_unless_enabled(self):
         out = render_draft_html(Draft(id="p", title="T"))
         assert "/review/p/image" not in out
 
     def test_image_running_note_when_missing(self):
+        out = render_draft_html(Draft(id="p", title="T"), image_status={"status": "running"})
+        assert "Generating the image in the background" in out
+        # The note carries the draft id and the page polls /api/status so it can
+        # refresh itself when the background job finishes.
+        assert 'id="image-job"' in out and 'data-draft-id="p"' in out
+        assert "/api/status" in out
+
+    def test_image_running_note_shown_while_regenerating(self):
+        # A regeneration replaces an image that is already there, so the running
+        # state must show even with an image present — otherwise no feedback.
         out = render_draft_html(
-            Draft(id="p", title="T"), image_status={"status": "running"}
+            Draft(id="p", title="T", image="https://img/x.jpg"),
+            image_status={"status": "running"},
         )
         assert "Generating the image in the background" in out
 
@@ -473,6 +601,16 @@ class TestRenderDraftHtml:
         assert "Image generation failed" in out
         assert "&lt;b&gt;HTTP 520&lt;/b&gt;" in out
 
+    def test_image_error_note_shown_even_with_an_image(self):
+        # A failed regeneration keeps the previous image; the failure still has
+        # to be visible or the operator would never know it did not take.
+        out = render_draft_html(
+            Draft(id="p", title="T", image="https://img/x.jpg"),
+            image_status={"status": "error", "error": "stale"},
+        )
+        assert "Image generation failed" in out
+        assert "No image yet" not in out
+
     def test_image_note_when_not_started(self):
         out = render_draft_html(Draft(id="p", title="T"), image_enabled=True)
         assert "No image yet" in out
@@ -481,7 +619,7 @@ class TestRenderDraftHtml:
     def test_no_image_note_when_image_ready(self):
         out = render_draft_html(
             Draft(id="p", title="T", image="https://img/x.jpg"),
-            image_status={"status": "error", "error": "stale"},
+            image_status={"status": "ok"},
         )
         assert "Image generation failed" not in out
         assert "No image yet" not in out
@@ -544,14 +682,11 @@ class TestRenderDraftHtml:
         assert 'name="approve"' in out
         assert "paused, so it sends when you resume" in out
 
-    def test_review_list_has_post_approved_now_when_scheduling(self):
-        out = render_drafts_html([], scheduling=True, generated_at=GENERATED)
-        assert 'action="/publish/run"' in out
-        assert "Post approved now" in out
-
-    def test_review_list_hides_post_approved_now_by_default(self):
+    def test_review_list_never_carries_post_approved_now(self):
+        # The drain control lives on the Post queue tab now (test_dashboard_html).
         out = render_drafts_html([], generated_at=GENERATED)
         assert 'action="/publish/run"' not in out
+        assert "Post approved now" not in out
 
 
 class TestDraftLint:
@@ -573,6 +708,43 @@ class TestDraftLint:
         draft = Draft(id="p", caption="x", lint=[{"code": "hype", "message": "<b>boom</b>"}])
         out = render_draft_html(draft, generated_at=GENERATED)
         assert "&lt;b&gt;boom&lt;/b&gt;" in out
+
+
+class TestNoQueueControlsOnReview:
+    """Ordering lives on the Post queue tab, so Review carries no reorder UI.
+
+    The list rows stay plain links — a row is for reading the draft, and the
+    only order controls in the app are the post queue's, on its own page.
+    """
+
+    def test_a_review_row_is_a_plain_link(self):
+        out = render_drafts_html(
+            [Draft(id="p", title="T", state="approved")], generated_at=GENERATED
+        )
+        assert '<a class="qrow" href="/review/p">' in out
+        assert 'class="qrow qrow-manage"' not in out
+        assert 'class="qgrip"' not in out
+        assert "data-draft-id" not in out
+        assert "/queue/" not in out
+        assert "/review/p/move" not in out
+        assert "Drag a row" not in out
+
+    def test_no_sort_option_for_the_posting_order(self):
+        out = render_drafts_html([Draft(id="p", state="approved")], generated_at=GENERATED)
+        assert "Post queue order" not in out
+        assert 'value="queue"' not in out
+
+    def test_the_detail_page_has_no_post_queue_panel(self):
+        out = render_draft_html(
+            Draft(id="a", state="approved", caption="c", destinations=["facebook"]),
+            generated_at=GENERATED,
+        )
+        # The nav carries the tab link, but the page itself has no queue panel.
+        assert 'id="post-queue"' not in out
+        assert 'class="qrow qrow-manage"' not in out
+        assert "Next to post" not in out
+        assert "/queue/" not in out
+        assert "/review/a/move" not in out
 
 
 class TestMessageHtml:

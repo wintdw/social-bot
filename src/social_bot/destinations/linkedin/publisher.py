@@ -10,7 +10,7 @@ registry, so the platform-specific logic stays in this module.
 from __future__ import annotations
 
 from ...drafts import Draft
-from ..base import PublishResult, Publisher, PublisherError
+from ..base import Publisher, PublisherError, PublishResult
 
 
 class LinkedInPublisher(Publisher):
@@ -26,8 +26,7 @@ class LinkedInPublisher(Publisher):
         urn = str(dst.get("author_urn") or "").strip()
         if urn and not urn.startswith("urn:li:"):
             raise ValueError(
-                "config: destinations.linkedin.author_urn must look like "
-                "'urn:li:organization:<id>'"
+                "config: destinations.linkedin.author_urn must look like 'urn:li:organization:<id>'"
             )
 
     def author_urn(self) -> str:

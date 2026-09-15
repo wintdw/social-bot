@@ -33,7 +33,7 @@ src/social_bot/
 ├── drafts.py         # Draft model + state machine + per-destination post records + atomic persistence
 ├── draft_pipeline.py # scan sources -> drafts; generate images; receive rewrite; publish (on demand + scheduled)
 ├── image_gen.py      # urllib Pollinations client: prompt build + image generation
-├── ui.py             # shared operator-UI chrome: stylesheet, nav, layout
+├── ui.py             # shared operator-UI chrome: stylesheet, nav, favicon, layout
 ├── styleframe.py     # generated design-system preview (docs/design/styleframe.html)
 ├── draft_html.py     # pure render of the /review queue + a draft detail page
 ├── dashboard_html.py # pure render of / (dashboard), /publish, /status (feed_section passed in)
@@ -64,9 +64,11 @@ calls `draft_pipeline.py:publish_scheduled` at the `--publish-at` slots (from
 `publish.post_at`; empty disables it), following any slot that actually posted
 with a feed refresh so the new post shows up without waiting for the next
 `--refresh-at`. The operator UI is
-four HTML pages sharing the `ui.py` nav: `/` (dashboard — controls, counts,
+five HTML pages sharing the `ui.py` nav: `/` (dashboard — controls, counts,
 scheduler state, and the cached feed rendered live from `latest.json`), `/review`
-(the queue + a detail page), `/publish` (the audit log), and `/status`.
+(the review queue list + a detail page), `/queue` (the post queue, its ordering
+controls, and **Post approved now**), `/publish` (the audit log), and `/status`, plus the
+generated brand icon at `/favicon.svg` (`/favicon.ico` redirects there).
 web.py's time helpers are pure so tests need no fastapi/uvicorn.
 
 Content pipeline flow: `scan_sources` fetches each `sources[]` feed
@@ -78,7 +80,8 @@ makes `serve` fill that draft's image **in the background** (only if it has
 none, so a re-submitted rewrite never regenerates); `blog image` regenerates on
 demand for drafts already queued. An external
 rewriter — Command Code, applying the Atento DNA (`docs/atento-dna.md`, wired
-via `publish.dna_file`) — reads `GET /api/drafts` and
+via `publish.dna_file`; the per-post voice menu `docs/voices/*.md` rides along as
+`voices`, wired via `publish.voices`/`publish.default_voice`) — reads `GET /api/drafts` and
 POSTs the caption back to `/api/drafts/{id}/rewrite` (`AI_DRAFT`). A human
 approves on `/review/{id}`, which either posts immediately through a
 `destinations/` publisher adapter or — when `publish.post_at` slots are configured —
@@ -148,17 +151,23 @@ entirely, leaving approval as the only publish path.**
   style brief suggested, every time. Never build the subject from the title; ask
   for it. `image_prompt` is also the image's alt text (no separate Vietnamese
   `alt_text` exists) and is **editable on `/review/{id}`**; the `/review` form
-  saves it via `edit_draft`, so edit it before regenerating.
+  saves it via `edit_draft`, and **Regenerate image** submits that compose form
+  to `/review/{id}/image`, so the edited `image_prompt` and `image_style` are
+  saved and used for that generation (it no longer fires from a separate form
+  that silently ignored them). The style picker marks the current image's
+  treatment **`(current)`**, so any other option you pick is the next one.
   `image_style` picks a treatment from `image_gen.styles` (`key →
   docs/image-styles/<key>.md`): `technical` / `editorial` / `sketch` / `bulletin`,
   one per post by content and tone, exactly like the masthead (DNA §9.2).
-  `draft_pipeline.image_style_text(cfg, key)` composes the shared
-  `image_gen.style_file` floor + that treatment; an unknown/blank key falls back
+  `draft_pipeline.image_style_text(cfg, key)` leads the prompt with that
+  treatment, then appends the shared `image_gen.style_file` floor (palette and
+  prohibitions only — no medium, finish or composition of its own); an
+  unknown/blank key falls back
   to `image_gen.default_style`, and clearing `styles` restores the single
   `style_file` look. It too is **overridable on `/review/{id}`**.
   Two related traps: translating the title to English alone is *worse* (it
-  yields literal cloud-and-arrow flowcharts and people), and the shared floor
-  must not prescribe one composition (the per-post treatment does).
+  yields literal cloud-and-arrow flowcharts and people), and neither the floor
+  nor the subject line may prescribe a medium (the per-post treatment does).
 - Every post is a photo post, so images are generated **after** the rewrite,
   never during scan — at scan time there is no `image_prompt` yet, which is the
   whole problem. `serve` fills a draft's image in the background as its rewrite
@@ -168,6 +177,16 @@ entirely, leaving approval as the only publish path.**
   and the API. Replacement is opt-in: `blog image --overwrite`,
   `?overwrite=true` on `POST /api/drafts/{id}/image`, the **Regenerate image**
   button on `/review/{id}`, or `image_gen.overwrite: true`.
+- **The source image is kept as `Draft.source_image`** (written at scan, never
+  written by generation), so a generated image can always be undone:
+  `draft_pipeline.restore_source_image` puts the post's own picture back and the
+  **Restore source image** button on `/review/{id}` (`POST
+  /review/{id}/restore-image`) offers it whenever `image_is_generated` is true —
+  exact via `source_image`, and for a draft scanned before it was recorded, by
+  recognising the generator's own URL (`generated_image_urls`: the configured
+  `image_gen.base_url` plus the legacy Pollinations endpoint). A draft with no
+  stored original gets one by re-reading the source page once (as scan
+  enrichment does) and keeping it. The restore never touches the caption.
 - The API key must ride in the `Authorization` header, **never the URL**: the
   URL is stored on the draft, shown in page HTML, and sent to Graph as the
   photo `url`. The old `?token=` form leaked it into all three.
@@ -207,8 +226,9 @@ entirely, leaving approval as the only publish path.**
   of container-local `HH:MM` slots (or window `HH:MM-HH:MM` entries — the
   scheduler then fires once that day at a random time inside the window, seeded
   by date+slot so it stays stable across restarts); `serve` runs a posting loop
-  (`draft_pipeline.publish_scheduled`) that, at each slot, posts the **oldest**
-  in-state `approved` drafts first (FIFO), up to `publish.post_per_slot` per
+  (`draft_pipeline.publish_scheduled`) that, at each slot, posts in-state
+  `approved` drafts in **queue order** (see the next bullet), up to
+  `publish.post_per_slot` per
   slot, and only if `publish.interval_days` (a minimum gap between public posts,
   0 = off) has elapsed. It never rewrites,
   approves, or
@@ -218,11 +238,32 @@ entirely, leaving approval as the only publish path.**
   leaves the draft in the queue, `publish_scheduled` also skips a draft already
   sent privately that day (otherwise it would re-post every slot).
 - **The "next up" shown to operators must be the draft that actually posts.**
-  `draft_pipeline.scheduled_queue` (oldest `approved`, FIFO) is the one ordering
+  `draft_pipeline.scheduled_queue` (posting order) is the one ordering
   the poster drains; `status()` derives `publish.next_draft` from the same rule
   (and `publish.approved` / `publish.interval_remaining`). The dashboard
   **Next post** card, the `/status` **Post schedule** line, and `GET /api/status`
   all render that, so don't re-derive "next" anywhere else.
+- **Posting order is `_queue_key`, not a plain FIFO.** A draft with a manual
+  `Draft.queue_order` (≥ 1) sorts first, ranked ascending; drafts with none
+  (`0`) keep the default oldest-source-first order and follow the ranked block —
+  so with nothing ranked it is exactly the old FIFO, and this is the *only*
+  ordering the poster uses. Operators set it on the **Post queue** tab's queue
+  panel (drag a row, or its Top / Up / Down buttons) or via `blog queue` /
+  `blog move`. `set_queue_order` renumbers the whole queue `1..N`; a subset is
+  accepted (a drag leaves the rows it did not touch put); `reset_queue_order`
+  clears it. Reordering is **approved-only**, never approves/rewrites/posts, and
+  `publish.post_per_slot` / `interval_days` still gate sends — order changes
+  *which* draft goes next, never *whether* a slot fires. Don't add a second
+  ordering rule, and don't put ordering controls back on `/review`;
+  `list_drafts`/`sort_drafts` are display-only.
+- **The post queue lives on its own tab, `/queue` (nav: Post queue, after
+  Review queue).** It renders `draft_pipeline.scheduled_queue` — the poster's own list
+  — so row #1 is exactly the draft that posts next, and it is marked **Next to
+  post**. The reorder routes are `POST /queue/order` (drag, JSON),
+  `/queue/reset`, and `/queue/{id}/move`; a move redirects back to
+  `/queue#post-queue` through `web.message_url`. `/review/{id}` shows no queue
+  panel and `/review` has no queue-order sort — `/queue` is the only place the
+  order is set. The Factory dashboard does not render the queue at all.
 - **A scheduled wake is not a post.** The posting loop wakes at every
   `publish.post_at` slot, but the interval gate makes it skip the ones before the
   gap elapses — so the next *wake* is usually **not** the next *post*. The post
@@ -274,7 +315,7 @@ The operator UI is one system, and `tests/test_design_system.py` enforces it.
 Read `docs/design/design-system.md` before changing any markup or the stylesheet.
 
 - All styling lives in `src/social_bot/ui.py` (`_CSS` plus the `layout` /
-  `nav_html` / `badge` / `notice_html` primitives). Page modules
+  `nav_html` / `badge` / `notice_html` / `favicon_svg` primitives). Page modules
   (`draft_html.py`, `dashboard_html.py`, `destinations/facebook/feed_html.py`)
   render **fragments only**: no `<style>`, no `style="…"` attribute, no colour
   or size literals.
@@ -285,6 +326,11 @@ Read `docs/design/design-system.md` before changing any markup or the stylesheet
 - Keep the semantics: the accent is reserved for the primary action and the
   focused stage; state is carried by colour **and** a dot **and** a label; every
   control stays at least 44px tall; every page returns through `layout()`.
+- The favicon is generated, not drawn by hand: `ui.favicon_svg()` renders the
+  nav's brand mark (accent tile + letter) and reads `--accent` / `--accent-fg`
+  straight from `_CSS` — light and dark — so the tab icon can never drift from
+  the tokens. `layout()` links it at `/favicon.svg`; `web.py` serves it (and
+  redirects `/favicon.ico` there). Never hard-code the icon's colours.
 - After any UI change, run `tests/test_design_system.py` and regenerate the
   preview with `.venv/bin/python scripts/build_styleframe.py`. The suite fails
   on an undefined token, a class with no rule, a badge state with no colour,
@@ -296,7 +342,17 @@ Read `docs/design/design-system.md` before changing any markup or the stylesheet
 
 ```
 .venv/bin/python -m pytest     # pure logic, no network
+.venv/bin/ruff check src tests scripts   # lint
+.venv/bin/ruff format src tests scripts  # format in place (--check to verify)
 ```
+
+Ruff owns lint and formatting; its config lives in `pyproject.toml`
+(`[tool.ruff]`). The ruleset is pinned there on purpose — ruff's built-in
+defaults grow between releases, and the pinned `select` keeps the check
+stable. `E501` is off because the formatter owns line length (long URLs,
+HTML fragments, and the stylesheet must not be re-wrapped). `ruff format` is
+the style source of truth, so land formatting changes as their own pass, not
+mixed into a feature diff.
 
 Tests cover config defaults/deep-merge/validation, token precedence,
 Graph URL/error-payload handling, feed timestamp parsing, markdown + HTML
@@ -313,3 +369,15 @@ helpers (no fastapi import needed). Live calls are manual: `whoami` first, then
 `feed --limit 3`, then `blog scan` (queues drafts, no token needed), then
 `blog image --limit 1` to verify the provider/key, then `post --dry-run` before
 the first real post.
+
+The deployed UI (`https://social.atento.vn/`, nginx -> host port 8083) sits
+behind HTTP basic auth. To poke it with agent-browser, run
+`scripts/open_site.py [url]`: it reads `site.user` / `site.password` from the
+git-ignored `credentials.yaml` via the core's own `load_config` — so the pair
+stays out of the committed config, beside the page token — and hands them to
+agent-browser with `set credentials` before navigating. (agent-browser's auth
+vault is form-based: `auth login` waits for a login form and fails an HTTP
+challenge, so `set credentials` is the supported path.) `src/` is baked into the
+Docker image and only `data/`, `config.yaml`, `docs/` and `credentials.yaml` are
+bind-mounted, so a UI change needs `docker compose up -d --build` to appear
+there.

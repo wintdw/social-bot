@@ -18,10 +18,11 @@ Everything the browser gets comes from **`src/social_bot/ui.py`**:
 | `nav_html(active)` | The top navigation. `active` is a `NAV` key. |
 | `badge(state)` | A state chip; the label is slugified into a `badge-*` class. |
 | `notice_html(message, private, kind)` | Flash messages and the private-mode banner. |
+| `favicon_svg()` | The site icon: the brand mark as an SVG, its colours read back out of `_CSS`'s `--accent` / `--accent-fg` (light and dark). `web.py` serves it at `/favicon.svg`; `layout()` links it. |
 | `NAV`, `BRAND`, `BRAND_EYEBROW` | Navigation entries and the wordmark. |
 
 Page modules render **fragments only** and hand them to `layout()`:
-`dashboard_html.py` (Factory, Published, Status), `draft_html.py` (Review,
+`dashboard_html.py` (Factory, Post queue, Published, Status), `draft_html.py` (Review queue,
 Draft), `destinations/facebook/feed_html.py` (Feed). No page defines its own CSS,
 and no page writes an inline `style="…"` (a test enforces this). Core page
 modules never import a platform module: the dashboard takes a pre-rendered
@@ -87,6 +88,7 @@ times, and character counts use **tabular figures** so columns line up.
 | Segmented filter | `.seg`, `.seg-item`, `.count` | `draft_html._segment` |
 | Source chips | `.chip`, `.chip-active` | `draft_html._chip` |
 | Review row | `.qrow`, `.qthumb`, `.qbody`, `.qtitle`, `.qmeta`, `.qpreview` | `draft_html._draft_card` |
+| Post queue (`/queue`) | `.qrow-manage`, `.qrow-main`, `.qmove`, `.qgrip`, `.qrow-dragging`, `.qfoot`, `.pill.is-next` | `dashboard_html.render_queue_html` / `_queue_panel` |
 | Pagination | `.pager` | `draft_html._pagination_bar` |
 | Stepper | `.stepper`, `.step`, `.is-done`, `.is-now` | `draft_html._stepper` |
 | Facebook preview | `.fb-preview`, `.head`, `.avatar`, `.meta`, `.name`, `.when`, `.body`, `.tags`, `.media` | `draft_html` |
@@ -103,6 +105,16 @@ times, and character counts use **tabular figures** so columns line up.
   identical in both themes (a test asserts no dark-only token).
 - Links that are the only affordance (`.permalink`, `.crumbs`, `.next`) are real
   anchors, and the review list is plain links so it works without JavaScript.
+- The queue reorder controls are progressive: a managed row's drag-and-drop is a
+  script, but each row also carries **Top / Up / Down** submit buttons (plain
+  forms, disabled at the ends), so the feature works with no JavaScript at all.
+  The controls sit outside the row's link — an interactive control can't nest in
+  an `<a>` — and the `.qmove` wrapper is a `div`, because a `<form>` is not
+  phrasing content.
+- The queue's **Next to post** pill (`.pill.is-next`) is the one place the accent
+  tints a row: it marks the draft that actually posts next, the same way
+  `.stage.is-focus` marks the stage being worked on. It is a tint, never a
+  second accent button.
 
 ## The styleframe (generated preview)
 

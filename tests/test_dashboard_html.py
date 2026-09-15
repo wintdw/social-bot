@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 
 from social_bot.dashboard_html import (
     render_dashboard_html,
     render_publish_html,
+    render_queue_html,
     render_status_html,
 )
 from social_bot.destinations.facebook.feed import FeedItem
 from social_bot.destinations.facebook.feed_html import render_feed_section
+from social_bot.drafts import Draft
 
 GENERATED = dt.datetime(2026, 9, 10, 12, 0)
 
@@ -41,6 +44,9 @@ STATS = {
             "has_image": True,
         },
         "dna_file_set": True,
+        "voices_set": True,
+        "voice_choices": ["technical", "essay", "announcement", "funny"],
+        "default_voice": "technical",
     },
 }
 
@@ -119,7 +125,13 @@ RECORDS = [
 class TestDashboard:
     def test_has_navigation_to_every_page(self):
         out = _dash()
-        for href in ('href="/"', 'href="/review"', 'href="/publish"', 'href="/status"'):
+        for href in (
+            'href="/"',
+            'href="/review"',
+            'href="/queue"',
+            'href="/publish"',
+            'href="/status"',
+        ):
             assert href in out
 
     def test_controls_post_to_refresh_and_scan(self):
@@ -144,9 +156,7 @@ class TestDashboard:
         assert "No feed cached yet" in out
 
     def test_no_reader_hides_the_feed_panel_and_control(self):
-        out = render_dashboard_html(
-            stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED
-        )
+        out = render_dashboard_html(stats=STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
         assert "No feed cached yet" not in out
         assert 'action="/refresh"' not in out
         assert "no destination configured" in out
@@ -214,9 +224,35 @@ class TestImageSection:
         assert "<upstream>" not in out
         assert "&lt;upstream&gt;" in out
 
+    def test_jobs_are_rows_not_a_wrapping_table(self):
+        # The panel is a narrow column: a five-column table wrapped the draft
+        # id, the status badge, and the timestamps into unreadable pieces.
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
+        )
+        assert 'class="joblist"' in out
+        assert 'class="job"' in out
+        assert "<th>Started</th>" not in out
+
+    def test_each_row_links_its_draft_to_the_detail_page(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
+        )
+        assert 'href="/review/post-two"' in out
+        assert 'title="post-two"' in out
+
+    def test_timing_reads_as_a_range_once_finished(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
+        )
+        assert "2026-09-11 08:00:00 → 2026-09-11 08:00:30" in out
+        assert "started 2026-09-11 08:00:00" in out  # post-one has not finished
+
     def test_no_jobs_yet(self):
         out = render_status_html(
-            STATS, refresh=REFRESH, scan=SCAN,
+            STATS,
+            refresh=REFRESH,
+            scan=SCAN,
             images={"enabled": True, "running": 0, "failed": 0, "jobs": []},
             generated_at=GENERATED,
         )
@@ -224,7 +260,9 @@ class TestImageSection:
 
     def test_disabled(self):
         out = render_status_html(
-            STATS, refresh=REFRESH, scan=SCAN,
+            STATS,
+            refresh=REFRESH,
+            scan=SCAN,
             images={"enabled": False, "running": 0, "failed": 0, "jobs": []},
             generated_at=GENERATED,
         )
@@ -234,6 +272,139 @@ class TestImageSection:
         out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
         assert "Image jobs" not in out
 
+
+class TestPostQueue:
+    """The Post queue tab: the only place the posting order is set."""
+
+    @staticmethod
+    def _queued(draft_id, **kw):
+        return Draft(
+            id=draft_id,
+            state="approved",
+            caption=f"[Học cùng Atento]\n\nHook for {draft_id}.",
+            excerpt=f"Excerpt for {draft_id}.",
+            source="bytebytego",
+            published="2026-09-09T15:30:00+00:00",
+            destinations=["facebook"],
+            **kw,
+        )
+
+    def _out(self, drafts, **kw):
+        return render_queue_html(drafts, generated_at=GENERATED, **kw)
+
+    def test_rows_show_position_and_controls(self):
+        out = self._out([self._queued("a"), self._queued("b")])
+        assert 'id="post-queue"' in out
+        assert 'class="qrow qrow-manage" data-draft-id="a"' in out
+        assert 'class="qrow-main" href="/review/a"' in out
+        assert 'class="qgrip"' in out
+        assert '<span class="pill">#1 / 2</span>' in out
+        assert 'action="/queue/a/move"' in out
+        assert 'value="top"' in out and 'value="up"' in out and 'value="down"' in out
+        assert ">Hook for a.</span>" in out  # the caption's hook titles the row
+
+    def test_next_to_post_marks_only_the_first_row(self):
+        out = self._out([self._queued("a"), self._queued("b")])
+        assert out.count("Next to post") == 1
+        # ...and it is the row the poster takes first (queue order = row order).
+        assert out.index("Next to post") < out.index("Hook for b")
+
+    def test_only_the_ends_are_blocked(self):
+        out = self._out([self._queued("a"), self._queued("b"), self._queued("c")])
+        rows = out.split('class="qrow qrow-manage"')[1:]
+
+        def blocked(row):
+            return [
+                bool(re.search(rf'value="{direction}"[^>]*? disabled', row))
+                for direction in ("top", "up", "down")
+            ]
+
+        assert [blocked(row) for row in rows] == [
+            [True, True, False],  # #1 is at the top: it can only move down
+            [False, False, False],  # #2 can move either way
+            [False, False, True],  # #3 is last: it can only move up
+        ]
+
+    def test_headline_names_the_next_post(self):
+        out = self._out([self._queued("a")], post=POST)
+        assert "1 approved · next post 2026-09-11 09:00" in out
+
+    def test_headline_reports_a_pause(self):
+        out = self._out([self._queued("a")], post={**POST, "paused": True})
+        assert "1 approved · posting paused" in out
+
+    def test_headline_says_when_posting_is_manual(self):
+        out = self._out([self._queued("a")], post={**POST, "schedule": []})
+        assert "1 approved · posting is manual" in out
+
+    def test_carries_post_approved_now_when_scheduled(self):
+        # The drain control moved here from the Review tab.
+        out = self._out([self._queued("a")], post=POST)
+        assert 'action="/publish/run"' in out
+        assert "Post approved now" in out
+
+    def test_no_post_approved_now_without_a_schedule(self):
+        out = self._out([self._queued("a")], post={**POST, "schedule": []})
+        assert 'action="/publish/run"' not in out
+        assert "Post approved now" not in out
+
+    def test_footer_only_appears_with_an_order_to_set(self):
+        assert "Reset order" not in self._out([self._queued("a")])
+        out = self._out([self._queued("a"), self._queued("b")])
+        assert 'class="qfoot"' in out
+        assert "Drag a row, or use Top / Up / Down, to set what posts first." in out
+        assert 'action="/queue/reset"' in out
+        assert 'name="next" value="/queue#post-queue"' in out
+
+    def test_empty_queue_says_where_drafts_come_from(self):
+        out = self._out([])
+        assert "Nothing approved yet" in out
+        assert 'href="/review"' in out
+        assert 'class="qrow qrow-manage"' not in out
+
+    def test_the_dashboard_no_longer_carries_the_queue(self):
+        # The queue and its controls moved to their own tab; the dashboard keeps
+        # the pipeline strip and the counts, not the reorder surface.
+        out = _dash()
+        assert 'id="post-queue"' not in out
+        assert "/queue/order" not in out
+        assert 'class="qrow qrow-manage"' not in out
+        assert "data-draft-id" not in out
+
+    def test_the_page_marks_the_queue_tab_current(self):
+        out = self._out([self._queued("a")])
+        assert 'href="/queue" aria-current="page"' in out
+        assert 'href="/" aria-current="page"' not in out
+
+    def test_drag_script_posts_to_the_queue_endpoint(self):
+        out = self._out([self._queued("a"), self._queued("b")])
+        assert "getElementById('post-queue-list')" in out
+        assert "fetch('/queue/order'" in out
+        # The drop surface is the whole document, not the rows: a drag released
+        # just above the first row (or over the dragged row itself) must still
+        # commit, or the visible reorder silently reverts on the next load.
+        assert "document.addEventListener('dragover'" in out
+        assert "document.addEventListener('drop'" in out
+
+    def test_no_drag_script_without_rows(self):
+        # The enhancement is pointless on an empty queue, so the page omits it.
+        assert "getElementById('post-queue-list')" not in self._out([])
+
+    def test_a_rejected_draft_is_not_the_panel_input(self):
+        # The panel renders exactly the list it is given (scheduled_queue), so a
+        # non-approved draft can never appear in it.
+        out = self._out([self._queued("a")])
+        assert "qrow" in out
+        assert out.count('class="qrow qrow-manage"') == 1
+
+    def test_row_content_is_escaped(self):
+        draft = self._queued("x")
+        draft.caption = "[Học cùng Atento]\n\n<script>alert(1)</script>"
+        draft.excerpt = "<b>boom</b>"
+        out = self._out([draft])
+        assert "<script>alert(1)</script>" not in out
+        assert "&lt;script&gt;alert(1)&lt;/script&gt;" in out
+        assert "&lt;b&gt;boom&lt;/b&gt;" in out
 
 
 class TestPublish:

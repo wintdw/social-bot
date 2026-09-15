@@ -27,6 +27,8 @@ and [development](docs/development.md).
 | `social-bot refresh` | Fetch the feed and cache it as HTML/JSON under `feed.dir`. |
 | `social-bot blog scan` | Scan the configured source feeds and queue new drafts for review (never posts). |
 | `social-bot blog publish` | Post the human-approved queue now (add `--dry-run` to preview). |
+| `social-bot blog queue` | Show the approved post queue in the order it will post. |
+| `social-bot blog move <id> up\|down\|top\|bottom` | Move one approved draft in the post queue. |
 | `social-bot serve` | Long-lived operator UI (dashboard/review/published/status) + scheduled refresh/scan/posting (needs the `server` extra). |
 
 Every command takes `--page-id` (overrides config) and `--token` (overrides
@@ -147,8 +149,9 @@ docker compose logs -f                # follow refresh/scan runs
 | Page | What it shows |
 |---|---|
 | `GET /` | **Dashboard** — refresh/scan controls, open-draft and published counts, scheduler state, the next post (time + which draft), and the cached feed. |
-| `GET /review` | **Review** — open drafts, newest first (with a **Scan sources now** button). Paged (`?page=`, `?per_page=`, default 20). |
+| `GET /review` | **Review queue** — open drafts, newest first (with a **Scan sources now** button). Paged (`?page=`, `?per_page=`, default 20). |
 | `GET /review/{id}` | One draft: editable caption + hashtags + English image prompt, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set, the DNA brief. |
+| `GET /queue` | **Post queue** — the approved drafts in the order they will post, the one going out next marked, with drag / Top-Up-Down reorder controls and a **Post approved now** button. |
 | `GET /publish` | **Published** — the audit log (public and private sends, with permalinks). |
 | `GET /status` | **Status** — sources, drafts by state, publish settings (min interval, days remaining, next up), and scheduler runs. |
 | `GET /health` | JSON: busy, last refresh/scan result, schedules, next runs, open drafts, lifecycle. |
@@ -160,8 +163,9 @@ docker compose logs -f                # follow refresh/scan runs
 | `POST /review/{id}/save` | Save the compose edits (caption, hashtags, image prompt); never posts. |
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only; `approve=1` queues the draft for the next slot instead). |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
+| `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a generated one. |
 
-All four pages share the same top navigation, so you can move between them
+All five pages share the same top navigation, so you can move between them
 without editing URLs; `/drafts` redirects to `/review` for old bookmarks.
 
 Refreshes fire at `07:00` and `19:00`, the source scan at `06:00`, and approved
@@ -227,7 +231,10 @@ Scan for new items (also runs on the `serve` schedule):
 Sources live under `sources:` in `config.yaml`; each is `type: index | sitemap |
 rss` (`index` reads a listing page's JSON-LD `ItemList` — Atento's blog publishes
 no feed and its sitemap omits posts). New items are enriched from their post
-page (title/excerpt/featured image) before landing in the queue.
+page (title/excerpt/featured image) before landing in the queue, and that image
+is kept on the draft as the post's own: a generated image only ever fills a
+draft that has none, and **Restore source image** on `/review/{id}` puts the
+original back (re-reading the source page if it was never kept).
 
 Then, with `serve` running, hand the drafts to your rewriter and approve:
 
@@ -246,6 +253,13 @@ minimum gap between public posts (`1` = at most one per day), and
 `publish.post_at` to the daily slots at which approved drafts post (a slot is
 `HH:MM`, or a window `HH:MM-HH:MM`; `[]` disables timed posting). Drain the
 approved queue on demand with `blog publish` or `POST /publish/run`.
+
+The queue posts **oldest first** by default, but you can override the order on the
+**Post queue** tab (`/queue`): its queue panel lists the approved drafts in
+posting order, with the one that goes out next marked, and you reorder by
+dragging a row or using its Top / Up / Down buttons. `blog queue` lists the order
+and `blog move <id> <direction>` reorders from the CLI. Ordering only changes
+*which* approved draft goes next — it never approves, rewrites, or posts.
 
 **Private mode (testing).** `publish.private: true` makes every approval an
 **unpublished** post — a real Graph call (`published=false`) that only page
@@ -266,9 +280,10 @@ not a dry run — it does create a post object, just an unpublished one.
 | `POST /scan` | Trigger a source scan now (`{"started": true}`, or `409` if one is running). |
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only). |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
-| `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
+| `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a generated one. |
+| `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents (`dna`) + the voice menu `publish.voices` (`voices` = `{key: brief+samples}`, with `voice_choices`/`default_voice`) + `recent` captions, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
 | `GET /api/status` | JSON: full pipeline snapshot — sources, drafts by state, seen, published, schedules, lifecycle. `publish.next_draft` names the oldest approved draft the poster will send next (`publish.approved` counts them, `publish.interval_remaining` is the days still to wait). |
-| `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `image_prompt`, `image_style`). |
+| `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `image_prompt`, `image_style`, `voice`). |
 
 **Destinations** are pluggable: each platform is a package under
 `src/social_bot/destinations/` and is registered in `destinations/registry.py`.
@@ -281,7 +296,12 @@ no pipeline, CLI, or UI changes required.
 
 ```
 .venv/bin/python -m pytest      # pure logic, no network
+.venv/bin/ruff check src tests scripts   # lint
+.venv/bin/ruff format src tests scripts  # format in place
 ```
+
+Ruff is the linter and formatter; its pinned config lives in `pyproject.toml`
+(`[tool.ruff]`).
 
 The tests never import fastapi/uvicorn — `serve`'s scheduling helpers are pure,
 so `[dev]` is enough to run them.

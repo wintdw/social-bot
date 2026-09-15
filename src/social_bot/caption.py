@@ -31,7 +31,7 @@ def _split_first_line(text: str) -> tuple[str, str]:
     start = next((i for i, line in enumerate(lines) if line.strip()), None)
     if start is None:
         return "", ""
-    return lines[start].strip(), "\n".join(lines[start + 1:]).strip("\n")
+    return lines[start].strip(), "\n".join(lines[start + 1 :]).strip("\n")
 
 
 def _first_line_index(lines: list[str], start: int = 0) -> int | None:
@@ -60,11 +60,11 @@ def _title_and_body(caption: str) -> tuple[str, str]:
         return "", ""
     first_line = lines[first].strip()
     if not _MASTHEAD_RE.fullmatch(first_line):
-        return first_line, "\n".join(lines[first + 1:]).strip("\n")
+        return first_line, "\n".join(lines[first + 1 :]).strip("\n")
     hook = _first_line_index(lines, first + 1)
     if hook is None:
         return first_line, ""
-    return lines[hook].strip(), "\n".join(lines[hook + 1:]).strip("\n")
+    return lines[hook].strip(), "\n".join(lines[hook + 1 :]).strip("\n")
 
 
 def split_title(caption: str, *, max_len: int = TITLE_MAX) -> tuple[str, str]:

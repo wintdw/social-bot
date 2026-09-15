@@ -11,9 +11,9 @@ The platform-agnostic core (pipeline, CLI, web, UI) imports only from here:
 from .base import (
     AccountReader,
     DestinationError,
-    PublishResult,
     Publisher,
     PublisherError,
+    PublishResult,
 )
 from .registry import (
     PUBLISHERS,

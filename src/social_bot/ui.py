@@ -15,6 +15,9 @@ columns line up.
 from __future__ import annotations
 
 import html
+import re
+
+from .drafts import parse_when
 
 # The product wordmark. The UI is "Social Content Factory"; "Atento Education"
 # is the account it operates, shown as an eyebrow above the name.
@@ -24,7 +27,8 @@ BRAND_EYEBROW = "Atento Education"
 # (key, href, label); `key` is the `active` value a page passes to layout().
 NAV = (
     ("dashboard", "/", "Factory"),
-    ("review", "/review", "Review"),
+    ("review", "/review", "Review queue"),
+    ("queue", "/queue", "Post queue"),
     ("publish", "/publish", "Published"),
     ("status", "/status", "Status"),
 )
@@ -132,6 +136,11 @@ nav a[aria-current="page"]::after { content: ""; position: absolute; left: .85re
         border: 1px solid var(--border); background: var(--surface); color: var(--ink-2);
         padding: .2rem .6rem; border-radius: 999px; white-space: nowrap;
         font-variant-numeric: tabular-nums; }
+/* The draft that goes out next, in the post queue: the same accent tint the
+   pipeline strip gives the stage you are working on now. */
+.pill.is-next { border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+                background: var(--accent-soft);
+                color: color-mix(in srgb, var(--accent) 78%, var(--fg)); font-weight: 650; }
 
 /* ---------- page header ---------- */
 header { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
@@ -233,6 +242,21 @@ header .sub, .meta { color: var(--muted); font-size: .85rem; margin-top: .25rem;
 .kv-row dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums;
              text-align: right; }
 
+/* ---------- image job rows ---------- */
+/* Rows, not a table: the job panel is a narrow column, where a five-column
+   table wrapped the id, the badge, and the timestamps to unreadable pieces. */
+.joblist { display: flex; flex-direction: column; }
+.job { display: grid; gap: .3rem; padding: .7rem 1rem; min-width: 0;
+       border-bottom: 1px solid var(--border); }
+.job:last-child { border-bottom: 0; }
+.job-top { display: flex; align-items: center; gap: .5rem; min-width: 0; }
+.job-name { min-width: 0; font-weight: 650; font-size: .85rem; color: var(--fg);
+            text-decoration: none; overflow: hidden; text-overflow: ellipsis;
+            white-space: nowrap; }
+.job-name:hover { text-decoration: underline; }
+.job-meta { font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.job-error { font-size: .78rem; color: var(--danger); overflow-wrap: anywhere; }
+
 /* ---------- controls ---------- */
 .controls, .cmdbar, .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; }
 .controls { margin-bottom: 1.5rem; }
@@ -309,7 +333,7 @@ img.preview { max-width: 100%; border-radius: var(--radius-lg); }
 /* ---------- badges: state carried by colour AND a dot AND the label ---------- */
 .badge { display: inline-flex; align-items: center; gap: 5px; font-size: .7rem;
          text-transform: uppercase; letter-spacing: .04em; font-weight: 700;
-         padding: .15rem .5rem; border-radius: 999px;
+         padding: .15rem .5rem; border-radius: 999px; white-space: nowrap;
          border: 1px solid color-mix(in srgb, var(--badge, var(--muted)) 42%, transparent);
          background: color-mix(in srgb, var(--badge, var(--muted)) 12%, transparent);
          color: var(--badge, var(--muted));
@@ -365,6 +389,33 @@ a.permalink { font-size: .82rem; }
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .qgo { color: var(--muted); font-size: 1rem; text-decoration: none; }
 .qrow:hover .qgo { color: var(--accent); }
+
+/* ---------- queue reorder (managed rows) ---------- */
+/* A managed row is a div wrapping the row link plus its order controls: a
+   control cannot live inside an <a>. Used by the post queue page, the one
+   place the order is set. */
+.qrow-manage { grid-template-columns: minmax(0, 1fr) auto; }
+.qrow-manage.qrow-dragging { opacity: .5; }
+.qrow-main { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; gap: 1rem;
+             align-items: center; text-decoration: none; color: inherit; min-width: 0; }
+.qmove { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end;
+         gap: .4rem; }
+.qmove form { display: inline-flex; gap: .25rem; }
+.qgrip { cursor: grab; color: var(--muted); user-select: none; letter-spacing: -.12em;
+         font-size: 1.1rem; line-height: 1; padding: 0 .15rem; }
+.qmove-form { display: flex; flex-wrap: wrap; gap: .5rem; }
+.qorder { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column;
+          gap: .4rem; }
+.qorder li { display: flex; align-items: baseline; gap: .5rem; font-size: .85rem;
+             color: var(--muted); min-width: 0; }
+.qorder li.is-current { color: var(--fg); font-weight: 650; }
+.qrank { font-variant-numeric: tabular-nums; min-width: 1.25rem; }
+.qname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The post queue's footer: the reorder hint on the left, the queue-level control
+   on the right. Sits under the rows the way .pager sits under the review list. */
+.qfoot { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+         gap: .75rem; padding: .75rem 1rem; border-top: 1px solid var(--border);
+         color: var(--muted); font-size: .85rem; }
 .pager { display: flex; align-items: center; justify-content: space-between; gap: .75rem;
          padding: .75rem 1rem; color: var(--muted); font-size: .85rem; flex-wrap: wrap;
          border-top: 1px solid var(--border); }
@@ -382,9 +433,9 @@ a.permalink { font-size: .82rem; }
 .rail-block p { margin: .4rem 0; }
 .notes { background: var(--surface-2); border-radius: var(--radius); padding: .75rem;
          font-size: .85rem; color: var(--ink-2); }
-details.dna { border: 1px solid var(--border); border-radius: var(--radius); padding: .6rem .9rem; }
-details.dna summary { cursor: pointer; font-size: .85rem; font-weight: 650; }
-details.dna pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem;
+details.dna, details.voice { border: 1px solid var(--border); border-radius: var(--radius); padding: .6rem .9rem; }
+details.dna summary, details.voice summary { cursor: pointer; font-size: .85rem; font-weight: 650; }
+details.dna pre, details.voice pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem;
         overflow: auto; margin: .6rem 0 0; font-size: .78rem; line-height: 1.55;
         color: var(--fg); }
 .post-preview { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
@@ -446,6 +497,10 @@ details.dna pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20
   .qthumb { width: 56px; height: 44px; }
   .qgo { display: none; }
 
+  .qrow-manage { grid-template-columns: minmax(0, 1fr); }
+  .qrow-main { grid-template-columns: 56px minmax(0, 1fr); }
+  .qmove { justify-content: flex-start; }
+
   .toolbar { align-items: stretch; }
   .seg { width: 100%; }
   .field-inline { flex: 1 1 100%; }
@@ -454,6 +509,48 @@ details.dna pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20
   .action-bar .spacer { margin-left: 0; }
 }
 """
+
+# The favicon is the nav's brand mark: the same accent tile and letter, so the
+# browser tab carries the product's identity rather than a platform default.
+# Its colours are read back out of `_CSS` above instead of being restated, so
+# re-theming the app re-themes the icon. web.py serves it; `layout` links it.
+_FAVICON_LINK = '<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
+_ROOT_BLOCK_RE = re.compile(r":root\s*\{(.*?)\}", re.S)
+_DARK_ROOT_BLOCK_RE = re.compile(r"prefers-color-scheme:\s*dark\)\s*\{\s*:root\s*\{(.*?)\}", re.S)
+_DECL_RE = re.compile(r"(--[\w-]+)\s*:\s*([^;]+);")
+
+
+def _theme_tokens(block: str) -> dict[str, str]:
+    """The custom properties declared in one `:root` block of the stylesheet."""
+    return {name: value.strip() for name, value in _DECL_RE.findall(block)}
+
+
+def favicon_svg() -> str:
+    """The site icon: the brand mark as a self-contained SVG.
+
+    `--accent` fills the rounded tile and `--accent-fg` the letter, taken from
+    the stylesheet's own light and dark `:root` blocks, so the icon is the design
+    system's own colour and not a hand-picked one. The base colours are plain
+    attributes (they show even if `<style>` is dropped) and the dark-mode rule
+    mirrors the token override the stylesheet already uses.
+    """
+    light = _theme_tokens(_ROOT_BLOCK_RE.search(_CSS).group(1))
+    dark_match = _DARK_ROOT_BLOCK_RE.search(_CSS)
+    dark = _theme_tokens(dark_match.group(1)) if dark_match else {}
+    accent, fg = light["--accent"], light["--accent-fg"]
+    dark_accent = dark.get("--accent", accent)
+    dark_fg = dark.get("--accent-fg", fg)
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" '
+        f'aria-label="{html.escape(BRAND_EYEBROW)}">'
+        f"<style>@media (prefers-color-scheme:dark){{rect{{fill:{dark_accent}}}"
+        f"text{{fill:{dark_fg}}}}}</style>"
+        f'<rect width="32" height="32" rx="7" fill="{accent}"/>'
+        f'<text x="16" y="16" fill="{fg}" text-anchor="middle" '
+        'dominant-baseline="central" font-family="system-ui, sans-serif" '
+        f'font-size="18" font-weight="800">A</text>'
+        "</svg>"
+    )
 
 
 def nav_html(active: str = "") -> str:
@@ -491,6 +588,20 @@ def badge(state: str) -> str:
     return f'<span class="badge badge-{slug}">{html.escape(state)}</span>'
 
 
+def fmt_when(value: str) -> str:
+    """An item timestamp as local 'YYYY-MM-DD HH:MM' ('' when there is none).
+
+    Returns the raw text when it can't be parsed — sources date their items
+    several ways (RSS pubDate is RFC 822, Atom is ISO 8601). Shared by every
+    row that dates itself, so the review list, the post queue, and the feed
+    show the same stamp for the same item.
+    """
+    parsed = parse_when(value)
+    if parsed is None:
+        return str(value or "").strip()
+    return parsed.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
 def layout(
     title: str,
     body: str,
@@ -506,6 +617,7 @@ def layout(
         "<!doctype html>\n"
         '<html lang="en">\n<head>\n<meta charset="utf-8">\n'
         '<meta name="viewport" content="width=device-width, initial-scale=1">\n'
+        f"{_FAVICON_LINK}\n"
         f"<title>{html.escape(title)}</title>\n{head}"
         f"<style>{_CSS}</style>\n</head>\n<body>\n"
         f"{nav_html(active)}\n{notice_html(message, private, kind)}\n{body}\n"

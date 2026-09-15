@@ -64,10 +64,12 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 
 ### 2. Rewrite (`draft_pipeline.receive_rewrite`)
 - The agent calls `GET /api/drafts` (open drafts + `publish.dna_file` contents
-  as `dna` + the most recently written captions as `recent`; paged — pass
-  `limit`/`offset` and follow `next_offset`) and
+  as `dna` + the **voice menu** `publish.voices` as `voices` (`{key: brief +
+  samples}`, with `voice_choices` and `default_voice`) + the most recently
+  written captions as `recent`; paged — pass `limit`/`offset` and follow
+  `next_offset`) and
   `POST /api/drafts/{id}/rewrite` with
-  `{caption, hashtags, cta, commentary, image_prompt, image_style}`.
+  `{caption, hashtags, cta, commentary, image_prompt, image_style, voice}`.
 - `recent` (capped by `publish.recent_captions`, 0 = off) exists so the rewriter
   can see what it just wrote and not reopen the same way twice — the "mọi bài
   một màu" failure is invisible in one draft and obvious across several (DNA §12).
@@ -87,13 +89,26 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   `mastheads.default` is only the fallback the pipeline prepends when the
   rewriter omits one. It lands in `caption`, so the review preview, the
   character count, and the posted text all include it.
+- `publish.voices` (config.yaml) is the same keyed-menu pattern for the caption's
+  **voice/register**: a menu of `key → docs/voices/<key>.md`, of which the
+  rewriter picks one per post by content (DNA §3), stored on the draft as `voice`.
+  Each file is the register's brief **plus** a growing `Samples` corpus of verbatim
+  human writing — that corpus is how a voice improves over time. A valid key is
+  kept, an unknown or omitted one falls back to `publish.default_voice`, and it is
+  **overridable on `/review/{id}`**, where the select's hint is each voice file's
+  own opening "when to use" paragraph (`draft_pipeline.voice_hints`) and the
+  register the caption was actually rewritten in is labelled **`<key> (current)`**
+  (and is the default selection), so any other option reads as the next one. The
+  whole menu (brief + samples) rides along
+  as `GET /api/drafts` `voices`.
 - `image_gen.styles` (config.yaml) is the same pattern for the image's **visual
   treatment**: a menu of `key → docs/image-styles/<key>.md`, of which the
   rewriter picks one per post by content and tone (DNA §9.2). The key is stored
   on the draft as `image_style`; `image_gen.default_style` is the fallback when
-  the rewriter omits one. The chosen treatment is appended to the shared
-  `style_file` floor at prompt time (`draft_pipeline.image_style_text`), so the
-  palette stays constant while the medium and composition vary per post. A valid
+  the rewriter omits one. At prompt time (`draft_pipeline.image_style_text`) the
+  chosen treatment **leads** and the shared `style_file` floor (palette and
+  prohibitions only) follows, so the medium and composition vary per post while
+  the palette stays constant. A valid
   key is kept, an unknown one falls back to the default — and it is
   **overridable on `/review/{id}`** before regenerating, where the select's hint
   is each style file's own opening paragraph (`draft_pipeline.image_style_hints`)
@@ -119,11 +134,20 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   concrete English visual concept for that post — and that is what gets
   illustrated. It is also the image's alt text (there is no separate Vietnamese
   alt), and it is **editable on `/review/{id}`** (saved with the caption), as is
-  the draft's `image_style` treatment; edit both before hitting **Regenerate
-  image**. The button only appears when
+  the draft's `image_style` treatment. The style picker names the treatment the
+  current image was generated with: that option is labelled **`<key> (current)`**
+  (and is the default selection), so any other option reads as the next one. The
+  label is dropped while a regeneration is running, when the stored style is
+  already the new one but the image on screen is not.
+  **Regenerate image** submits the compose form to `/review/{id}/image`, so the
+  edited prompt and style are saved and used for that generation (it also saves
+  the caption/hashtags, like Save). The button only appears when
   `image_gen.enabled` is true.
-- The review/API paths run synchronously (the request waits for the provider,
-  which can take minutes with `gpt-image` models); `blog image` batches.
+- `blog image` batches, and the **Regenerate image** button runs the provider
+  call **in the background** (like the post-rewrite fill): the request returns
+  at once and the page shows the job, instead of holding the connection open for
+  the minutes a `gpt-image` model can take. The JSON API
+  (`POST /api/drafts/{id}/image`) is still synchronous.
 - **Every post is a photo post**, so `serve` also fills the image
   automatically: when a rewrite lands (`POST /api/drafts/{id}/rewrite`) it
   generates that draft's image **in the background**, only if the draft has
@@ -137,8 +161,11 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
     clears the job list (the draft's `image` is still the durable truth).
   - The **`/status`** page and the **dashboard (`/`)** both render an
     **Image jobs** section from that payload.
-  - `/review/{id}` shows it in the UI: "Generating…" while running, the error
-    text on failure, and "No image yet" otherwise.
+  - `/review/{id}` shows it in the UI: "Generating…" while running (the page
+    polls `/api/status` and reloads when the job finishes — unless there are
+    unsaved edits, when it says the image is ready instead), the error text on
+    failure (even when a previous image is still in place), and "No image yet"
+    otherwise.
   - Failures are also logged to the container (`docker logs social-bot`).
 - **Scanning does not generate images.** At scan time no rewrite exists, so the
   only available subject would be the raw `title`; illustrating an abstract
@@ -150,16 +177,28 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   API. To deliberately replace one, opt in: `blog image --overwrite`,
   `POST /api/drafts/{id}/image?overwrite=true`, the **Regenerate image** button
   on `/review/{id}`, or `image_gen.overwrite: true` in config.
-- The prompt (`image_gen.build_prompt`) is the `image_gen.style_file` shared
-  brand floor (palette/mood only) + the draft's chosen `image_style` treatment
-  (medium/composition — `docs/image-styles/<key>.md`) + `image_prompt` (subject)
-  + hard negatives (no people, no text). `image_gen.base_url` selects the endpoint
+- **The source post's own image is kept on the draft** as `source_image`, written
+  at scan time and never touched by generation. A generation can therefore only
+  ever *add* an image, and **Restore source image** on `/review/{id}`
+  (`POST /review/{id}/restore-image`) always puts the original picture back
+  without touching the caption. The draft page offers it whenever the current
+  image came from `image_gen` — decided by comparing against `source_image`, or,
+  for a draft scanned before that was recorded, by recognising the generator's
+  own URL — and since a pre-existing draft has no `source_image` stored, the
+  restore reads the source page once (as scan enrichment does) to recover it and
+  keeps it for next time. Nothing to recover (no source URL, no image on the
+  page, an unreachable page) returns a warning, never a broken page.
+- The prompt (`image_gen.build_prompt`) leads with the draft's chosen
+  `image_style` treatment (medium/composition — `docs/image-styles/<key>.md`),
+  then the `image_gen.style_file` shared brand floor (palette and prohibitions
+  only), then the subject (`image_prompt`, under a plain `Subject:` label) and
+  the hard negatives (no people, no text). `image_gen.base_url` selects the endpoint
   (`gen.pollinations.ai/image` — clean output, needs `api_key`;
   `image.pollinations.ai/prompt` — keyless but watermarked and `sana`-only).
 - A failure is recorded in the summary `errors` and the draft keeps its
   existing image: image generation never blocks the pipeline.
 
-### 3. Review (human)
+### 3. Review queue (human)
 - `/review` lists open drafts (`extracted`/`ai_draft` plus `approved` ones still
   waiting for a slot) **newest first by the item's own date**
   (`published`, falling back to when it was queued — a whole scan is queued
@@ -172,21 +211,26 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   the draft is still unwritten).
   A **Search** box matches the title, excerpt, or caption (`?q=<text>`,
   case-insensitive)
-  and **Sort** switches between newest and oldest first (`?sort=oldest`), both a
-  plain GET form so they work without JS; the search and sort are carried
-  through every filter link and the pager.
+  and **Sort** switches between newest first (the default) and oldest first
+  (`?sort=oldest`) — a plain GET form so they work without JS; the search and
+  sort are carried through every filter link and the pager. Rows are plain
+  links: the posting order is set on the Post queue tab, not here.
   `/review/{id}` shows the extracted info, the
   editable caption + hashtags, and the actions. Rendered by
   `draft_html.render_draft_html`.
 - Actions: **Save** (persist the caption, hashtags, and image prompt without
-  posting) and **Post now** (publish immediately) always; **Reject**.
+  posting) and **Post now** (publish immediately) always; **Reject**. A draft
+  whose image came from `image_gen` also offers **Restore source image**, which
+  swaps the source post's own picture back in and leaves the caption alone.
   When `publish.post_at` is non-empty, **Approve & schedule** also appears — it
   saves the caption edits and queues the draft as `approved` for the next slot
-  (an already-`approved` draft shows "waiting for the next slot" instead). The
-  review page also carries a **Post approved now** button (`POST /publish/run`).
-- `/publish` lists the audit log (what has actually been posted); `/status`
-  shows the token's validity and expiry, sources, drafts by state, and publish
-  settings. `/` is the dashboard with the refresh/scan controls. All four share
+  (an already-`approved` draft shows "waiting for the next slot" instead).
+- `/queue` is the **Post queue**: the approved drafts in posting order, with the
+  ordering controls (§4b) and a **Post approved now** button (`POST /publish/run`)
+  to drain them on demand. `/publish` lists the audit log (what has actually been
+  posted); `/status` shows the token's validity and expiry, sources, drafts by
+  state, and publish settings. `/` is the Factory dashboard — the refresh/scan
+  controls, the counts, the schedulers, and the cached feed. All five share
   the nav from `ui.py`.
 
 ### 4. Publish (`draft_pipeline.publish_draft`)
@@ -214,15 +258,36 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   `serve --publish-at HH:MM …`; `[]` disables it). A slot is a fixed `HH:MM` or
   a window `HH:MM-HH:MM` — inside a window the loop fires once that day at a
   random time (seeded by date+slot, so it is stable across restarts). At each
-  slot it drains the
-  **oldest** `approved` drafts first (FIFO), up to `publish.post_per_slot` per
-  slot, calling `publish_draft` per draft — so
+  slot it drains the `approved` queue **in posting order** — drafts an operator
+  has moved (their `queue_order`, see below) first, then the rest **oldest
+  first** (FIFO) — up to `publish.post_per_slot` per slot, calling
+  `publish_draft` per draft — so
   the kill-switch, interval and destination adapters are shared with the
   on-demand path. It never approves, rewrites, or touches `extracted`/`ai_draft`
   drafts.
-- On demand: `POST /publish/run` (the dashboard/review "Post approved now"
+- **Ordering the queue.** The Post queue tab's queue panel
+  (`dashboard_html.render_queue_html` / `_queue_panel`) renders
+  `draft_pipeline.scheduled_queue` — the poster's own list — so its first row is
+  exactly the draft that posts next, and that row is marked **Next to post**.
+  `scheduled_queue` sorts by `_queue_key`: a draft with a manual `queue_order`
+  (≥ 1) comes first, ranked ascending; drafts with none (`0`) keep the default
+  oldest-first order and follow the ranked block. So nothing changes until an
+  operator reorders something, and a draft approved later (unranked) lands after
+  the ranked block.
+  `draft_pipeline.set_queue_order` renumbers the whole queue `1..N` after a move
+  (a subset is enough — a drag leaves the rows it did not touch put);
+  `move_in_queue` implements up / down / top / bottom on top of it, and
+  `reset_queue_order` clears every rank back to the default. None of them
+  approve, rewrite, or post: a draft only enters the queue by human approval.
+  The panel's controls are progressive — native drag and drop when JS is
+  available, and each row's own **Top / Up / Down** buttons (plain forms to
+  `/queue/{id}/move`) when it is not.
+- On demand: `POST /publish/run` (the dashboard/queue "Post approved now"
   button, content-negotiated like `/scan`) and `social-bot blog publish
-  [--limit N] [--dry-run]`.
+  [--limit N] [--dry-run]`. The queue itself has a CLI too — `social-bot blog
+  queue [--reset] [--json]` lists it in posting order and `social-bot blog move
+  <id> up|down|top|bottom` reorders one draft, the same operations as the
+  Post queue tab's queue panel.
 - The poster can be **paused** at runtime (`POST /publish/pause`, resumed with
   `POST /publish/resume`; the dashboard shows one button or the other). A paused
   loop still wakes at its slots but skips them — it consumes each slot's marker,
@@ -239,8 +304,9 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   `publish_draft`, so it paces both the scheduler and "Post now". Private sends
   don't count. The built-in default is `0` (no minimum).
 - The next send is knowable ahead of time: `status()` sets
-  `publish.next_draft` (the oldest `approved` — exactly what `publish_scheduled`
-  drains first), plus `publish.approved` and `publish.interval_remaining`. The
+  `publish.next_draft` (the first draft in posting order — exactly what
+  `publish_scheduled` drains first), plus `publish.approved` and
+  `publish.interval_remaining`. The
   dashboard's **Next post** card and the `/status` **Post schedule** line render
   that as time + which draft; `GET /api/status` exposes the same fields. A wake
   is not a post: the card's time is the first slot that can actually send
@@ -256,7 +322,7 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 
 | File | Contents |
 |---|---|
-| `data/review/queue.json` | The queue (list of drafts). Written atomically (tmp + rename). |
+| `data/review/queue.json` | The queue (list of drafts). Each carries `queue_order` (0 = the default oldest-first position). Written atomically (tmp + rename). |
 | `data/review/seen.json` | `"source:slug"` dedupe ledger. |
 | `data/publish/published.jsonl` | Append-only publish audit (one JSON record per post; `"private": true` marks an unpublished test send). |
 
@@ -264,26 +330,31 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/` | Dashboard: controls, counts, scheduler state, cached feed. |
-| GET | `/review` | Review list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters, `?q=<text>` title/excerpt search, and `?sort=oldest`; paged with `?page=<n>&per_page=<n>` (default 20, max 200). |
-| GET | `/review/{id}` | Review detail: editable caption, hashtags, and image prompt; Save / Post now / Reject, plus Approve & schedule when `publish.post_at` is set (+ Generate image when enabled). |
+| GET | `/` | Factory dashboard: controls, counts, scheduler state, cached feed. |
+| GET | `/queue` | Post queue: the approved drafts in posting order, with the reorder controls and the **Post approved now** button (when `publish.post_at` is set). |
+| GET | `/review` | Review queue list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters, `?q=<text>` title/excerpt search, and `?sort=oldest`; paged with `?page=<n>&per_page=<n>` (default 20, max 200). |
+| GET | `/review/{id}` | Review detail: editable caption, hashtags, and image prompt; Save / Post now / Reject, plus Approve & schedule when `publish.post_at` is set (+ Generate image when enabled, + Restore source image when the image came from the generator). |
 | GET | `/publish` | Publish audit log (public + private sends). |
 | GET | `/status` | Human-readable snapshot: token validity/expiry, schedules, sources. |
 | GET | `/drafts` | Redirect (307) to `/review` for old links. |
 | GET | `/health` | Liveness + last run info (JSON). |
 | GET | `/live` | Liveness probe: `{"status": "alive"}`, never touches state. |
 | GET | `/ready` | Readiness probe: 200 when serving, 503 while draining or if a scheduler died / state dir is unwritable. |
-| GET | `/api/status` | Full pipeline snapshot (JSON); `publish.next_draft` is the oldest approved draft the poster will send next. |
+| GET | `/api/status` | Full pipeline snapshot (JSON); `publish.next_draft` is the first approved draft in posting order the poster will send next. |
 | POST | `/refresh` | Refresh the feed now. |
 | POST | `/scan` | Scan sources now (JSON, or a 303 back to `/review` for browsers). |
-| POST | `/publish/run` | Drain the approved queue now (JSON, or a 303 back to `/review`). Still works while paused. |
+| POST | `/publish/run` | Drain the approved queue now (JSON, or a 303 back to the submitting page — `/review` by default). Still works while paused. |
 | POST | `/publish/pause` | Pause the posting scheduler — it skips its slots until resumed (JSON, or a 303 back to `/`); persisted across restarts. |
 | POST | `/publish/resume` | Resume the posting scheduler (JSON, or a 303 back to `/`). |
 | POST | `/review/{id}/save` | Save the compose edits (caption, hashtags, image prompt); never posts. |
 | POST | `/review/{id}/publish` | Publish (form; `dry_run=1` to preview). With `approve=1` it saves the edits and queues the draft as `approved` instead of posting. |
 | POST | `/review/{id}/reject` | Reject. |
-| POST | `/review/{id}/image` | Generate/regenerate a draft's image (form; redirects back). |
-| GET | `/api/drafts` | Open drafts + DNA + `recent` captions, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
+| POST | `/review/{id}/image` | Save the compose edits and regenerate the draft's image in the background (form; redirects back immediately; the page then shows the job). |
+| POST | `/review/{id}/restore-image` | Put the source post's own image back, replacing a generated one (reads the source page once when the draft has no stored original). |
+| POST | `/queue/{id}/move` | Move an approved draft in the post queue (`direction=up\|down\|top\|bottom`, plus a `next` return path — the queue page sends `/queue#post-queue`); never posts. |
+| POST | `/queue/order` | Persist a drag-and-drop reorder: JSON `{"ids": [...]}` (a subset is fine), returns `{"ok": true, "order": [...]}`. |
+| POST | `/queue/reset` | Clear every manual position, restoring the default oldest-first order. |
+| GET | `/api/drafts` | Open drafts + DNA (`dna`) + the voice menu (`voices`, `voice_choices`, `default_voice`) + `recent` captions, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
 | POST | `/api/drafts/{id}/rewrite` | Store the rewrite. |
 | POST | `/api/drafts/{id}/image` | Generate an image for one draft (JSON), for the rewriter/operator. |
 
@@ -311,10 +382,16 @@ The series masthead is `publish.mastheads` (clear `choices` to disable).
 
 **Changing the brand voice.** Edit `docs/atento-dna.md` (the brief the rewriter
 reads) and keep `publish.dna_file` pointed at it; the contents ride along in
-`GET /api/drafts`.
+`GET /api/drafts` as `dna`. The **per-post voices** are the same idea for one
+register each: `publish.voices` → `docs/voices/<key>.md` with
+`publish.default_voice`; add, edit, or remove a voice there (the DNA §3 index
+documents the menu for the rewriter). Each voice file carries its brief **and** a
+growing `Samples` corpus — add real human-written lines to it to sharpen that
+voice. The DNA stays the structural contract (masthead, formats, hashtags/CTA,
+output JSON); a voice file only refines how one register sounds.
 
 **Changing the image look.** Edit `docs/atento-image-style.md` (the shared
-palette/finish floor prepended to every image prompt) and keep
+palette/prohibition floor prepended to every image prompt) and keep
 `image_gen.style_file` pointed at it. The per-post **treatment** menu is
 `image_gen.styles` → `docs/image-styles/<key>.md` with `image_gen.default_style`;
 add, edit, or remove a treatment there (the DNA §9.2 table documents the menu for

@@ -69,9 +69,11 @@ DEFAULTS: dict[str, Any] = {
         "seen_name": "seen.json",
     },
     # Publishing is human-gated: destinations are what a review-page approval
-    # may post to. `dna_file` is an optional path to your brand-voice brief,
-    # surfaced to the rewriter through GET /api/drafts. `dir` + `log_name` are
-    # the append-only audit log shown on /publish.
+    # may post to. `dna_file` is an optional path to your brand-voice brief and
+    # `voices` an optional menu of per-post voice briefs (key -> file, like
+    # image_gen.styles); both are surfaced to the rewriter through
+    # GET /api/drafts. `dir` + `log_name` are the append-only audit log shown on
+    # /publish.
     "publish": {
         "enabled": True,
         "destinations": ["facebook"],
@@ -100,6 +102,14 @@ DEFAULTS: dict[str, Any] = {
         # Empty `choices` + `default` disables the masthead.
         "mastheads": {"choices": [], "default": ""},
         "dna_file": "",
+        # One file per voice under docs/voices/ (key -> path), like image_gen.styles:
+        # the rewriter picks a key per post and returns it as `voice`, and each
+        # file's brief + samples ride along in GET /api/drafts `voices`. The DNA
+        # stays the structural contract; a voice refines how one register sounds.
+        # `default_voice` is the fallback key when the rewriter omits one. Empty
+        # `voices` disables the menu.
+        "voices": {},
+        "default_voice": "",
         # How many recently-written captions to hand the rewriter alongside the
         # open drafts (GET /api/drafts `recent`), so it can avoid repeating the
         # same opener/closer/vocabulary across posts (the pipeline lints against
@@ -133,8 +143,9 @@ DEFAULTS: dict[str, Any] = {
     # needs no key but is watermarked and locked to the older `sana` model.
     # `style_file` is a short brand-look brief prepended to every prompt.
     # `styles` is a menu of per-post visual treatments (key -> file): the
-    # rewriter picks one per post like the masthead, and the chosen treatment is
-    # appended to the `style_file` floor. `default_style` is the fallback key.
+    # rewriter picks one per post like the masthead, and the chosen treatment
+    # LEADS the prompt, ahead of the `style_file` floor. `default_style` is the
+    # fallback key.
     # An empty `styles` disables the menu (the `style_file` look alone).
     # `model` must be one the endpoint serves: the gen.pollinations.ai gateway
     # takes provider-qualified names (e.g. "openai/gpt-image-1-mini"); the
@@ -242,9 +253,7 @@ def validate(cfg: dict) -> None:
                 f"config: source {source.get('name')!r} type must be 'sitemap', 'rss', or 'index'"
             )
         if source.get("type") in ("sitemap", "index") and not source.get("path_prefix"):
-            raise ValueError(
-                f"config: source {source.get('name')!r} needs path_prefix"
-            )
+            raise ValueError(f"config: source {source.get('name')!r} needs path_prefix")
 
     publish = cfg.get("publish", {})
     destinations = publish.get("destinations")
@@ -267,9 +276,7 @@ def validate(cfg: dict) -> None:
         text = str(slot)
         if "-" in text:
             start, _, end = text.partition("-")
-            if _hhmm_minutes(start, "publish.post_at") >= _hhmm_minutes(
-                end, "publish.post_at"
-            ):
+            if _hhmm_minutes(start, "publish.post_at") >= _hhmm_minutes(end, "publish.post_at"):
                 raise ValueError(
                     f"config: publish.post_at window {slot!r} must start before it ends"
                 )
@@ -291,9 +298,7 @@ def validate(cfg: dict) -> None:
 
     image_gen = cfg.get("image_gen", {})
     if image_gen.get("provider") not in ("pollinations",):
-        raise ValueError(
-            f"config: unknown image_gen.provider {image_gen.get('provider')!r}"
-        )
+        raise ValueError(f"config: unknown image_gen.provider {image_gen.get('provider')!r}")
     if not str(image_gen.get("base_url", "")).startswith("https://"):
         raise ValueError("config: image_gen.base_url must be an https URL")
     if float(image_gen.get("timeout_seconds", 60)) <= 0:

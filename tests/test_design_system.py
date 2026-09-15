@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+import xml.etree.ElementTree as ET
 from html.parser import HTMLParser
 
 from social_bot import dashboard_html, draft_html, styleframe, ui
@@ -18,6 +19,7 @@ from social_bot.drafts import STATES
 
 _CLASS_RE = re.compile(r'class="([^"]*)"')
 _VAR_DEF_RE = re.compile(r"(--[\w-]+)\s*:")
+_VAR_VALUE_RE = re.compile(r"(--[\w-]+)\s*:\s*([^;]+);")
 _VAR_USE_RE = re.compile(r"var\(\s*(--[\w-]+)")
 _STYLE_RE = re.compile(r"<style>(.*?)</style>", re.S)
 _LIGHT_ROOT_RE = re.compile(r":root\s*\{(.*?)\}", re.S)
@@ -30,8 +32,20 @@ _STYLE_LITERAL_RE = re.compile(r"<style|\bstyle=|#[0-9a-fA-F]{3,8}\b|rgba?\(|hsl
 _PAGE_MODULES = (dashboard_html, draft_html, feed_html)
 
 _VOID = {
-    "area", "base", "br", "col", "embed", "hr", "img", "input",
-    "link", "meta", "param", "source", "track", "wbr",
+    "area",
+    "base",
+    "br",
+    "col",
+    "embed",
+    "hr",
+    "img",
+    "input",
+    "link",
+    "meta",
+    "param",
+    "source",
+    "track",
+    "wbr",
 }
 
 
@@ -108,7 +122,13 @@ class TestClasses:
         for name, document in styleframe.render_pages():
             assert document.lstrip().startswith("<!doctype html>"), name
             assert document.rstrip().endswith("</html>"), name
-            for href in ('href="/"', 'href="/review"', 'href="/publish"', 'href="/status"'):
+            for href in (
+                'href="/"',
+                'href="/review"',
+                'href="/queue"',
+                'href="/publish"',
+                'href="/status"',
+            ):
                 assert href in document, f"{name} is missing {href}"
 
     def test_every_page_uses_the_one_shared_stylesheet(self):
@@ -142,6 +162,37 @@ class TestBadges:
         for label in styleframe._BADGE_LABELS:
             cls = ui.badge(label).split('class="badge ')[1].split('"')[0]
             assert _has_rule(ui._CSS, cls), f"no rule for {cls}"
+
+    def test_badges_never_wrap(self):
+        # A two-word state ("no change") used to break across lines inside the
+        # pill and collapse it — a badge is a single-line chip.
+        rule = re.search(r"\.badge \{[^}]*\}", ui._CSS)
+        assert rule, "no .badge rule"
+        assert "white-space: nowrap" in rule.group(0)
+
+
+class TestFavicon:
+    """The tab icon is generated from the same tokens as the stylesheet."""
+
+    @staticmethod
+    def _tokens(block: str) -> dict[str, str]:
+        return {name: value.strip() for name, value in _VAR_VALUE_RE.findall(block)}
+
+    def test_draws_the_accent_and_foreground_from_the_stylesheet(self):
+        light = self._tokens(_LIGHT_ROOT_RE.search(ui._CSS).group(1))
+        dark = self._tokens(_DARK_ROOT_RE.search(ui._CSS).group(1))
+        svg = ui.favicon_svg()
+        for token in ("--accent", "--accent-fg"):
+            assert light[token] in svg, f"favicon misses light {token}"
+            assert dark[token] in svg, f"favicon misses dark {token}"
+
+    def test_is_well_formed_svg(self):
+        root = ET.fromstring(ui.favicon_svg())
+        assert root.tag == "{http://www.w3.org/2000/svg}svg"
+
+    def test_every_page_links_the_icon(self):
+        for name, document in styleframe.render_pages():
+            assert 'rel="icon"' in document, f"{name} does not link the favicon"
 
 
 class TestStyleframe:

@@ -33,7 +33,7 @@ class Source:
     lang: str = ""
 
     @classmethod
-    def from_config(cls, raw: dict) -> "Source":
+    def from_config(cls, raw: dict) -> Source:
         return cls(
             name=str(raw.get("name", "")),
             type=str(raw.get("type", "sitemap")),
@@ -57,7 +57,7 @@ class Item:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Item":
+    def from_dict(cls, data: dict) -> Item:
         known = set(cls.__dataclass_fields__)
         return cls(**{k: v for k, v in data.items() if k in known})
 
@@ -170,8 +170,7 @@ def parse_rss(
                 title=clean_text(_text(node, f"{ATOM_NS}title")),
                 excerpt=clean_text(summary, excerpt_chars),
                 image=image,
-                published=_text(node, f"{ATOM_NS}published")
-                or _text(node, f"{ATOM_NS}updated"),
+                published=_text(node, f"{ATOM_NS}published") or _text(node, f"{ATOM_NS}updated"),
             )
         )
     return items
@@ -297,7 +296,9 @@ def parse_blog_posting(
         source=source_name,
         url=parser.canonical or url,
         title=clean_text(title or meta.get("og:title") or parser.title),
-        excerpt=clean_text(excerpt or meta.get("og:description") or meta.get("description"), excerpt_chars),
+        excerpt=clean_text(
+            excerpt or meta.get("og:description") or meta.get("description"), excerpt_chars
+        ),
         image=str(image or meta.get("og:image", "")),
         published=str(published or meta.get("article:published_time", "")),
     )
@@ -352,7 +353,9 @@ def parse_index(
             for entry in _item_list_entries(node):
                 if not isinstance(entry, dict):
                     continue
-                url = entry.get("url") or (entry.get("item") if isinstance(entry.get("item"), str) else "")
+                url = entry.get("url") or (
+                    entry.get("item") if isinstance(entry.get("item"), str) else ""
+                )
                 _add(str(url), str(entry.get("name", "")))
 
     if not items:  # fallback: post links in the markup
@@ -360,5 +363,3 @@ def parse_index(
             _add(urljoin(base_url, href))
 
     return items
-
-

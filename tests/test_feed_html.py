@@ -87,9 +87,7 @@ class TestRenderFeedSection:
         assert 'class="qpreview"' not in out
 
     def test_the_masthead_rides_along_in_the_meta_not_as_the_title(self):
-        out = render_feed_section(
-            [FeedItem(message="[Học cùng Atento]\n\nCâu hook\n\nPhần thân.")]
-        )
+        out = render_feed_section([FeedItem(message="[Học cùng Atento]\n\nCâu hook\n\nPhần thân.")])
         assert 'class="qtitle">Câu hook</span>' in out
         assert 'class="qpreview">Phần thân.</span>' in out
         assert '<span class="pill">[Học cùng Atento]</span>' in out

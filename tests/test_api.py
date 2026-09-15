@@ -78,9 +78,7 @@ class TestManagedPagesFallback:
         monkeypatch.setattr(
             api,
             "get",
-            lambda path, params=None: (_ for _ in ()).throw(
-                ApiError("OAuth expired", code=190)
-            ),
+            lambda path, params=None: (_ for _ in ()).throw(ApiError("OAuth expired", code=190)),
         )
         with pytest.raises(ApiError):
             api.managed_pages()
@@ -97,9 +95,7 @@ class TestCreatePhotoPost:
             return {"id": "999", "post_id": "1148652808337860_999"}
 
         monkeypatch.setattr(api, "post", fake_post)
-        resp = api.create_photo_post(
-            "1148652808337860", "hello", "https://example.com/a.jpg"
-        )
+        resp = api.create_photo_post("1148652808337860", "hello", "https://example.com/a.jpg")
         assert captured["path"] == "1148652808337860/photos"
         assert captured["params"] == {
             "url": "https://example.com/a.jpg",
@@ -110,18 +106,14 @@ class TestCreatePhotoPost:
     def test_photo_post_omits_empty_caption(self, monkeypatch):
         api = GraphApi(token="tok", api_version="v26.0")
         captured = {}
-        monkeypatch.setattr(
-            api, "post", lambda path, params=None: captured.update(params)
-        )
+        monkeypatch.setattr(api, "post", lambda path, params=None: captured.update(params))
         api.create_photo_post("1148652808337860", "", "https://example.com/a.jpg")
         assert captured == {"url": "https://example.com/a.jpg"}
 
     def test_photo_post_private_sets_published_false(self, monkeypatch):
         api = GraphApi(token="tok", api_version="v26.0")
         captured = {}
-        monkeypatch.setattr(
-            api, "post", lambda path, params=None: captured.update(params) or {}
-        )
+        monkeypatch.setattr(api, "post", lambda path, params=None: captured.update(params) or {})
         api.create_photo_post(
             "1148652808337860", "hello", "https://example.com/a.jpg", published=False
         )
@@ -136,18 +128,14 @@ class TestCreatePost:
     def test_status_post_defaults_to_published(self, monkeypatch):
         api = GraphApi(token="tok", api_version="v26.0")
         captured = {}
-        monkeypatch.setattr(
-            api, "post", lambda path, params=None: captured.update(params) or {}
-        )
+        monkeypatch.setattr(api, "post", lambda path, params=None: captured.update(params) or {})
         api.create_post("1148652808337860", "hello")
         assert captured == {"message": "hello"}
 
     def test_private_status_post_sets_published_false(self, monkeypatch):
         api = GraphApi(token="tok", api_version="v26.0")
         captured = {}
-        monkeypatch.setattr(
-            api, "post", lambda path, params=None: captured.update(params) or {}
-        )
+        monkeypatch.setattr(api, "post", lambda path, params=None: captured.update(params) or {})
         api.create_post("1148652808337860", "hello", published=False)
         assert captured == {"message": "hello", "published": "false"}
 
@@ -219,8 +207,8 @@ class TestDebugTokenEndpoint:
 
 class TestTokenStatusFromDebug:
     def test_expiring_token(self):
-        now = dt.datetime(2026, 9, 11, tzinfo=dt.timezone.utc)
-        expires = dt.datetime.fromtimestamp(1794276741, tz=dt.timezone.utc)
+        now = dt.datetime(2026, 9, 11, tzinfo=dt.UTC)
+        expires = dt.datetime.fromtimestamp(1794276741, tz=dt.UTC)
         out = token_status_from_debug(
             {
                 "is_valid": True,
@@ -270,7 +258,9 @@ class TestCheckToken:
         )
 
     def test_valid_token(self, monkeypatch):
-        self._patch(monkeypatch, SimpleNamespace(debug_token=lambda: {"is_valid": True, "expires_at": 0}))
+        self._patch(
+            monkeypatch, SimpleNamespace(debug_token=lambda: {"is_valid": True, "expires_at": 0})
+        )
         out = check_token(self.CFG)
         assert out["valid"] is True
         assert out["never_expires"] is True
@@ -294,10 +284,6 @@ class TestCheckToken:
         assert "timed out" in out["error"]
 
     def test_no_token_raises(self):
-        cfg = {
-            "destinations": {
-                "facebook": {**self.CFG["destinations"]["facebook"], "token": ""}
-            }
-        }
+        cfg = {"destinations": {"facebook": {**self.CFG["destinations"]["facebook"], "token": ""}}}
         with pytest.raises(ValueError):
             check_token(cfg)

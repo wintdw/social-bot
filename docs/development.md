@@ -9,7 +9,14 @@ Conventions and recipes for changing the code. See
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"
 .venv/bin/python -m pytest          # whole suite; no network
+.venv/bin/ruff check src tests scripts   # lint
+.venv/bin/ruff format src tests scripts  # format in place (--check to verify)
 ```
+
+Ruff (config in `pyproject.toml`, `[tool.ruff]`) is the formatter and linter of
+record. Its `select` is pinned on purpose so the check doesn't drift with ruff's
+releases, and `E501` is off — the formatter owns line length, and long strings
+(URLs, HTML fragments, the stylesheet) are not re-wrapped.
 
 Tests never touch the network and never need the `[server]` extra. Conventions:
 

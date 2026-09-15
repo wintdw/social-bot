@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from social_bot.ui import badge, layout, nav_html, notice_html
+from social_bot.ui import badge, favicon_svg, layout, nav_html, notice_html
 
 
 class TestNav:
@@ -54,3 +54,14 @@ class TestLayout:
     def test_has_a_visible_focus_style(self):
         out = layout("t", "")
         assert ":focus-visible" in out and "outline" in out
+
+
+class TestFavicon:
+    def test_is_a_self_contained_svg(self):
+        svg = favicon_svg()
+        assert svg.startswith("<svg") and svg.endswith("</svg>")
+        assert 'viewBox="0 0 32 32"' in svg
+
+    def test_layout_links_the_svg_icon(self):
+        out = layout("t", "")
+        assert '<link rel="icon" type="image/svg+xml" href="/favicon.svg">' in out

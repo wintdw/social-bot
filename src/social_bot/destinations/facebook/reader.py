@@ -23,9 +23,7 @@ HTML_NAME = "latest.html"
 
 def account_id(cfg: dict) -> str:
     """The facebook Page id from `destinations.facebook.account_id`."""
-    raw = str(
-        cfg.get("destinations", {}).get("facebook", {}).get("account_id") or ""
-    ).strip()
+    raw = str(cfg.get("destinations", {}).get("facebook", {}).get("account_id") or "").strip()
     if not raw:
         raise ValueError(
             "no page id: set destinations.facebook.account_id in config.yaml, "
@@ -66,9 +64,7 @@ def refresh_feed(cfg: dict | None = None, config_path=None) -> dict:
     out_dir.mkdir(parents=True, exist_ok=True)
     json_file = out_dir / JSON_NAME
     html_file = out_dir / HTML_NAME
-    json_file.write_text(
-        json.dumps(raw_items, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
+    json_file.write_text(json.dumps(raw_items, indent=2, ensure_ascii=False), encoding="utf-8")
     html_file.write_text(
         render_feed_html(parse_feed_response({"data": raw_items}), page_id=page_id),
         encoding="utf-8",
@@ -87,9 +83,7 @@ class FacebookReader(AccountReader):
         return api_from_config(self.cfg, self.token)
 
     def configured(self) -> bool:
-        return bool(self.token_value()) and bool(
-            str(self.config().get("account_id") or "").strip()
-        )
+        return bool(self.token_value()) and bool(str(self.config().get("account_id") or "").strip())
 
     def account(self) -> dict[str, Any]:
         return self.api.page_info(account_id(self.cfg))

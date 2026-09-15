@@ -1,11 +1,13 @@
-"""Operator UI pages: the factory dashboard, the published log, and status.
+"""Operator UI pages: the factory dashboard, the post queue, the published log,
+and status.
 
 Pure rendering (no network, no fastapi). `render_dashboard_html` is the single
 control surface — a pipeline strip (sources -> queue -> approved -> published)
 that highlights the stage needing a human, the schedulers and ledger, the cached
-page feed, and what needs attention — while `render_publish_html` lists the
-publish audit and `render_status_html` is the human-readable view of the
-/api/status snapshot.
+page feed, and what needs attention. `render_queue_html` is the **post queue**:
+the approved drafts in the order they will post, and the one place that order is
+set. `render_publish_html` lists the publish audit and `render_status_html` is
+the human-readable view of the /api/status snapshot.
 """
 
 from __future__ import annotations
@@ -13,17 +15,23 @@ from __future__ import annotations
 import datetime as dt
 import html
 
-from .ui import badge, layout
+from .caption import display_title, leading_masthead
+from .drafts import Draft, parse_when
+from .ui import badge, fmt_when, layout
 
 
 def _stamp(when: dt.datetime) -> str:
     return when.astimezone().strftime("%Y-%m-%d %H:%M %Z")
 
 
-def _panel(label: str, body: str, *, extra: str = "") -> str:
-    """A titled panel: uppercase label head, optional right-hand pill, body."""
+def _panel(label: str, body: str, *, extra: str = "", anchor: str = "") -> str:
+    """A titled panel: uppercase label head, optional right-hand pill, body.
+
+    ``anchor`` gives the section an id, so a page can link straight to it.
+    """
+    ident = f' id="{html.escape(anchor)}"' if anchor else ""
     return (
-        '<section class="panel">'
+        f'<section class="panel"{ident}>'
         f'<div class="panel-head"><span class="label">{html.escape(label)}</span>{extra}</div>'
         f"{body}</section>"
     )
@@ -31,10 +39,13 @@ def _panel(label: str, body: str, *, extra: str = "") -> str:
 
 def _kv_rows(rows: list[tuple[str, object]]) -> str:
     """A definition list of label/value rows (values are pre-escaped HTML)."""
-    return '<dl class="kv">' + "".join(
-        f'<div class="kv-row"><dt>{html.escape(str(k))}</dt><dd>{v}</dd></div>'
-        for k, v in rows
-    ) + "</dl>"
+    return (
+        '<dl class="kv">'
+        + "".join(
+            f'<div class="kv-row"><dt>{html.escape(str(k))}</dt><dd>{v}</dd></div>' for k, v in rows
+        )
+        + "</dl>"
+    )
 
 
 def _card(num, label: str, sub: str = "") -> str:
@@ -139,6 +150,44 @@ _IMAGE_STATUS_LABEL = {
 }
 
 
+def _job_times(job: dict) -> str:
+    """A job's timing as one phrase: a range when both ends are known."""
+    started = str(job.get("started_at", "") or "").strip()
+    finished = str(job.get("finished_at", "") or "").strip()
+    if started and finished:
+        return f"{started} → {finished}"
+    if started:
+        return f"started {started}"
+    if finished:
+        return f"finished {finished}"
+    return ""
+
+
+def _image_job_row(job: dict) -> str:
+    """One image job: state badge, the draft it belongs to, and its timing.
+
+    The draft id is the only handle on the post, so it links to its detail page
+    and carries the full id in a title while it ellipsises in a narrow column.
+    """
+    status = str(job.get("status", ""))
+    draft_id = str(job.get("draft_id", ""))
+    name = html.escape(draft_id)
+    parts = [
+        '<div class="job-top">',
+        badge(_IMAGE_STATUS_LABEL.get(status, status or "unknown")),
+        f'<a class="job-name" href="{html.escape(f"/review/{draft_id}")}"'
+        f' title="{name}">{name}</a>',
+        "</div>",
+    ]
+    times = _job_times(job)
+    if times:
+        parts.append(f'<div class="job-meta">{html.escape(times)}</div>')
+    error = str(job.get("error", "") or "").strip()
+    if error:
+        parts.append(f'<div class="job-error">{html.escape(error)}</div>')
+    return f'<div class="job">{"".join(parts)}</div>'
+
+
 def _image_section(images: dict | None, *, limit: int = 10) -> str:
     """The background image jobs: how the async post-rewrite work is going.
 
@@ -161,28 +210,15 @@ def _image_section(images: dict | None, *, limit: int = 10) -> str:
             '<div class="panel-body"><p class="muted">No image jobs yet — one runs '
             "in the background after each rewrite.</p></div>",
         )
-    rows: list[list[str]] = []
-    for job in reversed(jobs[-limit:]):  # newest first
-        status = str(job.get("status", ""))
-        rows.append(
-            [
-                html.escape(str(job.get("draft_id", ""))),
-                badge(_IMAGE_STATUS_LABEL.get(status, status or "unknown")),
-                html.escape(str(job.get("error", "") or "")),
-                html.escape(str(job.get("started_at", "") or "—")),
-                html.escape(str(job.get("finished_at", "") or "—")),
-            ]
-        )
+    rows = "".join(_image_job_row(job) for job in reversed(jobs[-limit:]))  # newest first
     more = "" if len(jobs) <= limit else f" (showing the latest {limit})"
     summary = (
-        f'{len(jobs)} job(s) · {images.get("running", 0)} running · '
-        f'{images.get("failed", 0)} failed{more}'
+        f"{len(jobs)} job(s) · {images.get('running', 0)} running · "
+        f"{images.get('failed', 0)} failed{more}"
     )
     return _panel(
         "Image jobs",
-        '<div class="panel-body">'
-        + _table(["Draft", "Status", "Error", "Started", "Finished"], rows)
-        + "</div>",
+        f'<div class="joblist">{rows}</div>',
         extra=f'<span class="pill">{html.escape(summary)}</span>',
     )
 
@@ -290,18 +326,14 @@ def _pipeline(stats: dict, refresh: dict, scan: dict, post: dict | None) -> str:
     )
 
 
-def _attention(
-    stats: dict,
-    images: dict | None,
-    token: dict | None,
-    *,
-    post: dict | None,
-) -> str:
-    """What needs a person right now. Says so explicitly when nothing does."""
+def _attention(stats: dict, images: dict | None, token: dict | None) -> str:
+    """What needs a person right now. Says so explicitly when nothing does.
+
+    Approved drafts are deliberately absent: they need no decision, and their
+    order and next send belong to the Post queue tab.
+    """
     drafts = stats.get("drafts", {})
-    publish = stats.get("publish", {}) or {}
     open_drafts = int(drafts.get("open", 0) or 0)
-    approved = int(publish.get("approved") or 0)
     rows: list[str] = []
 
     if open_drafts:
@@ -313,17 +345,6 @@ def _attention(
             f'<span class="small">{drafts.get("total", 0)} in the queue · '
             "nothing posts until a human approves it</span></span>"
             '<a class="btn btn-primary btn-sm" href="/review">Open queue</a>'
-            "</div>"
-        )
-    if post and approved:
-        label = _next_draft_label(publish) or "the approved queue"
-        rows.append(
-            '<div class="attn-row">'
-            f'<span class="attn-ico" aria-hidden="true">{approved}</span>'
-            '<span class="attn-text"><strong>'
-            f"{approved} approved and scheduled</strong>"
-            f'<span class="small">oldest first — {html.escape(label)}</span></span>'
-            '<a class="btn btn-quiet btn-sm" href="/review?status=approved">View</a>'
             "</div>"
         )
     if images is not None and images.get("failed"):
@@ -351,14 +372,271 @@ def _attention(
     if not rows:
         return _panel(
             "Needs attention",
-            '<div class="panel-body"><p class="muted">Nothing needs you right now.'
-            "</p></div>",
+            '<div class="panel-body"><p class="muted">Nothing needs you right now.</p></div>',
             extra='<span class="pill"><span class="dot dot-ok"></span>all clear</span>',
         )
     return _panel(
         "Needs attention",
         '<div class="attn">' + "".join(rows) + "</div>",
         extra=f'<span class="pill">{len(rows)} item(s)</span>',
+    )
+
+
+# -- post queue (the Post queue tab, /queue) -----------------------------
+#
+# The queue is the one place the posting order is set: the approved drafts, in
+# the order the poster drains them (`draft_pipeline.scheduled_queue`), with the
+# draft that goes out next marked. Because this is the order that actually
+# posts, the list an operator sees and the list the poster walks are the same
+# list — never a second ordering rule.
+#
+# Reordering is progressive: drag a row, or use the row's own Top / Up / Down
+# buttons, which are plain forms and work with no JavaScript at all. Every move
+# comes back to this same panel.
+
+_QUEUE_ANCHOR = "post-queue"
+# Every move returns to the queue panel, so the controls share one `next` target.
+_QUEUE_NEXT_URL = f"/queue#{_QUEUE_ANCHOR}"
+
+# Drag a row to reorder the queue; the server renumbers and the page reloads to
+# show the new order. The buttons on each row do the same job without it.
+#
+# The drop surface is the whole document, not the rows: a drop is committed
+# wherever it lands (just above the first row, over the dragged row itself), so a
+# drag that visibly moved a row can never silently revert on the next load.
+_QUEUE_SCRIPT = """<script>
+(function () {
+  var list = document.getElementById('post-queue-list');
+  if (!list || !window.fetch) return;
+  function rows() {
+    return Array.prototype.slice.call(list.querySelectorAll('.qrow-manage'));
+  }
+  var managed = rows();
+  if (managed.length < 2) return;
+  var dragged = null;
+  function save() {
+    var ids = rows().map(function (row) { return row.getAttribute('data-draft-id'); });
+    fetch('/queue/order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: ids })
+    }).then(function (response) { return response.json(); }).then(function (data) {
+      if (data && data.ok) window.location.reload();
+    }).catch(function () {});
+  }
+  // Put the dragged row where the pointer is: into the half of the row it is over,
+  // or at the end of the list when the pointer is past the last row.
+  function place(event) {
+    var under = document.elementFromPoint(event.clientX, event.clientY);
+    var row = under && under.closest ? under.closest('.qrow-manage') : null;
+    if (row) {
+      if (row === dragged) return;
+      var box = row.getBoundingClientRect();
+      if (event.clientY < box.top + box.height / 2) list.insertBefore(dragged, row);
+      else list.insertBefore(dragged, row.nextSibling);
+      return;
+    }
+    var edge = list.getBoundingClientRect();
+    if (event.clientY < edge.top) list.insertBefore(dragged, list.firstChild);
+    else if (event.clientY > edge.bottom) list.appendChild(dragged);
+  }
+  managed.forEach(function (row) {
+    row.setAttribute('draggable', 'true');
+    row.addEventListener('dragstart', function (event) {
+      dragged = row;
+      row.classList.add('qrow-dragging');
+      if (event.dataTransfer) {
+        event.dataTransfer.effectAllowed = 'move';
+        event.dataTransfer.setData('text/plain', row.getAttribute('data-draft-id') || '');
+      }
+    });
+    row.addEventListener('dragend', function () {
+      row.classList.remove('qrow-dragging');
+      dragged = null;
+    });
+  });
+  document.addEventListener('dragover', function (event) {
+    if (!dragged) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    place(event);
+  });
+  document.addEventListener('drop', function (event) {
+    if (!dragged) return;
+    event.preventDefault();
+    save();
+  });
+})();
+</script>"""
+
+
+def _queue_move_form(draft: Draft, position: int, total: int) -> str:
+    """One row's order controls: Top / Up / Down, as a plain form.
+
+    The ends are disabled rather than hidden, so the row's shape never changes.
+    """
+    action = html.escape(f"/queue/{draft.id}/move")
+    hidden = f'<input type="hidden" name="next" value="{_QUEUE_NEXT_URL}">'
+    buttons = "".join(
+        f'<button type="submit" name="direction" value="{direction}" class="btn btn-sm"'
+        f' aria-label="{label}"{" disabled" if blocked else ""}>{text}</button>'
+        for direction, text, label, blocked in (
+            ("top", "Top", "Move to the top of the queue", position <= 1),
+            ("up", "Up", "Move up one place in the queue", position <= 1),
+            ("down", "Down", "Move down one place in the queue", position >= total),
+        )
+    )
+    return f'<form method="post" action="{action}">{hidden}{buttons}</form>'
+
+
+def _queue_row(draft: Draft, position: int, total: int) -> str:
+    """One queued draft: what posts, and where it sits in the order.
+
+    A managed row is a div wrapping the row link plus the order controls — a
+    control cannot live inside an `<a>` — and carries its draft id so a drag can
+    report the new order.
+    """
+    url = html.escape(f"/review/{draft.id}")
+    title = html.escape(display_title(draft.caption, draft.title or draft.id))
+    if draft.image:
+        thumb = (
+            f'<span class="qthumb"><img src="{html.escape(draft.image)}" alt="" '
+            'loading="lazy"></span>'
+        )
+    else:
+        thumb = '<span class="qthumb empty" aria-hidden="true"></span>'
+
+    meta: list[str] = []
+    if position == 1:
+        # The row that goes out next — the same draft the poster takes first.
+        meta.append('<span class="pill is-next">Next to post</span>')
+    if draft.source:
+        meta.append(f'<span class="badge badge-source">{html.escape(draft.source)}</span>')
+    masthead = leading_masthead(draft.caption)
+    if masthead:
+        meta.append(f'<span class="pill">{html.escape(masthead)}</span>')
+    stamp = draft.published or draft.created_at or draft.updated_at
+    shown = fmt_when(stamp)
+    if shown:
+        machine = parse_when(stamp)
+        label = "published" if draft.published else "queued"
+        if machine:  # <time datetime> must be ISO 8601, not the raw source format
+            meta.append(
+                f'<time datetime="{html.escape(machine.isoformat())}">'
+                f"{label} {html.escape(shown)}</time>"
+            )
+        else:
+            meta.append(f"<span>{label} {html.escape(shown)}</span>")
+
+    body = [
+        f'<span class="qtitle">{title}</span>',
+        f'<span class="qmeta">{"".join(meta)}</span>',
+    ]
+    if draft.excerpt:
+        body.append(f'<span class="qpreview">{html.escape(draft.excerpt)}</span>')
+
+    return (
+        f'<div class="qrow qrow-manage" data-draft-id="{html.escape(draft.id)}">'
+        f'<a class="qrow-main" href="{url}" draggable="false">'
+        f"{thumb}"
+        f'<span class="qbody">{"".join(body)}</span>'
+        '<span class="qgo" aria-hidden="true">›</span>'
+        "</a>"
+        # A div, not a span: the order controls are a <form>, which may not sit
+        # inside phrasing content.
+        '<div class="qmove">'
+        '<span class="qgrip" role="img" aria-label="Drag to reorder" '
+        'title="Drag to reorder">⠿</span>'
+        f'<span class="pill">#{position} / {total}</span>'
+        f"{_queue_move_form(draft, position, total)}"
+        "</div>"
+        "</div>"
+    )
+
+
+def _queue_summary(total: int, post: dict | None) -> str:
+    """The queue page's one-liner: how much is queued, and when it goes out."""
+    if post and post.get("paused"):
+        return f"{total} approved · posting paused"
+    if not (post and post.get("schedule")):
+        return f"{total} approved · posting is manual"
+    return f"{total} approved · next post {post.get('next_post') or '—'}"
+
+
+def _queue_panel(queue: list[Draft]) -> str:
+    """The post queue: the approved drafts, in the order they will post.
+
+    ``queue`` is `draft_pipeline.scheduled_queue`, so row #1 is exactly the draft
+    the poster sends next.
+    """
+    total = len(queue)
+    if not queue:
+        return _panel(
+            "Queue",
+            '<div class="panel-body"><p class="muted">Nothing approved yet — drafts you '
+            "approve on the <strong>Review queue</strong> tab land here, in the order they "
+            'will post. <a href="/review">Open Review queue</a>.</p></div>',
+            anchor=_QUEUE_ANCHOR,
+        )
+    rows = "".join(_queue_row(draft, index + 1, total) for index, draft in enumerate(queue))
+    # One draft needs no ordering, so the hint and the reset control stay away
+    # until there is an order to set.
+    foot = ""
+    if total > 1:
+        foot = (
+            '<div class="qfoot">'
+            "<span>Drag a row, or use Top / Up / Down, to set what posts first.</span>"
+            '<form method="post" action="/queue/reset">'
+            f'<input type="hidden" name="next" value="{_QUEUE_NEXT_URL}">'
+            '<button type="submit" class="btn btn-sm btn-quiet">Reset order</button></form>'
+            "</div>"
+        )
+    return _panel(
+        "Queue",
+        f'<div class="qlist" id="post-queue-list">{rows}</div>{foot}',
+        anchor=_QUEUE_ANCHOR,
+    )
+
+
+def render_queue_html(
+    queue: list[Draft],
+    *,
+    post: dict | None = None,
+    message: str = "",
+    private: bool = False,
+    generated_at: dt.datetime | None = None,
+) -> str:
+    """The post queue page: the approved drafts, in the order they will post.
+
+    ``queue`` is `draft_pipeline.scheduled_queue` — the poster's own list — so
+    row #1 is exactly the draft that posts next, and the reorder controls set
+    that order. ``post`` is the poster's runtime, for the header's one-line
+    summary of when the queue goes out.
+    """
+    generated_at = generated_at or dt.datetime.now()
+    post_control = ""
+    if post and post.get("schedule"):
+        post_control = (
+            '<div class="cmdbar">'
+            '<form method="post" action="/publish/run">'
+            f'<input type="hidden" name="next" value="{_QUEUE_NEXT_URL}">'
+            '<button type="submit">Post approved now</button></form>'
+            "</div>"
+        )
+    header = (
+        "<header><div><h1>Post queue</h1>"
+        f'<div class="sub">{html.escape(_queue_summary(len(queue), post))} · generated '
+        f"{html.escape(_stamp(generated_at))}</div></div>" + post_control + "</header>"
+    )
+    body = header + _queue_panel(queue)
+    if queue:  # the drag-to-reorder enhancement only means anything with rows
+        body += _QUEUE_SCRIPT
+    return layout(
+        "Social Content Factory — post queue",
+        body,
+        active="queue",
+        message=message,
+        private=private,
     )
 
 
@@ -378,11 +656,14 @@ def render_dashboard_html(
     private: bool = False,
     generated_at: dt.datetime | None = None,
 ) -> str:
-    """The single control surface: pipeline, controls, attention, and feed.
+    """The single control surface: pipeline, controls, feed.
 
     The feed panel is platform-owned: the caller (a destination's reader) renders
     ``feed_section`` and passes ``feed_label``; when there is no reader the panel
     is omitted entirely, so the core UI never imports a platform module.
+
+    The post queue is not here: it has its own page (``render_queue_html``) on the
+    Post queue tab, so the order and the controls that set it live together.
     """
     generated_at = generated_at or dt.datetime.now()
     drafts = stats.get("drafts", {})
@@ -422,9 +703,7 @@ def render_dashboard_html(
     header = (
         "<header><div><h1>Factory</h1>"
         f'<div class="sub">{who} · generated '
-        f"{html.escape(_stamp(generated_at))}</div></div>"
-        + controls
-        + "</header>"
+        f"{html.escape(_stamp(generated_at))}</div></div>" + controls + "</header>"
     )
 
     if not feed_label:
@@ -484,12 +763,7 @@ def render_dashboard_html(
         + "</div>",
     )
 
-    left = (
-        '<div class="stack">'
-        + _attention(stats, images, token, post=post)
-        + feed_panel
-        + "</div>"
-    )
+    left = '<div class="stack">' + _attention(stats, images, token) + feed_panel + "</div>"
     right = (
         '<div class="stack">'
         + schedule_panel
@@ -497,12 +771,9 @@ def render_dashboard_html(
         + _image_section(images, limit=5)
         + "</div>"
     )
-
     return layout(
         "Social Content Factory — factory",
-        header
-        + _pipeline(stats, refresh, scan, post)
-        + f'<div class="cols">{left}{right}</div>',
+        header + _pipeline(stats, refresh, scan, post) + f'<div class="cols">{left}{right}</div>',
         active="dashboard",
         message=message,
         private=private,
@@ -528,8 +799,7 @@ def render_publish_html(
             header
             + _panel(
                 "Audit log",
-                '<div class="panel-body"><p class="muted">Nothing published yet.</p>'
-                "</div>",
+                '<div class="panel-body"><p class="muted">Nothing published yet.</p></div>',
             ),
             active="publish",
             private=private,
@@ -546,9 +816,7 @@ def render_publish_html(
         # A send with no feed story (e.g. a photo upload) returns no post —
         # show no link rather than a bare id.
         post_cell = (
-            f'<a href="{html.escape(permalink)}">{html.escape(permalink)}</a>'
-            if permalink
-            else ""
+            f'<a href="{html.escape(permalink)}">{html.escape(permalink)}</a>' if permalink else ""
         )
         rows.append(
             [
@@ -608,7 +876,7 @@ def render_status_html(
             html.escape(str(s.get("name", ""))),
             html.escape(str(s.get("type", ""))),
             f'<a href="{html.escape(str(s.get("url", "")))}">'
-            f'{html.escape(str(s.get("url", "")))}</a>',
+            f"{html.escape(str(s.get('url', '')))}</a>",
             html.escape(str(s.get("lang", ""))),
         ]
         for s in stats.get("sources", [])
@@ -636,6 +904,9 @@ def render_status_html(
         ["post at", html.escape(", ".join(publish.get("post_at", []) or []) or "—")],
         ["post per slot", html.escape(str(publish.get("post_per_slot", "")))],
         ["DNA file set", str(bool(publish.get("dna_file_set")))],
+        ["Voices set", str(bool(publish.get("voices_set")))],
+        ["Voice choices", html.escape(", ".join(publish.get("voice_choices") or []) or "—")],
+        ["Default voice", html.escape(str(publish.get("default_voice") or "—"))],
     ]
 
     schedules = _run_line("Feed refresh", refresh) + _run_line("Source scan", scan)
@@ -679,6 +950,4 @@ def render_status_html(
         + "</div>"
         + "</div>"
     )
-    return layout(
-        "Social Content Factory — status", body, active="status", private=private
-    )
+    return layout("Social Content Factory — status", body, active="status", private=private)

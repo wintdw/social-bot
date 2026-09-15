@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 
 from ...drafts import Draft
-from ..base import PublishResult, Publisher
+from ..base import Publisher, PublishResult
 from .api import ApiError, api_from_config
 
 # Seconds to wait before commenting on a freshly created post. Facebook's
@@ -35,9 +35,7 @@ class FacebookPublisher(Publisher):
     @classmethod
     def validate_config(cls, dst: dict) -> None:
         if not str(dst.get("api_version", "")).startswith("v"):
-            raise ValueError(
-                "config: destinations.facebook.api_version must look like 'v26.0'"
-            )
+            raise ValueError("config: destinations.facebook.api_version must look like 'v26.0'")
         if not str(dst.get("base_url", "")).startswith("https://"):
             raise ValueError("config: destinations.facebook.base_url must be an https URL")
         if float(dst.get("timeout_seconds", 30)) <= 0:
@@ -46,9 +44,7 @@ class FacebookPublisher(Publisher):
     def page_id(self, *, required: bool = True) -> str:
         page_id = str(self.config().get("account_id") or "").strip()
         if required and not page_id:
-            raise ValueError(
-                "no page id: set destinations.facebook.account_id in config.yaml"
-            )
+            raise ValueError("no page id: set destinations.facebook.account_id in config.yaml")
         return page_id
 
     def configured(self) -> bool:
@@ -69,13 +65,9 @@ class FacebookPublisher(Publisher):
         caption = draft.post_text
         private = self.private()
         if draft.image:
-            resp = self.api.create_photo_post(
-                page_id, caption, draft.image, published=not private
-            )
+            resp = self.api.create_photo_post(page_id, caption, draft.image, published=not private)
         else:
-            resp = self.api.create_post(
-                page_id, caption, draft.url or None, published=not private
-            )
+            resp = self.api.create_post(page_id, caption, draft.url or None, published=not private)
         post_id = str(resp.get("post_id") or resp.get("id") or "")
         permalink = f"https://www.facebook.com/{post_id}" if "_" in post_id else ""
 

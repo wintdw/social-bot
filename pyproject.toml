@@ -13,7 +13,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.16",
+]
 server = [
   "fastapi>=0.115",
   "uvicorn>=0.30",
@@ -25,6 +28,18 @@ social-bot = "social_bot.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+# The ruleset is pinned so the check does not shift with ruff's evolving
+# defaults. E501 is off — the formatter owns line length, and long strings
+# (URLs, HTML fragments, the stylesheet) must not be re-wrapped.
+select = ["E", "W", "F", "I", "UP", "B", "C4"]
+ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

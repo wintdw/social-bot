@@ -16,10 +16,12 @@ from social_bot.web import (
     image_jobs_view,
     infer_last_runs,
     live_view,
+    message_url,
     next_post_at,
     next_run_at,
     readiness_view,
     runtime_state_snapshot,
+    safe_local_path,
     seconds_until,
     seconds_until_any,
 )
@@ -112,14 +114,14 @@ class TestNextPostAt:
         assert next_post_at(["09:00", "20:00"], now=self.NOW) == dt.datetime(2026, 9, 12, 20, 0)
 
     def test_hold_lands_on_the_day_the_gate_lifts(self):
-        assert next_post_at(
-            ["09:00", "20:00"], interval_remaining=1, now=self.NOW
-        ) == dt.datetime(2026, 9, 13, 9, 0)
+        assert next_post_at(["09:00", "20:00"], interval_remaining=1, now=self.NOW) == dt.datetime(
+            2026, 9, 13, 9, 0
+        )
 
     def test_hold_picks_the_earliest_of_several_slots(self):
-        assert next_post_at(
-            ["20:00", "09:00"], interval_remaining=2, now=self.NOW
-        ) == dt.datetime(2026, 9, 14, 9, 0)
+        assert next_post_at(["20:00", "09:00"], interval_remaining=2, now=self.NOW) == dt.datetime(
+            2026, 9, 14, 9, 0
+        )
 
     def test_hold_with_a_window_lands_inside_the_window(self):
         moment = next_post_at(["19:30-21:00"], interval_remaining=1, now=self.NOW)
@@ -288,3 +290,41 @@ class TestImageJobsView:
         assert view["failed"] == 0
         assert [job["status"] for job in view["jobs"]] == ["ok", "unchanged", "skipped"]
 
+
+class TestSafeLocalPath:
+    """The queue controls redirect back to a caller-supplied path."""
+
+    def test_accepts_local_paths(self):
+        assert safe_local_path("/") == "/"
+        assert safe_local_path("/queue#post-queue") == "/queue#post-queue"
+        assert safe_local_path("/review?status=approved") == "/review?status=approved"
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["", "https://evil.example/x", "//evil.example", "\\evil", "/review\\x", "review"],
+    )
+    def test_rejects_anything_else(self, bad):
+        assert safe_local_path(bad) == "/"
+
+    def test_custom_default(self):
+        assert safe_local_path("", "/review") == "/review"
+
+
+class TestMessageUrl:
+    """The flash-message redirect keeps the query before any fragment."""
+
+    def test_appends_the_first_query(self):
+        assert message_url("/", "Moved.") == "/?message=Moved."
+
+    def test_extends_an_existing_query(self):
+        assert message_url("/review?status=approved", "Moved.") == (
+            "/review?status=approved&message=Moved."
+        )
+
+    def test_fragment_stays_last(self):
+        assert message_url("/queue#post-queue", "Moved to position 2 of 3.") == (
+            "/queue?message=Moved%20to%20position%202%20of%203.#post-queue"
+        )
+
+    def test_escapes_the_message(self):
+        assert message_url("/", "a&b=c") == "/?message=a%26b%3Dc"

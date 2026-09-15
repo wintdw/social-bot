@@ -9,7 +9,8 @@ import sys
 
 from . import __version__
 from .config import load_config, validate
-from .destinations import names as destination_names, publisher_for
+from .destinations import names as destination_names
+from .destinations import publisher_for
 from .destinations.facebook import (
     ApiError,
     api_from_config,
@@ -17,7 +18,15 @@ from .destinations.facebook import (
     parse_feed_response,
     refresh_feed,
 )
-from .draft_pipeline import apply_masthead, generate_images, publish_scheduled, scan_sources
+from .draft_pipeline import (
+    apply_masthead,
+    generate_images,
+    move_in_queue,
+    publish_scheduled,
+    queue_view,
+    reset_queue_order,
+    scan_sources,
+)
 
 # Shown when the state directory can't be written (a common Docker uid mismatch).
 _DATA_DIR_HINT = (
@@ -29,7 +38,9 @@ _DATA_DIR_HINT = (
 def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="social-bot", description=__doc__)
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--config", type=pathlib.Path, help="config.yaml path (default: project root)")
+    parser.add_argument(
+        "--config", type=pathlib.Path, help="config.yaml path (default: project root)"
+    )
     parser.add_argument(
         "--token",
         help=(
@@ -49,7 +60,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
 
     p_feed = sub.add_parser("feed", help="fetch the page feed (read-only)")
     p_feed.add_argument("--page-id", help="override destinations.facebook.account_id")
-    p_feed.add_argument("--limit", type=int, default=None, help="posts to show (default: feed.limit)")
+    p_feed.add_argument(
+        "--limit", type=int, default=None, help="posts to show (default: feed.limit)"
+    )
     p_feed.add_argument("--json", action="store_true", help="print the raw Graph API JSON instead")
     p_feed.set_defaults(func=_cmd_feed)
 
@@ -61,7 +74,9 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--photo",
         help="publish a photo from a public image URL; --message becomes its caption",
     )
-    p_post.add_argument("--dry-run", action="store_true", help="print the request without sending it")
+    p_post.add_argument(
+        "--dry-run", action="store_true", help="print the request without sending it"
+    )
     p_post.set_defaults(func=_cmd_post)
 
     p_refresh = sub.add_parser("refresh", help="fetch the page feed and cache it for `serve`")
@@ -96,9 +111,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         metavar="ID",
         help="only this draft id (repeatable; default: all open drafts)",
     )
-    p_image.add_argument(
-        "--limit", type=int, default=None, help="max drafts to process"
-    )
+    p_image.add_argument("--limit", type=int, default=None, help="max drafts to process")
     p_image.add_argument(
         "--overwrite",
         action="store_true",
@@ -117,9 +130,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         metavar="ID",
         help="only this draft id (repeatable; default: all open drafts)",
     )
-    p_masthead.add_argument(
-        "--limit", type=int, default=None, help="max drafts to update"
-    )
+    p_masthead.add_argument("--limit", type=int, default=None, help="max drafts to update")
     p_masthead.add_argument("--json", action="store_true", help="print the summary as JSON")
     p_masthead.set_defaults(func=_cmd_blog_masthead)
 
@@ -140,6 +151,26 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p_publish.add_argument("--json", action="store_true", help="print the summary as JSON")
     p_publish.set_defaults(func=_cmd_blog_publish)
+
+    p_queue = blog_sub.add_parser(
+        "queue", help="show the approved post queue in the order it will post"
+    )
+    p_queue.add_argument(
+        "--reset",
+        action="store_true",
+        help="clear every manual position first, restoring the oldest-first order",
+    )
+    p_queue.add_argument("--json", action="store_true", help="print the queue as JSON")
+    p_queue.set_defaults(func=_cmd_blog_queue)
+
+    p_move = blog_sub.add_parser(
+        "move", help="move one approved draft in the post queue (never posts)"
+    )
+    p_move.add_argument("draft", metavar="ID", help="the draft id to move")
+    p_move.add_argument(
+        "direction", choices=("up", "down", "top", "bottom"), help="where to move it"
+    )
+    p_move.set_defaults(func=_cmd_blog_move)
 
     p_serve = sub.add_parser(
         "serve",
@@ -188,9 +219,7 @@ def _load_config(args: argparse.Namespace) -> dict:
 
 
 def _page_id(args: argparse.Namespace, cfg: dict) -> str:
-    page_id = (
-        args.page_id or cfg["destinations"]["facebook"].get("account_id") or ""
-    ).strip()
+    page_id = (args.page_id or cfg["destinations"]["facebook"].get("account_id") or "").strip()
     if not page_id:
         raise ValueError(
             "no page id: set destinations.facebook.account_id in config.yaml, pass "
@@ -288,9 +317,7 @@ def _cmd_post(args: argparse.Namespace) -> int:
                 page_id, args.message or "", args.photo, published=not private
             )
         else:
-            resp = api.create_post(
-                page_id, args.message, args.link, published=not private
-            )
+            resp = api.create_post(page_id, args.message, args.link, published=not private)
     except ApiError as exc:
         print(f"post: {exc}", file=sys.stderr)
         return 1
@@ -342,10 +369,7 @@ def _cmd_blog_scan(args: argparse.Namespace) -> int:
             f"{result['total_drafts']} total."
         )
         if skipped_old:
-            print(
-                f"Skipped {skipped_old} item(s) older than "
-                f"blog.max_age_days."
-            )
+            print(f"Skipped {skipped_old} item(s) older than blog.max_age_days.")
         for item in result["items"]:
             print(f"  - {item['id']}: {item['title'] or '(untitled)'}")
     for err in result["errors"]:
@@ -373,10 +397,7 @@ def _cmd_blog_image(args: argparse.Namespace) -> int:
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
-        print(
-            f"Generated {result['generated']} image(s) "
-            f"({result['candidates']} candidate(s))."
-        )
+        print(f"Generated {result['generated']} image(s) ({result['candidates']} candidate(s)).")
         for draft_id in result["ids"]:
             print(f"  - {draft_id}")
     for err in result["errors"]:
@@ -434,10 +455,47 @@ def _cmd_blog_publish(args: argparse.Namespace) -> int:
     return 1 if result["errors"] else 0
 
 
-def _cmd_serve(args: argparse.Namespace) -> int:
-    from .web import create_app
+def _cmd_blog_queue(args: argparse.Namespace) -> int:
+    cfg = _load_config(args)
+    try:
+        if args.reset:
+            cleared = reset_queue_order(cfg)
+            if not args.json:
+                print(f"Cleared the manual order on {cleared} draft(s).")
+        rows = queue_view(cfg)
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(f"blog queue: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(rows, indent=2, ensure_ascii=False))
+        return 0
+    if not rows:
+        print("The post queue is empty — nothing approved to post.")
+        return 0
+    print(f"{len(rows)} approved draft(s), in posting order:")
+    for position, row in enumerate(rows, start=1):
+        print(f"  {position}. {row['title']}\n     {row['id']}")
+    return 0
 
+
+def _cmd_blog_move(args: argparse.Namespace) -> int:
+    cfg = _load_config(args)
+    try:
+        queue = move_in_queue(cfg, args.draft, args.direction)
+    except ValueError as exc:
+        print(f"blog move: {exc}", file=sys.stderr)
+        return 2
+    position = next((i + 1 for i, draft in enumerate(queue) if draft.id == args.draft), 0)
+    print(f"Moved {args.draft} to position {position} of {len(queue)}.")
+    return 0
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
+
+    from .web import create_app
 
     app = create_app(
         config_path=args.config,

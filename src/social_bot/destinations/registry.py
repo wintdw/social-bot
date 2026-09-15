@@ -8,8 +8,6 @@ from __future__ import annotations
 
 from .base import (
     AccountReader,
-    DestinationError,
-    PublishResult,
     Publisher,
     PublisherError,
 )
@@ -19,9 +17,7 @@ from .linkedin import LinkedInPublisher
 PUBLISHERS: dict[str, type[Publisher]] = {
     cls.name: cls for cls in (FacebookPublisher, LinkedInPublisher)
 }
-READERS: dict[str, type[AccountReader]] = {
-    cls.name: cls for cls in (FacebookReader,)
-}
+READERS: dict[str, type[AccountReader]] = {cls.name: cls for cls in (FacebookReader,)}
 
 
 def names() -> list[str]:

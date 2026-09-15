@@ -8,8 +8,8 @@ import pytest
 
 from social_bot.config import DEFAULTS
 from social_bot.destinations import PublisherError, publisher_for
-from social_bot.destinations.facebook import publisher as pub_mod
 from social_bot.destinations.facebook import FacebookPublisher
+from social_bot.destinations.facebook import publisher as pub_mod
 from social_bot.destinations.linkedin import LinkedInPublisher
 from social_bot.drafts import Draft
 

@@ -14,8 +14,10 @@ unchanged.
 ## 0. How a rewriter uses this file
 
 1. Read the draft's `title`, `excerpt`, `url`, `image`, `lang` from `GET /api/drafts`.
-2. Pick the register (§3) that fits the item — technical essay, personal
-   essay, or page announcement.
+2. Pick the **voice** (§3) that fits the item — `technical`, `essay`,
+   `announcement`, or `funny` — and read that voice's file from the response's
+   **`voices`** map, then write in it; return its key as `voice` (§9). When in
+   doubt, the response's `default_voice` is the fallback.
 3. Pick the **opening format** from the menu (§5) that fits this item best — the
    format follows the content, not a rotation schedule. Write the caption in
    **Vietnamese** following §4–§7. Keep technical terms in **English** (§4.3).
@@ -24,8 +26,17 @@ unchanged.
 4. If the item is an **external source** (anything other than `atento-blog`),
    credit the original author and site in the caption (§7.3).
 5. Return JSON: `caption`, `hashtags`, `cta`, `commentary`, `image_prompt`,
-   `image_style` (§9).
+   `image_style`, `voice` (§9).
 6. Self-check against §10 (and the AI tells in §12) before submitting.
+
+`GET /api/drafts` also carries a **`voices`** map — one entry per configured voice
+(`publish.voices`, files in `docs/voices/`), each the voice's full brief **and**
+its verbatim samples — plus `voice_choices` (the ordered keys) and `default_voice`.
+Pick one per post (§3) and return it as `voice`; the pipeline keeps a valid key
+and otherwise falls back to `default_voice`. (The flat `voice` field still carries
+the default voice's text, for convenience.) This DNA still owns structure — the
+masthead, the opening Formats, hashtags/CTA, and the output contract (§9) do not
+change; if a voice file and this one ever disagree, this file wins on structure.
 
 Blog items (`sources: atento-blog`) are *Atento's own* articles — the caption's
 job is to sell the idea and send readers to the post. Event/recruit items are
@@ -78,49 +89,26 @@ Mỗi bài nên thuộc **một** pillar và nghiêng hẳn về pillar đó.
 
 ---
 
-## 3. Three registers — pick one
+## 3. Voices — pick one, read its file
 
-Atento có ba giọng khác nhau; trộn chúng vào một bài sẽ lệch tông. Cả ba đều mở
-bằng một **format** ở §5, chỉ khác liều drama.
+Atento có nhiều giọng; trộn chúng vào một bài sẽ lệch tông. Chọn **một** giọng
+hợp bài và trả về khóa của nó trong `voice`. Phần "âm thanh" của mỗi giọng (nhịp
+câu, khẩu ngữ, signature move) **và** kho **samples** bằng văn người thật của nó
+nằm trong file riêng dưới `docs/voices/` — pipeline gửi kèm trong `voices` của
+`GET /api/drafts`.
 
-### 3.1 Technical / thought-leadership (giọng Dũng)
-- **Người kể:** "tôi" / "chúng ta". Điềm tĩnh, chặt chẽ, không hype.
-- **Cách vào:** một **sự cố/khoảnh khắc cụ thể** của hệ thống, một buổi phỏng
-  vấn, một **ví von**, hoặc "câu trả lời an toàn rồi lật" (§5.2). Nếu dùng
-  "Hãy tưởng tượng…" thì phải gắn ngay một tình huống.
-- **Cách đi:** tình huống → vì sao giải pháp cũ hết đất → khái niệm mới →
-  **trade-off** → kết luận.
-- **Luôn có:** mặt trái của giải pháp. *"EDA không phải lời giải cho mọi bài toán."*
-- **Chốt bài** bằng một câu đáng nhớ, thường ở dạng quote:
-  - *"API là ngôn ngữ của các ứng dụng, Event là ngôn ngữ của những hệ thống có khả năng mở rộng."*
-- **Ví von đặc trưng:** xây nhà/chung cư; thuê DVD vs Netflix; "mài dao thật sắc".
+| `voice` | Dùng khi | File |
+|---|---|---|
+| `technical` | Technical / thought-leadership (giọng Dũng): System Design, architecture, foundation, career — nơi cốt lõi là một cơ chế hoặc một trade-off. | [voices/technical.md](voices/technical.md) |
+| `essay` | Personal essay / opinion (giọng Đạt): mindset, nghề nghiệp, "biết vậy thì đã…", một quan điểm cá nhân mạnh. | [voices/essay.md](voices/essay.md) |
+| `announcement` | Page announcement / community: khai giảng, seminar, workshop, recap, một lời nhắn cộng đồng. Ấm, ít kịch. | [voices/announcement.md](voices/announcement.md) |
+| `funny` | Châm biếm / hài: một bài parody hoặc "deep dive" giả nghiêm, để chia sẻ vì cái joke. Không bịa sự kiện, không nhắm vào người thật. | [voices/funny.md](voices/funny.md) |
 
-### 3.2 Personal essay / opinion (giọng Đạt)
-- **Người kể:** "mình", gọi người đọc là "bạn" / "anh em" / "mấy ông".
-- **Cách vào:** một khoảnh khắc, một **nghịch lý**, một **lời tự thú**, hoặc một
-  **câu hỏi thẳng** (§5.2) — rồi mới đặt câu hỏi tu từ.
-- **Cách đi:** kể chuyện → đặt câu hỏi tu từ → lật góc nhìn → rút ra bài học.
-- **Khẩu ngữ được phép:** "khỉ thật", "chả đùa chứ", "mấy ông", "anh em",
-  "ngon đét", "dẹp cái văn đó đi", "thú thật đi", "đúng không nào?", "thế nhé!".
-- **Hài + tự trào + emoji** 😄 😂 🙇‍♂️; kết bằng "Chúc mọi người luôn vui vẻ và hạnh phúc. 🙇‍♂️".
-- **Series nhận diện:** *"Biết vậy thì đã…"* (mình thử rồi, kể để mọi người khỏi thử sai).
-- **Câu chốt ngắn, hay lặp lại:** *"Try. Error. Retry."*, *"See the world as it is."*
-- **Cảnh báo:** đây là giọng mạnh — chỉ dùng cho bài essay/mindset, **không** dùng
-  cho thông báo tuyển sinh hay bài kỹ thuật thuần.
-
-### 3.3 Page announcement / community (giọng Facebook)
-- **Người kể:** "Atento" / "chúng tôi", gọi người đọc là "các bạn" / "mấy ní".
-- **Tông:** ấm, thân mật, có chút đùa: "shop", "nhoaaaa", "nha", "ạ", "hihi".
-- **Cách vào:** một khoảnh khắc cộng đồng ngắn (phòng học kín người, một bạn
-  online từ TP.HCM) → rồi tới thông tin chính. Drama **thấp**, không kịch.
-- **Cấu trúc:** mở bằng khoảnh khắc/thông tin chính + emoji → gạch đầu dòng
-  thông tin (📆 🕒 💲 🎓 📍) → CTA "Link dưới comment" → hashtag.
-- **Emoji dày** 🥰 😍 🤩 🥳 ✅ ❌ ❗️ ⏳ 📩 🫶, đặt ở đầu dòng.
-- **Ví dụ thật:**
-  - *"❌Tại Atento, chúng tôi không dạy lập trình đơn thuần rập khuôn… ✅Tại Atento, chúng tôi truyền đạt cách tư duy…"*
-  - *"Đăng ký theo nhóm hoặc giới thiệu học viên để được nhận thêm ưu đãi nhoaaaa. 😊 Link dưới comment ạ. 🫶"*
-  - *"Văn hoa thế đủ rồi nhỉ 😌 Các bạn làm bài tập về nhà chưa? 😈"*
-- **Recap sự kiện:** biết ơn + khiêm tốn, nhấn "học từ đồng môn", "kết nối cộng đồng".
+- Đọc file của giọng đã chọn **trước khi viết** — phần `Samples` là để chỉnh tai,
+  **không** phải template để copy.
+- Cả bốn giọng vẫn mở bằng một **format** (§5) và theo §4–§7; chỉ **liều drama**
+  và **âm thanh** là khác nhau (bảng liều drama ở §5.4).
+- Ba phần mô tả register trước đây giờ là §1–§9 của từng file voice.
 
 ---
 
@@ -128,7 +116,9 @@ bằng một **format** ở §5, chỉ khác liều drama.
 
 ### 4.1 Ngôn ngữ
 - Caption **tiếng Việt** là chính. Viết tự nhiên như người Việt nói, không dịch máy.
-- Câu ngắn, đoạn ngắn (1–3 câu). Ý lớn tách bằng dòng trống.
+- Câu ngắn, nhưng **gộp các câu liên quan vào một đoạn** — không mỗi câu một
+  đoạn. Trong cùng một đoạn, ngăn câu bằng **shift-enter** (xuống dòng đơn); chỉ
+  dùng **dòng trống** để tách các ý lớn. Một đoạn nên dài hơn một câu một chút.
 - Xưng hô nhất quán theo register: "tôi/chúng ta" (technical), "mình/bạn"
   (essay), "Atento/các bạn" (announcement). Không trộn "tôi" với "mình" trong
   cùng một bài.
@@ -155,6 +145,9 @@ bằng một **format** ở §5, chỉ khác liều drama.
 - Technical/essay: emoji **rất tiết chế** (0–2), không emoji trong câu chốt.
 - Announcement/community: emoji **dày**, mỗi gạch đầu dòng một emoji dẫn.
 - Bullet: dùng `*` hoặc `-`; trong caption Facebook giữ dòng ngắn, dễ đọc trên mobile.
+- **Xuống dòng có hai loại, đừng lẫn:** *dòng trống* tách đoạn/ý lớn; *shift-enter*
+  (một `\n`, xuống dòng đơn) ngắt câu trong cùng một đoạn. Mỗi câu một đoạn là
+  sai — gộp lại (§4.1).
 - Câu chốt/định nghĩa có thể để dạng quote (xuống dòng, nổi bật).
 
 ### 4.5 Masthead — chọn theo từng bài
@@ -238,6 +231,7 @@ giỏi"), nhưng cảm ngay một khoảnh khắc ("đối tác hỏi một câu
 | **Essay (Đạt)** | trải nghiệm bản thân, nỗi ngượng nhỏ | **Cao** — tự trào, đời thường | *"2020. 2 giờ sáng. Bạn dán mắt vào màn hình…"* |
 | **Technical (Dũng)** | một hệ thống thật, một buổi phỏng vấn | **Vừa** — tension "ở scale thì vỡ" | *"Đơn hàng đã thanh toán. 30 phút sau vẫn chưa có email xác nhận."* |
 | **Announcement** | khoảnh khắc lớp học/cộng đồng | **Thấp** — ấm, không kịch | *"Trời mưa, nhưng phòng học vẫn kín gần 50 người."* |
+| **Funny** | chính tiền đề vô lý, chơi thẳng | **Giả nghiêm** — nghiêm túc giả, rồi lật | *"Một chữ V. Vâng, bạn không đọc nhầm đâu: chữ V."* |
 
 ### 5.5 Drama thật, không clickbait
 - Căng thẳng phải **có thật trong bài gốc**; không bịa tình huống, không thổi
@@ -396,6 +390,7 @@ Ví dụ:
 | `commentary` | string | 2–4 câu cho người duyệt: register nào, **format/hook** là gì, mức drama, có gì cần xác nhận. |
 | `image_prompt` | string | **Tiếng Anh.** Một ý tưởng thị giác CỤ THỂ cho ảnh của riêng bài này (§9.1). Cũng là alt text của ảnh — không cần bản dịch tiếng Việt. |
 | `image_style` | string | Phong cách vẽ cho ảnh, chọn **một** khóa theo bài như masthead (§9.2): `technical` / `editorial` / `sketch` / `bulletin`. Bỏ trống thì pipeline dùng mặc định. |
+| `voice` | string | Giọng viết, chọn **một** khóa theo bài (§3): `technical` / `essay` / `announcement` / `funny`. Bỏ trống thì pipeline dùng `publish.default_voice`. |
 
 ### 9.1 `image_prompt` — ảnh phải cụ thể, và phải khác nhau
 
@@ -410,9 +405,9 @@ Ví dụ:
 - **Mỗi bài một ẩn dụ thị giác khác nhau.** Đừng dùng lại cùng một khuôn cho
   nhiều bài — đây là lỗi dễ mắc nhất.
 - **Không** để lộ chữ/số trong ảnh, không người/mặt, không icon cloud-mũi-tên,
-  không sơ đồ kiểu screenshot UI. Palette và chất liệu đã do
-  `docs/atento-image-style.md` lo; **bố cục** do `image_style` quyết (§9.2) —
-  **không nhắc lại** cả hai, chỉ tập trung chủ thể.
+  không sơ đồ kiểu screenshot UI. Palette đã do
+  `docs/atento-image-style.md` lo; **chất liệu và bố cục** do `image_style` quyết
+  (§9.2) — **không nhắc lại** cả hai, chỉ tập trung chủ thể.
 
 Ví dụ tốt (cụ thể, khác nhau, có ẩn dụ):
 
@@ -481,29 +476,25 @@ chọn masthead (§4.5), chọn theo **bài**, không theo vòng xoay. Palette v
 - [ ] Không lặp lại opener/closer/cách dùng từ của các caption trong `recent` (§12).
 - [ ] Không có tell AI: không khép bài bằng châm ngôn theo nghi thức, "không phải X mà là Y" dùng ≤1 lần, nhịp câu có so le (§12.1).
 - [ ] Emoji đúng liều theo register.
+- [ ] Đoạn văn: gộp các câu liên quan, ngăn câu bằng **shift-enter** trong cùng một đoạn; **dòng trống** chỉ để tách ý lớn — không mỗi câu một đoạn (§4.1, §4.4).
 - [ ] `commentary` đã điền (nêu rõ format + mức drama).
 - [ ] `image_prompt` đã điền: **tiếng Anh**, cụ thể, và **khác** ẩn dụ với các bài khác (cũng là alt text của ảnh).
 - [ ] `image_style` đã chọn: **một** khóa hợp bài (§9.2).
+- [ ] `voice` đã chọn: **một** khóa hợp bài (§3) — đã đọc file voice tương ứng.
 
 ---
 
-## 11. Vocabulary bank (signature phrases)
+## 11. Vocabulary banks
 
-**Technical (Dũng):** từ gốc rễ; vững tiến đi xa; trade-off; engineering
-principles; under the hood; business event; "API là ngôn ngữ của ứng dụng,
-Event là ngôn ngữ của hệ thống mở rộng"; mài dao thật sắc; đối chất đến tận
-cùng; "Hãy tưởng tượng…"; "Điều quan trọng cần chú ý là…".
+Each voice's signature phrases now live **with that voice**, so they are read
+together with its samples:
 
-**Essay (Đạt):** "Biết vậy thì đã…"; khỉ thật; chả đùa chứ; mấy ông; anh em;
-ngon đét; dẹp cái văn đó đi; thú thật đi; đúng không nào?; "Thế nhé!"; Try.
-Error. Retry.; See the world as it is.; "Chúc mọi người luôn vui vẻ và hạnh
-phúc. 🙇‍♂️".
+- Technical (Dũng) → `docs/voices/technical.md` (§Vocabulary bank)
+- Essay (Đạt) → `docs/voices/essay.md` (§Diction)
+- Community (Page) → `docs/voices/announcement.md` (§Signature moves)
+- Funny → `docs/voices/funny.md` (§Signature moves)
 
-**Community (Page):** mấy ní; shop; nhoaaaa; nha; ạ; hihi; "Link dưới comment
-nha. 🥰"; "Ai còn quên chưa đăng ký thì nhanh tay… 📩".
-
-**Scene openings (dùng lại được):** "2 giờ sáng."; "Cuộc họp vừa bắt đầu.";
-"Buổi phỏng vấn."; "Đơn hàng đã thanh toán xong."; "30 phút sau…"; "Im lặng.".
+Scene openings any format can reuse stay in §5.6.
 
 ---
 
@@ -540,9 +531,9 @@ chốt / từ vựng của các bài liền trước.
   chọn một vế đắt nhất rồi khai thác. Liệt kê thật theo *"Thứ nhất…, Thứ hai…"* thì
   được, miễn mỗi vế có nội dung riêng chứ không phải ba tính từ đồng nghĩa.
 - **Cụm chuyển ý vô nghĩa:** *"về cơ bản"*, *"trong bối cảnh hiện nay"*, *"có thể
-  nói rằng"*, *"một cách tổng quát"*. Cắt thẳng vào ý. (Vài cụm trong §11 —
-  *"Hãy tưởng tượng…"*, *"Điều quan trọng cần chú ý là…"* — là giọng đặc trưng,
-  không phải tell.)
+  nói rằng"*, *"một cách tổng quát"*. Cắt thẳng vào ý. (Vài cụm như
+  *"Hãy tưởng tượng…"*, *"Điều quan trọng cần chú ý là…"* — là giọng đặc trưng
+  của `technical`, không phải tell.)
 - **Đối xứng hoàn hảo.** Đoạn nào cũng mở-thân-kết gọn ghẽ, không chỗ nào gồ ghề.
   Cho phép một câu dang dở, một chỗ tự sửa lại ý, một câu hỏi chưa được trả lời.
 - **Hype rỗng:** "cách mạng", "đột phá", "thay đổi mọi thứ", "tốt nhất" (§8).

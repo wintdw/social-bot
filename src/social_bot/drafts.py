@@ -51,7 +51,7 @@ def parse_when(value: str) -> dt.datetime | None:
         if parsed is None:
             return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        parsed = parsed.replace(tzinfo=dt.UTC)
     return parsed
 
 
@@ -63,6 +63,10 @@ class Draft:
     title: str = ""
     excerpt: str = ""
     image: str = ""
+    # The image the source post itself published, captured at scan time and
+    # never written by image generation — so /review/{id} can always put the
+    # source's own cover back after a generated one replaced it.
+    source_image: str = ""
     published: str = ""
     lang: str = ""
     state: str = EXTRACTED
@@ -82,6 +86,11 @@ class Draft:
     # or unknown falls back to image_gen.default_style at generation time.
     # Overridable on /review/{id}.
     image_style: str = ""
+    # The voice/register key (publish.voices), chosen per post by the rewriter by
+    # content — like the masthead and image_style (DNA §3). Empty or unknown falls
+    # back to publish.default_voice when the API delivers the voice menu.
+    # Overridable on /review/{id}.
+    voice: str = ""
     # Advisory AI-tell warnings from caption_lint, written at rewrite/edit time
     # and shown on /review/{id}. Never blocks a rewrite or a post; empty when the
     # caption reads clean. Each entry is {"code", "message"}.
@@ -92,6 +101,10 @@ class Draft:
     #   {destination: {"post_id", "permalink", "posted_at", "private"}}
     destinations: list[str] = field(default_factory=list)
     posts: dict[str, dict] = field(default_factory=dict)
+    # Manual position in the post queue. 0 = unset: the draft sorts by the
+    # default rule (oldest source date first). Set by the Post queue tab's
+    # queue; only consulted for approved drafts (see draft_pipeline._queue_key).
+    queue_order: int = 0
     created_at: str = ""
     updated_at: str = ""
 
@@ -99,7 +112,7 @@ class Draft:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Draft":
+    def from_dict(cls, data: dict) -> Draft:
         data = dict(data)
         # Migrate pre-destinations drafts: the flat post_id/permalink/posted_at
         # become the first destination's record.
@@ -132,6 +145,7 @@ class Draft:
         commentary: str = "",
         image_prompt: str = "",
         image_style: str = "",
+        voice: str = "",
     ) -> None:
         if caption:
             self.caption = caption
@@ -145,6 +159,8 @@ class Draft:
             self.image_prompt = image_prompt
         if image_style:
             self.image_style = image_style
+        if voice:
+            self.voice = voice
         self.state = AI_DRAFT
         self.touch()
 
@@ -188,9 +204,7 @@ class Draft:
         A private send (``publish.private``) is recorded but never completes the
         draft, so it stays in the queue for a later public send.
         """
-        self.record_post(
-            destination, post_id=post_id, permalink=permalink, private=private
-        )
+        self.record_post(destination, post_id=post_id, permalink=permalink, private=private)
         if not private and self.is_fully_posted():
             self.state = POSTED
 
@@ -231,6 +245,18 @@ class Draft:
 
     def touch(self) -> None:
         self.updated_at = now_iso()
+
+    @property
+    def rank(self) -> int:
+        """The manual queue position as a safe non-negative int (0 = unset).
+
+        A hand-edited ``queue_order`` must never break the queue sort, so
+        anything non-numeric falls back to 0 (the default order).
+        """
+        try:
+            return max(0, int(self.queue_order or 0))
+        except (TypeError, ValueError):
+            return 0
 
     @property
     def body(self) -> str:

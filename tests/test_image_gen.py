@@ -24,7 +24,7 @@ class TestBuildPrompt:
 
     def test_image_prompt_omits_the_fallback_subject(self):
         prompt = image_gen.build_prompt("T", "E", image_prompt="a lone tree")
-        assert "Illustrate this idea: a lone tree" in prompt
+        assert "Subject: a lone tree" in prompt
 
     def test_steers_away_from_people_and_text(self):
         prompt = image_gen.build_prompt("Title", "Excerpt")
@@ -34,11 +34,12 @@ class TestBuildPrompt:
     def test_style_leads_the_prompt(self):
         prompt = image_gen.build_prompt("T", "E", style="Deep navy palette.")
         assert prompt.startswith("Deep navy palette.")
-        assert "Illustrate this idea" in prompt
+        assert "Subject:" in prompt
+        assert "Illustrate this idea" not in prompt
 
     def test_blank_style_is_omitted(self):
         prompt = image_gen.build_prompt("T", "E", style="   ")
-        assert prompt.startswith("Illustrate this idea")
+        assert prompt.startswith("Subject:")
 
     def test_truncates_excerpt(self):
         prompt = image_gen.build_prompt("T", "x" * 500)

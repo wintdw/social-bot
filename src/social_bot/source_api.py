@@ -29,7 +29,7 @@ class SourceClient:
         self.user_agent = user_agent
 
     @classmethod
-    def from_config(cls, cfg: dict) -> "SourceClient":
+    def from_config(cls, cfg: dict) -> SourceClient:
         blog = cfg.get("blog", {})
         return cls(
             timeout=blog.get("timeout_seconds", 30.0),

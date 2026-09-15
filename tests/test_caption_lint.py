@@ -39,8 +39,7 @@ class TestSingleCaptionTells:
 
     def test_flags_the_antithesis_engine(self):
         caption = (
-            "Đó không phải là vấn đề tốc độ, mà là vấn đề niềm tin.\n\n"
-            "Cái khó không nằm ở code."
+            "Đó không phải là vấn đề tốc độ, mà là vấn đề niềm tin.\n\nCái khó không nằm ở code."
         )
         assert "antithesis" in _codes(caption)
 

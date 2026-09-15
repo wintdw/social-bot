@@ -17,8 +17,8 @@ obvious across several.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable
 from difflib import SequenceMatcher
-from typing import Iterable
 
 from .caption import leading_masthead
 
@@ -75,9 +75,7 @@ _CLICHE = (
 
 # The rule of three: a comma run of three-plus same-shape items ("nhanh, gọn,
 # chính xác"). Ordinals are a real enumeration, not the tell, so skip those.
-_ORDINAL_RE = re.compile(
-    r"^\s*(?:thứ\b|một là|hai là|ba là|bốn là|năm là|\d+\s*[.)])", re.I
-)
+_ORDINAL_RE = re.compile(r"^\s*(?:thứ\b|một là|hai là|ba là|bốn là|năm là|\d+\s*[.)])", re.I)
 _LEADING_CONJ_RE = re.compile(r"^\s*(?:và|hoặc|hay|and)\s+", re.I)
 # A "but/tuy nhiên" clause is prose, not a list item, so its presence means the
 # comma run is ordinary Vietnamese sentence flow rather than a tricolon.
@@ -118,9 +116,7 @@ def _hook(caption: str) -> str:
 
 def _closer(caption: str) -> str:
     """The caption's last non-CTA line — its closing move."""
-    lines = [
-        line for line in _lines(_without_masthead(caption)) if not _CTA_RE.search(line)
-    ]
+    lines = [line for line in _lines(_without_masthead(caption)) if not _CTA_RE.search(line)]
     return lines[-1] if lines else ""
 
 
@@ -220,15 +216,16 @@ def lint_caption(caption: str, *, recent: Iterable[str] = ()) -> list[dict]:
     for phrase in _CLICHE:
         if phrase in normalized:
             warnings.append(
-                {"code": "cliche", "message": f"Cụm chuyển ý vô nghĩa: “{phrase}”. Cắt thẳng vào ý."}
+                {
+                    "code": "cliche",
+                    "message": f"Cụm chuyển ý vô nghĩa: “{phrase}”. Cắt thẳng vào ý.",
+                }
             )
             break
 
     for word in _HYPE:
         if word in normalized:
-            warnings.append(
-                {"code": "hype", "message": f"Tránh hype rỗng: “{word}”."}
-            )
+            warnings.append({"code": "hype", "message": f"Tránh hype rỗng: “{word}”."})
             break
 
     return warnings

@@ -42,6 +42,27 @@ Timed posting can be paused from the dashboard (**Pause posting**) or
 redeploy keeps the hold; it only stops the *scheduler* — **Post approved now**
 and `blog publish` still send.
 
+## Order the post queue
+
+The queue drains **oldest first** by default (`publish_scheduled`), but an
+operator can override the order. In `serve`, open the **Post queue** tab
+(`/queue`) and use its queue panel: it lists the approved drafts in posting order,
+marks the one that goes out next (**Next to post**), and lets you reorder any row
+by dragging it or using its **Top / Up / Down** buttons. **Reset order** clears
+every manual position.
+
+From the CLI:
+
+```sh
+social-bot blog queue                    # the approved queue, in posting order
+social-bot blog move <draft-id> top      # up | down | top | bottom
+social-bot blog queue --reset            # back to the default oldest-first order
+```
+
+Ordering changes only *which* approved draft goes next. It never approves,
+rewrites, or posts, and `publish.post_per_slot` / `publish.interval_days` still
+gate every send.
+
 ## Deploy (Docker)
 
 ```sh
@@ -124,6 +145,7 @@ same id.
 | Draft stuck `extracted` | No rewrite yet — the external agent must `POST /api/drafts/{id}/rewrite`. |
 | Draft has no image after a rewrite | `serve` generates it in the background; a restart (or a provider 5xx) can leave it empty. Check the **Image jobs** section on `/status` (or the dashboard, or `GET /api/status` → `images`), then run `social-bot blog image` or the **Generate image** button on `/review/{id}`. |
 | Image generation fails (`HTTP 401`) | `image_gen.api_key` missing/invalid. The default `gen.pollinations.ai/image` endpoint requires a key (see `credentials.example.yaml`). |
+| A generated image took a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. Generation never replaces a cover on its own — only the **Regenerate image** button / `--overwrite` does, deliberately. |
 
 ## Security
 

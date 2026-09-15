@@ -14,7 +14,13 @@ your task.
   The generated visual preview is `design/styleframe.html`.
 - **[atento-dna.md](atento-dna.md)** — the Atento brand-voice playbook the
   rewriter agent applies (referenced by `publish.dna_file`).
-- **[atento-image-style.md](atento-image-style.md)** — the shared palette/finish
+- **[voices/](voices/)** — the per-post **voice menu** (`publish.voices`): one
+  file per voice (`technical` / `essay` / `announcement` / `funny`), each the
+  register's brief **and** a growing corpus of verbatim human **samples**. The
+  rewriter picks one per post and returns it as `voice`, delivered in
+  `GET /api/drafts` `voices`. Refines how a register sounds; the DNA still owns
+  structure.
+- **[atento-image-style.md](atento-image-style.md)** — the shared palette/prohibition
   floor prepended to every generated image prompt (`image_gen.style_file`). The
   per-post **treatments** it composes with live in
   **[image-styles/](image-styles/)** (`image_gen.styles`, chosen by the rewriter
@@ -32,6 +38,7 @@ your task.
 | Change how a source is fetched (HTTP/retries) | `src/social_bot/source_api.py` |
 | Change the Draft model, states, or persistence | `src/social_bot/drafts.py`, `tests/test_drafts.py` |
 | Change scan / rewrite / publish orchestration | `src/social_bot/draft_pipeline.py`, `tests/test_draft_pipeline.py` |
+| Change the post queue order (manual ordering) | the **Post queue** tab's queue panel in `dashboard_html.py` (`render_queue_html`, `_queue_panel`, `_queue_row`) + `draft_pipeline.py` (`_queue_key`, `set_queue_order`, `move_in_queue`) + `Draft.queue_order` in `drafts.py`, `tests/test_dashboard_html.py` / `tests/test_draft_pipeline.py` |
 | Change the AI-tell checks shown on /review (advisory lint) | `src/social_bot/caption_lint.py`, `tests/test_caption_lint.py` |
 | Change AI image generation (prompt, endpoint, provider) | `src/social_bot/image_gen.py`, `tests/test_image_gen.py` |
 | Change the image look / brand style | `docs/atento-image-style.md` (shared floor) + `docs/image-styles/*.md` (per-post treatments), then `image_gen.style_file` / `image_gen.styles` in `config.yaml` |
@@ -42,6 +49,7 @@ your task.
 | Change the shared nav, layout, or stylesheet | `src/social_bot/ui.py`, then `docs/design/design-system.md` |
 | Change the design preview / styleguide | `src/social_bot/styleframe.py`, then `scripts/build_styleframe.py` |
 | Change the Atento brand voice / rewrite brief | `docs/atento-dna.md`, then `publish.dna_file` in `config.yaml` |
+| Add or change a voice (a `voice` brief + samples) | `docs/voices/<key>.md`, then `publish.voices` in `config.yaml` |
 | Change the web routes / JSON API / schedule loops | `src/social_bot/web.py` |
 | Change the page-feed dashboard | `src/social_bot/destinations/facebook/feed.py`, `feed_html.py`, `reader.py` |
 | Change how a caption's row title is derived (the hook under the masthead) | `src/social_bot/caption.py`, `tests/test_caption.py` |

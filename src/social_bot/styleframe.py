@@ -2,11 +2,11 @@
 
 `render_styleframe()` renders every operator page through the *same* functions
 the app serves — ``render_dashboard_html``, ``render_drafts_html``,
-``render_draft_html``, ``render_publish_html``, ``render_status_html``,
-``render_feed_html`` — and wraps them in one tabbed document that also documents
-the foundations (tokens, components). Because it embeds ``ui._CSS`` and calls
-the real renderers, the styleframe can never describe a look the app doesn't
-have.
+``render_draft_html``, ``render_queue_html``, ``render_publish_html``,
+``render_status_html``, ``render_feed_html`` — and wraps them in one tabbed
+document that also documents the foundations (tokens, components). Because it
+embeds ``ui._CSS`` and calls the real renderers, the styleframe can never
+describe a look the app doesn't have.
 
 It is a generated artifact: never hand-edit ``docs/design/styleframe.html``.
 ``tests/test_design_system.py`` asserts the committed file matches this function
@@ -29,6 +29,7 @@ import re
 from .dashboard_html import (
     render_dashboard_html,
     render_publish_html,
+    render_queue_html,
     render_status_html,
 )
 from .destinations.facebook.feed import FeedItem
@@ -38,7 +39,9 @@ from .drafts import Draft
 from .ui import _CSS, badge, nav_html, notice_html
 
 # Where the generated styleframe lives, relative to this module (src/social_bot).
-STYLEFRAME_PATH = pathlib.Path(__file__).resolve().parents[2] / "docs" / "design" / "styleframe.html"
+STYLEFRAME_PATH = (
+    pathlib.Path(__file__).resolve().parents[2] / "docs" / "design" / "styleframe.html"
+)
 
 # A fixed wall-clock for every rendered stamp. Naive on purpose: astimezone()
 # then keeps the same wall time on any machine, and the trailing zone token is
@@ -71,20 +74,54 @@ _DNA = (
     "- No engagement bait, no hype numbers, name the trade-off.\n"
 )
 
+_VOICE_HINTS = {
+    "technical": "a calm, two-sided engineer (the Dũng register). System Design / architecture.",
+    "essay": "a personal, self-deprecating first person (the Đạt register). Essays / mindset.",
+    "announcement": "Atento's warm, low-drama page voice. Khai giảng, seminar, community.",
+    "funny": "a deadpan, mock-serious satirist. A platform in-joke told with a straight face.",
+}
+
+_VOICE = (
+    '# technical — the "DW" register\n'
+    "Voice: a calm, two-sided engineer (the Dũng register).\n\n"
+    "Open on a concrete moment; keep the thesis for the payoff.\n"
+    "Give every claim its cost — the trade-off is the credibility.\n"
+)
+
 # --- sample pipeline state (shaped exactly like draft_pipeline.status) --------
 
 _STATS = {
     "sources": [
         {"name": "atento-blog", "type": "index", "url": "https://atento.vn/blog", "lang": "vi"},
-        {"name": "bytebytego", "type": "rss", "url": "https://blog.bytebytego.com/feed", "lang": "en"},
-        {"name": "martinfowler", "type": "rss", "url": "https://martinfowler.com/feed.atom", "lang": "en"},
-        {"name": "seangoedecke", "type": "rss", "url": "https://www.seangoedecke.com/rss.xml", "lang": "en"},
-        {"name": "netflix-tech-blog", "type": "rss", "url": "https://netflixtechblog.com/feed", "lang": "en"},
+        {
+            "name": "bytebytego",
+            "type": "rss",
+            "url": "https://blog.bytebytego.com/feed",
+            "lang": "en",
+        },
+        {
+            "name": "martinfowler",
+            "type": "rss",
+            "url": "https://martinfowler.com/feed.atom",
+            "lang": "en",
+        },
+        {
+            "name": "seangoedecke",
+            "type": "rss",
+            "url": "https://www.seangoedecke.com/rss.xml",
+            "lang": "en",
+        },
+        {
+            "name": "netflix-tech-blog",
+            "type": "rss",
+            "url": "https://netflixtechblog.com/feed",
+            "lang": "en",
+        },
     ],
     "drafts": {
         "total": 62,
         "open": 61,
-        "by_state": {"extracted": 0, "ai_draft": 60, "approved": 1, "posted": 1, "rejected": 0},
+        "by_state": {"extracted": 0, "ai_draft": 59, "approved": 2, "posted": 1, "rejected": 0},
     },
     "seen": 62,
     "published": {"total": 1, "private": 0, "recent": []},
@@ -100,7 +137,7 @@ _STATS = {
         "post_per_slot": 1,
         "interval_days": 2,
         "interval_remaining": 0,
-        "approved": 1,
+        "approved": 2,
         "next_draft": {
             "id": "a-guide-to-application-networking-basics",
             "title": "A Guide to Application Networking Basics",
@@ -108,6 +145,9 @@ _STATS = {
             "has_image": False,
         },
         "dna_file_set": True,
+        "voices_set": True,
+        "voice_choices": ["technical", "essay", "announcement", "funny"],
+        "default_voice": "technical",
     },
     "image_gen": {"enabled": True, "provider": "pollinations", "overwrite": False, "key_set": True},
 }
@@ -202,7 +242,7 @@ _RECORDS = [
 _ITEMS = [
     FeedItem(
         id="1148652808337860_122135960000000001",
-        created=dt.datetime(2026, 9, 9, 12, 51, tzinfo=dt.timezone.utc),
+        created=dt.datetime(2026, 9, 9, 12, 51, tzinfo=dt.UTC),
         message=(
             "[Học cùng Atento]\n\n"
             "Ai cũng nói: muốn làm tốt thì phải hiểu hết codebase của mình. Ở codebase nhỏ, "
@@ -216,7 +256,7 @@ _ITEMS = [
     ),
     FeedItem(
         id="1148652808337860_122135000000000002",
-        created=dt.datetime(2026, 9, 4, 8, 1, tzinfo=dt.timezone.utc),
+        created=dt.datetime(2026, 9, 4, 8, 1, tzinfo=dt.UTC),
         message=(
             "[Đọc báo cùng Atento]\n\n"
             "Giờ này chiều mai là seminar “Agentic AI for business: from idea to product” đã đi "
@@ -228,7 +268,7 @@ _ITEMS = [
     ),
     FeedItem(
         id="1148652808337860_122135000000000003",
-        created=dt.datetime(2026, 8, 28, 4, 47, tzinfo=dt.timezone.utc),
+        created=dt.datetime(2026, 8, 28, 4, 47, tzinfo=dt.UTC),
         status_type="added_photos",
         permalink_url="https://www.facebook.com/1148652808337860_122135000000000003",
         from_name="Atento Education",
@@ -244,6 +284,7 @@ _QUEUE = [
         published="Thu, 10 Sep 2026 00:00:00 GMT",
         created_at="2026-09-10T07:28:25+00:00",
         state="approved",
+        queue_order=1,
     ),
     Draft(
         id="how-smart-model-routing-can-cut-llm",
@@ -253,7 +294,8 @@ _QUEUE = [
         image=_THUMB,
         published="Wed, 09 Sep 2026 15:30:26 GMT",
         created_at="2026-09-10T07:28:25+00:00",
-        state="ai_draft",
+        state="approved",
+        queue_order=2,
     ),
     Draft(
         id="social-media-engagement-summer-2026",
@@ -358,6 +400,10 @@ _DETAIL = Draft(
     updated_at="2026-09-10T10:00:00+00:00",
 )
 
+# The approved drafts of _QUEUE, in the order the poster drains them — what the
+# Post queue tab renders (and reorders).
+_SCHEDULED = [draft for draft in _QUEUE if draft.state == "approved"]
+
 
 def render_pages() -> list[tuple[str, str]]:
     """Every operator page as a full document, rendered by the app's own code.
@@ -384,7 +430,7 @@ def render_pages() -> list[tuple[str, str]]:
             ),
         ),
         (
-            "Review",
+            "Review queue",
             render_drafts_html(
                 _QUEUE,
                 total=62,
@@ -395,7 +441,7 @@ def render_pages() -> list[tuple[str, str]]:
                     ("martinfowler", 12),
                     ("seangoedecke", 29),
                 ],
-                statuses=[("extracted", 0), ("ai_draft", 60), ("approved", 1)],
+                statuses=[("extracted", 0), ("ai_draft", 59), ("approved", 2)],
                 selected_source="",
                 selected_status="",
                 page={
@@ -406,7 +452,6 @@ def render_pages() -> list[tuple[str, str]]:
                     "has_prev": False,
                     "has_next": True,
                 },
-                scheduling=True,
                 generated_at=_AT,
             ),
         ),
@@ -417,13 +462,27 @@ def render_pages() -> list[tuple[str, str]]:
                 dna=_DNA,
                 image_enabled=True,
                 image_status={"status": "ok"},
+                # The sample's picture is a stand-in for a generated one, so the
+                # "Restore source image" control the detail page shows for a post
+                # whose own cover was replaced is part of the preview too.
+                image_generated=True,
                 image_styles=["technical", "editorial", "sketch", "bulletin"],
                 default_image_style="editorial",
+                voices=["technical", "essay", "announcement", "funny"],
+                default_voice="technical",
+                voice_hints=_VOICE_HINTS,
+                voice_text=_VOICE,
                 next_id="do-you-even-need-a-presentation",
                 scheduling=True,
                 next_post="2026-09-10 19:51",
                 generated_at=_AT,
             ),
+        ),
+        (
+            "Post queue",
+            # What the poster will drain, in order, with the first row marked as
+            # the one that goes out next.
+            render_queue_html(_SCHEDULED, post=_POST, generated_at=_AT),
         ),
         ("Published", render_publish_html(_RECORDS, generated_at=_AT)),
         (
@@ -636,7 +695,10 @@ def _foundations() -> str:
 
     left = (
         '<div class="stack">'
-        + _fpanel("Colour tokens", f'<div class="panel-body"><div class="sf-swatches">{swatches}</div></div>')
+        + _fpanel(
+            "Colour tokens",
+            f'<div class="panel-body"><div class="sf-swatches">{swatches}</div></div>',
+        )
         + _fpanel("Badges", f'<div class="panel-body"><div class="sf-row">{badges}</div></div>')
         + _fpanel("Buttons", f'<div class="panel-body">{buttons}</div>')
         + _fpanel("Form fields", f'<div class="panel-body">{fields}</div>')

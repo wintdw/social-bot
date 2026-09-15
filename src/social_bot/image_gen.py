@@ -28,6 +28,9 @@ import urllib.request
 _WS_RE = re.compile(r"\s+")
 
 DEFAULT_BASE_URL = "https://gen.pollinations.ai/image"
+# The pre-gateway prompt endpoint, still selectable via image_gen.base_url. Named
+# here so a stored URL can be recognised as generated whichever one built it.
+LEGACY_BASE_URL = "https://image.pollinations.ai/prompt"
 
 
 class ImageGenError(Exception):
@@ -42,9 +45,7 @@ def _urlopen(url: str, timeout: float, headers: dict | None = None) -> bytes:
         return resp.read()
 
 
-def build_prompt(
-    title: str, excerpt: str, style: str = "", image_prompt: str = ""
-) -> str:
+def build_prompt(title: str, excerpt: str, style: str = "", image_prompt: str = "") -> str:
     """A tight, brand-safe prompt for one draft's image.
 
     ``image_prompt`` (when the rewriter supplied one) wins outright: it is a
@@ -53,8 +54,10 @@ def build_prompt(
     Vietnamese) is not something the model can turn into a picture, which is
     why every auto-built image came out looking the same.
 
-    ``style`` is the brand look (``image_gen.style_file``); it carries palette
-    and mood only, and deliberately does not prescribe a composition.
+    ``style`` is the brand look: the draft's chosen treatment (which governs the
+    medium) followed by the shared ``image_gen.style_file`` floor (palette and
+    prohibitions only). It leads the prompt so the treatment outranks the
+    subject line in the model's reading.
     """
     subject = _WS_RE.sub(" ", image_prompt or "").strip()
     if not subject:
@@ -67,7 +70,10 @@ def build_prompt(
     parts = []
     if style and style.strip():
         parts.append(style.strip())
-    parts.append(f"Illustrate this idea: {subject}")
+    # "Subject:" not "Illustrate this idea:" — the treatment chooses the medium
+    # (sketch, still life, poster, schematic), so the subject line must not beg
+    # for an illustration of its own.
+    parts.append(f"Subject: {subject}")
     parts.append(
         "No people, no faces, no hands, no words, no lettering, no numbers, "
         "no text, no logo, no watermark."
@@ -94,8 +100,7 @@ def generate_image_url(
     """
     encoded = urllib.parse.quote(prompt, safe="")
     url = (
-        f"{base_url.rstrip('/')}/{encoded}"
-        f"?width={width}&height={height}&model={model}&nologo=true"
+        f"{base_url.rstrip('/')}/{encoded}?width={width}&height={height}&model={model}&nologo=true"
     )
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else None
     try:
@@ -142,6 +147,7 @@ def generate_for_draft(
 
 __all__ = [
     "DEFAULT_BASE_URL",
+    "LEGACY_BASE_URL",
     "ImageGenError",
     "build_prompt",
     "generate_image_url",

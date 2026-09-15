@@ -34,8 +34,9 @@ services:
       - ./data:/app/data
       # config.yaml is read at startup; mount it so page_id edits need no rebuild.
       - ./config.yaml:/app/config.yaml:ro
-      # The Atento DNA brief (publish.dna_file) is read on every request; mount it
-      # read-only so voice edits need no rebuild and GET /api/drafts serves it.
+      # The brand-voice briefs (publish.dna_file / publish.voices) are read on
+      # every request; mount ./docs read-only so voice edits need no rebuild and
+      # GET /api/drafts serves them.
       - ./docs:/app/docs:ro
       # The access token lives here — git-ignored, never baked into the image.
       - ./credentials.yaml:/app/credentials.yaml:ro

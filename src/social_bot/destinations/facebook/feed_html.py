@@ -61,8 +61,7 @@ def render_feed_section(items: list[FeedItem]) -> str:
         if item.created is not None:
             machine = html.escape(item.created.isoformat())
             meta.append(
-                f'<time datetime="{machine}">'
-                f"{html.escape(_render_created(item.created))}</time>"
+                f'<time datetime="{machine}">{html.escape(_render_created(item.created))}</time>'
             )
         else:
             meta.append(html.escape(_render_created(None)))

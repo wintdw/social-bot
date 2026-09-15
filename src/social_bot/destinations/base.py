@@ -87,11 +87,11 @@ class Publisher(_Destination, ABC):
         """
 
     @abstractmethod
-    def describe(self, draft: "Draft") -> str:
+    def describe(self, draft: Draft) -> str:
         """The endpoint a real send would hit (dry-run text)."""
 
     @abstractmethod
-    def publish(self, draft: "Draft") -> PublishResult:
+    def publish(self, draft: Draft) -> PublishResult:
         """Send the draft; return where it landed."""
 
 

@@ -183,6 +183,8 @@ def test_defaults_include_pipeline_sections(tmp_path):
     assert cfg["blog"]["max_age_days"] == 0  # no age window by default
     assert cfg["review"]["dir"] == "data/review"
     assert cfg["publish"]["log_name"] == "published.jsonl"
+    assert cfg["publish"]["voices"] == {}  # no voice menu by default
+    assert cfg["publish"]["default_voice"] == ""
 
 
 def test_image_gen_disabled_by_default(tmp_path):
