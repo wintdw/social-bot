@@ -165,6 +165,22 @@ DEFAULTS: dict[str, Any] = {
         "timeout_seconds": 60.0,
         "api_key": "",  # populated by credentials.yaml, never config.yaml
     },
+    # Rewriter worker (scripts/rewrite_worker.py). When enabled, /review/{id}
+    # offers a "Rewrite with Command Code" button that marks the draft; a
+    # host-side worker runs the Command Code CLI headlessly for it and posts the
+    # result back to the JSON API. The bot itself never runs the agent, so the
+    # CLI's auth and permission model stay on the host (the container has no
+    # Node). `api_base` is where the worker reaches this app; the rest tunes the
+    # agent run.
+    "rewrite": {
+        "enabled": False,
+        "command": "commandcode",  # the CLI to run (alias: `cmd`)
+        "model": "",  # passed to `-m`; "" uses the CLI's own default
+        "max_turns": 40,  # `--max-turns` for the headless run
+        "timeout_seconds": 600.0,  # kill a run that hangs
+        "poll_seconds": 15.0,  # how often the worker asks for new requests
+        "api_base": "http://127.0.0.1:8083",  # this app, as the worker sees it
+    },
 }
 
 
@@ -305,3 +321,15 @@ def validate(cfg: dict) -> None:
         raise ValueError("config: image_gen.timeout_seconds must be positive")
     if int(image_gen.get("width", 1080)) < 1 or int(image_gen.get("height", 1350)) < 1:
         raise ValueError("config: image_gen.width/height must be >= 1")
+
+    rewrite = cfg.get("rewrite", {})
+    if float(rewrite.get("timeout_seconds", 600)) <= 0:
+        raise ValueError("config: rewrite.timeout_seconds must be positive")
+    if float(rewrite.get("poll_seconds", 15)) <= 0:
+        raise ValueError("config: rewrite.poll_seconds must be positive")
+    if int(rewrite.get("max_turns", 40)) < 1:
+        raise ValueError("config: rewrite.max_turns must be >= 1")
+    if not str(rewrite.get("api_base", "")).startswith(("http://", "https://")):
+        raise ValueError("config: rewrite.api_base must be an http(s) URL")
+    if not str(rewrite.get("command", "")).strip():
+        raise ValueError("config: rewrite.command must not be empty")

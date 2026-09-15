@@ -82,7 +82,12 @@ demand for drafts already queued. An external
 rewriter — Command Code, applying the Atento DNA (`docs/atento-dna.md`, wired
 via `publish.dna_file`; the per-post voice menu `docs/voices/*.md` rides along as
 `voices`, wired via `publish.voices`/`publish.default_voice`) — reads `GET /api/drafts` and
-POSTs the caption back to `/api/drafts/{id}/rewrite` (`AI_DRAFT`). A human
+POSTs the caption back to `/api/drafts/{id}/rewrite` (`AI_DRAFT`). That rewrite
+can be *requested* from the UI too: `/review/{id}`'s **Rewrite with Command Code**
+button just marks the draft, and a host-side worker
+(`scripts/rewrite_worker.py`, `rewrite.enabled`) polls `GET /api/rewrite-queue`,
+runs the Command Code CLI headlessly, and POSTs the result back — the app never
+runs the agent itself. A human
 approves on `/review/{id}`, which either posts immediately through a
 `destinations/` publisher adapter or — when `publish.post_at` slots are configured —
 queues the draft as `APPROVED` for the posting scheduler. **The scan and
@@ -168,6 +173,19 @@ entirely, leaving approval as the only publish path.**
   Two related traps: translating the title to English alone is *worse* (it
   yields literal cloud-and-arrow flowcharts and people), and neither the floor
   nor the subject line may prescribe a medium (the per-post treatment does).
+- **The rewriter can be triggered from the UI, but the app never runs it.** The
+  **Rewrite with Command Code** button on `/review/{id}` only *marks* the draft
+  (`Draft.rewrite_requested_at`, gated by `rewrite.enabled`); a host-side worker
+  (`scripts/rewrite_worker.py`; systemd unit in `deploy/`) polls
+  `GET /api/rewrite-queue`, runs the CLI
+  headlessly (`commandcode -p --output-format json`, **no `--yolo`** — the run
+  only reads its prompt and prints JSON), and POSTs the result back to
+  `/api/drafts/{id}/rewrite`, which clears the request; a failure goes to
+  `/api/drafts/{id}/rewrite-error` and is shown on the page. It is a worker and
+  not an in-app call because the CLI and its auth live on the host (the image is
+  python-slim with no Node). Only `extracted`/`ai_draft` drafts can be requested:
+  an `approved` draft is already queued to post, so a rewrite would have to undo
+  the approval.
 - Every post is a photo post, so images are generated **after** the rewrite,
   never during scan — at scan time there is no `image_prompt` yet, which is the
   whole problem. `serve` fills a draft's image in the background as its rewrite

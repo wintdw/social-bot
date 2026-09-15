@@ -63,6 +63,39 @@ Ordering changes only *which* approved draft goes next. It never approves,
 rewrites, or posts, and `publish.post_per_slot` / `publish.interval_days` still
 gate every send.
 
+## Run the rewriter worker
+
+The **Rewrite with Command Code** button on `/review/{id}` does not run an AI
+itself — it marks the draft. A host-side worker does the rewrite with the Command
+Code CLI and posts the result back (nothing here approves or posts):
+
+```sh
+.venv/bin/python scripts/rewrite_worker.py             # poll forever
+.venv/bin/python scripts/rewrite_worker.py --once       # drain the queue and exit
+.venv/bin/python scripts/rewrite_worker.py --draft <id>
+.venv/bin/python scripts/rewrite_worker.py --dry-run    # print the prompt, call nothing
+```
+
+It needs Command Code installed and logged in on the host (`cmd login`), and
+`rewrite.enabled: true` in `config.yaml` for the button to appear.
+`rewrite.api_base` defaults to `http://127.0.0.1:8083` (this app as the worker
+sees it); from another machine point it at the deployed URL — `site.user` /
+`site.password` in `credentials.yaml` are sent as HTTP basic auth.
+
+**Keep it running — a request only waits otherwise.** `deploy/social-bot-rewriter.service`
+is a ready `systemd --user` unit (the poll loop, restarts on failure):
+
+```sh
+mkdir -p ~/.config/systemd/user
+ln -sf ~/social-bot/deploy/social-bot-rewriter.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now social-bot-rewriter
+sudo loginctl enable-linger $USER        # survive logout/reboot (root, once)
+journalctl --user -u social-bot-rewriter -f
+```
+
+Exit codes: 0 ok, 1 a run/HTTP failure, 2 usage/config error.
+
 ## Deploy (Docker)
 
 ```sh
@@ -100,6 +133,7 @@ curl -X POST https://<host>/publish/run     # post the approved queue now (even 
 curl -X POST https://<host>/publish/pause   # pause the posting scheduler (persisted)
 curl -X POST https://<host>/publish/resume  # resume it
 curl -s  https://<host>/api/drafts          # open drafts (paged; ?limit=&offset=)
+curl -s  https://<host>/api/rewrite-queue   # drafts a human asked the worker to rewrite
 ```
 
 `/live` answers as long as the process is up; `/ready` returns **503** when the
@@ -142,7 +176,8 @@ same id.
 | Approved but nothing shows on the Page | First, the posting schedule: an `approved` draft waits for the next `publish.post_at` slot. Drain it now with **Post approved now** / `POST /publish/run` / `blog publish`, or check `publish.private: true` — a private post is unpublished (page admins only) and stays in the queue. Set `private: false` to post publicly. |
 | Approved drafts never post on schedule | The poster is **paused** (dashboard **Pause posting** / `POST /publish/pause`; the **Post schedule** row reads `paused` and **Next post** shows `—`), `publish.post_at` is empty (timed posting off), `publish.enabled: false`, or `publish.interval_days` hasn't elapsed (a `2` means it skips until two days after the last public post). The dashboard **Next post** card and the `/status` **Post schedule** line both name the draft (`publish.next_draft`; `publish.interval_remaining` counts the days still to wait), and the **Next post** card's time is the first slot that can actually send — so `in 1 day(s)` means today's wake will be skipped, not that it posts later today. |
 | Hashtags missing from a post | Ensure the image includes the `Draft.post_text` fix (rebuild). Hashtags are appended to the caption at publish time. |
-| Draft stuck `extracted` | No rewrite yet — the external agent must `POST /api/drafts/{id}/rewrite`. |
+| Draft stuck `extracted` | No rewrite yet — the external agent must `POST /api/drafts/{id}/rewrite`, or the rewriter worker (next row) must pick up a requested rewrite. |
+| **Rewrite with Command Code** does nothing | The host-side worker isn't running (or `rewrite.enabled` is off). The button only *marks* the draft; start `scripts/rewrite_worker.py`. `GET /api/status` → `rewrite.requested` lists what is waiting, and `/review/{id}` shows any worker error (a request never runs itself; a stuck one can be cancelled). |
 | Draft has no image after a rewrite | `serve` generates it in the background; a restart (or a provider 5xx) can leave it empty. Check the **Image jobs** section on `/status` (or the dashboard, or `GET /api/status` → `images`), then run `social-bot blog image` or the **Generate image** button on `/review/{id}`. |
 | Image generation fails (`HTTP 401`) | `image_gen.api_key` missing/invalid. The default `gen.pollinations.ai/image` endpoint requires a key (see `credentials.example.yaml`). |
 | A generated image took a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. Generation never replaces a cover on its own — only the **Regenerate image** button / `--overwrite` does, deliberately. |
@@ -163,6 +198,9 @@ or a shared-secret middleware you add in `web.py`).
   `publish.post_at: []` disables timed posting.
 - `publish.enabled: false` disables publishing; `publish.interval_days`
   enforces a minimum gap between public posts (`1` = at most one per day).
+- The rewriter worker only *rewrites* (`POST /api/drafts/{id}/rewrite`); it never
+  approves or posts to the Page. `rewrite.enabled` only controls whether the
+  button appears; the human gate is unchanged.
 - Posting can be **paused** without changing config: **Pause posting** on the
   dashboard / `POST /publish/pause` (resume with `POST /publish/resume`). It stops
   only the scheduler — an explicit **Post approved now** / `blog publish` still

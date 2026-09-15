@@ -83,9 +83,11 @@ _ADVERSATIVE_RE = re.compile(r"^\s*(?:nhưng|song|tuy nhiên)\b", re.I)
 # Longest a list item may be (words) to still read as a tricolon rather than prose.
 _TRICOLON_MAX_WORDS = 3
 
-# A CTA line ("… tại comment") is required boilerplate, not the post's own
-# closing move, so it never counts as a repeated closer.
-_CTA_RE = re.compile(r"comment", re.I)
+# Required boilerplate that is not the post's own closing move, so it never
+# counts as a repeated closer: the CTA line ("… tại comment") and the source
+# credit ("Nguồn: …", DNA §7.3) — the latter repeats verbatim for a frequent
+# source, which would otherwise false-positive on every post from that author.
+_BOILERPLATE_RE = re.compile(r"comment|^\s*nguồn\s*:", re.I)
 
 _WORD_RE = re.compile(r"[\W_]+", re.UNICODE)
 
@@ -115,8 +117,10 @@ def _hook(caption: str) -> str:
 
 
 def _closer(caption: str) -> str:
-    """The caption's last non-CTA line — its closing move."""
-    lines = [line for line in _lines(_without_masthead(caption)) if not _CTA_RE.search(line)]
+    """The caption's last line that is not required boilerplate — its closing move."""
+    lines = [
+        line for line in _lines(_without_masthead(caption)) if not _BOILERPLATE_RE.search(line)
+    ]
     return lines[-1] if lines else ""
 
 

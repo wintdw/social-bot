@@ -114,13 +114,13 @@ _DETAIL_SCRIPT = """<script>
   }
   wireHint('image_style', 'image_style_hint');
   wireHint('voice', 'voice_hint');
-  // A background image job is in flight: poll until it finishes, then reload so
-  // the new image shows. Never reload over unsaved edits — if the operator has
-  // typed, say the image is ready and let them reload.
+  // A background job is in flight: poll until it finishes, then reload so the
+  // result shows. Never reload over unsaved edits — if the operator has typed,
+  // say it is ready and let them reload.
+  var dirty = false;
+  form.addEventListener('input', function () { dirty = true; });
   var job = document.getElementById('image-job');
   if (job) {
-    var dirty = false;
-    form.addEventListener('input', function () { dirty = true; });
     var tries = 0;
     var check = function () {
       if (++tries > 120) return;
@@ -141,6 +141,29 @@ _DETAIL_SCRIPT = """<script>
       }).catch(function () { window.setTimeout(check, 5000); });
     };
     window.setTimeout(check, 3000);
+  }
+  // The rewriter runs on an external worker, so its request stays open until a
+  // rewrite lands (or the worker reports a failure); reload when it clears.
+  var rewrite = document.getElementById('rewrite-job');
+  if (rewrite) {
+    var rtries = 0;
+    var checkRewrite = function () {
+      if (++rtries > 240) return;
+      fetch('/api/status').then(function (r) { return r.json(); }).then(function (data) {
+        var ids = (data && data.rewrite && data.rewrite.requested) || [];
+        if (ids.indexOf(rewrite.getAttribute('data-draft-id')) >= 0) {
+          window.setTimeout(checkRewrite, 5000);
+          return;
+        }
+        if (dirty) {
+          rewrite.className = 'notice notice-ok';
+          rewrite.textContent = 'Rewrite ready \u2014 reload to see it.';
+          return;
+        }
+        window.location.href = window.location.pathname;
+      }).catch(function () { window.setTimeout(checkRewrite, 8000); });
+    };
+    window.setTimeout(checkRewrite, 5000);
   }
 })();
 </script>"""
@@ -498,6 +521,7 @@ def render_draft_html(
     message_kind: str = "info",
     private: bool = False,
     image_enabled: bool = False,
+    rewrite_enabled: bool = False,
     image_status: dict | None = None,
     image_generated: bool = False,
     image_styles: list[str] | None = None,
@@ -573,6 +597,26 @@ def render_draft_html(
             '<p class="muted">A generated image, not the source post’s own — '
             "“Restore source image” below puts the original back.</p>"
         )
+
+    # A requested rewrite is run by an external worker (scripts/rewrite_worker.py),
+    # so the page can only report that the request is open — and, when the worker
+    # fails, why nothing came back. The poll script reloads once the request clears.
+    rewrite_note = ""
+    if rewrite_enabled and draft.can_receive_rewrite():
+        if draft.rewrite_requested_at:
+            rewrite_note = (
+                '<div class="notice" id="rewrite-job" role="status" '
+                f'data-draft-id="{html.escape(draft.id)}">'
+                '<span class="dot dot-warn" aria-hidden="true"></span>'
+                f" Rewriter requested {html.escape(fmt_when(draft.rewrite_requested_at))} — "
+                "waiting for the Command Code worker. This page refreshes when a rewrite "
+                "lands.</div>"
+            )
+        elif draft.rewrite_error:
+            rewrite_note = (
+                '<div class="notice notice-error">Rewriter failed: '
+                f"{html.escape(draft.rewrite_error)}</div>"
+            )
 
     caption = html.escape(draft.caption or "")
     tags = html.escape(" ".join(draft.hashtags))
@@ -676,7 +720,7 @@ def render_draft_html(
         '<section class="panel">'
         '<div class="panel-head"><span class="label">Compose</span>'
         f"{masthead_pill}</div>"
-        f'<div class="composer">{_lint_notice(draft)}{image_note}{form}</div></section>'
+        f'<div class="composer">{_lint_notice(draft)}{image_note}{rewrite_note}{form}</div></section>'
     )
 
     preview_media = ""
@@ -726,6 +770,23 @@ def render_draft_html(
             '<button type="submit" class="btn btn-quiet">Restore source image</button>'
             "</form>"
         )
+    # "Rewrite with Command Code": marks the draft for the host-side worker, which
+    # rewrites it and posts the result back. Its own form (like Restore image), so
+    # it never carries compose edits — the rewrite replaces the caption anyway.
+    rewrite_button = ""
+    if rewrite_enabled and draft.can_receive_rewrite():
+        if draft.rewrite_requested_at:
+            rewrite_button = (
+                f'<form id="rewrite-form" method="post" action="{action}/cancel-rewrite">'
+                '<button type="submit" class="btn btn-quiet">Cancel rewrite</button>'
+                "</form>"
+            )
+        else:
+            rewrite_button = (
+                f'<form id="rewrite-form" method="post" action="{action}/request-rewrite">'
+                '<button type="submit" class="btn">Rewrite with Command Code</button>'
+                "</form>"
+            )
     # Timed posting: a human approves here, the serve scheduler posts later.
     # The button submits the caption form too, so edits are saved with the
     # approval instead of being silently dropped. Only an ai_draft can approve.
@@ -744,6 +805,7 @@ def render_draft_html(
         'name="save" value="1" class="btn btn-quiet">Save</button>'
         f"{image_button}"
         f"{restore_button}"
+        f"{rewrite_button}"
         f'<span class="hint">{target}</span>'
         '<span class="spacer"></span>'
         f'<form id="reject-form" method="post" action="{action}/reject">'

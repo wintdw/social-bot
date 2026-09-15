@@ -49,6 +49,12 @@ class TestState:
         assert draft.voice == "technical"
         assert draft.updated_at  # touched
 
+    def test_apply_rewrite_clears_a_pending_rewrite_request(self):
+        draft = _draft(rewrite_requested_at="2026-09-10T08:00:00+00:00", rewrite_error="boom")
+        draft.apply_rewrite(caption="Hello")
+        assert draft.rewrite_requested_at == ""
+        assert draft.rewrite_error == ""
+
     def test_cannot_approve_from_extracted(self):
         with pytest.raises(ValueError):
             _draft().approve()

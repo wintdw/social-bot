@@ -6,6 +6,7 @@ import datetime as dt
 
 import pytest
 
+from social_bot.drafts import Draft
 from social_bot.web import (
     _parse_hhmm,
     _slot_time,
@@ -20,6 +21,7 @@ from social_bot.web import (
     next_post_at,
     next_run_at,
     readiness_view,
+    rewrite_view,
     runtime_state_snapshot,
     safe_local_path,
     seconds_until,
@@ -289,6 +291,22 @@ class TestImageJobsView:
         assert view["running"] == 0
         assert view["failed"] == 0
         assert [job["status"] for job in view["jobs"]] == ["ok", "unchanged", "skipped"]
+
+
+class TestRewriteView:
+    def test_empty(self):
+        assert rewrite_view(True, []) == {"enabled": True, "count": 0, "requested": []}
+
+    def test_lists_only_the_still_pending_ids(self):
+        drafts = [
+            Draft(id="a", rewrite_requested_at="2026-09-10T08:00:00+00:00"),
+            Draft(id="b"),  # no request: not in the queue
+        ]
+        assert rewrite_view(False, drafts) == {
+            "enabled": False,
+            "count": 1,
+            "requested": ["a"],
+        }
 
 
 class TestSafeLocalPath:

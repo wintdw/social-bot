@@ -38,6 +38,7 @@ your task.
 | Change how a source is fetched (HTTP/retries) | `src/social_bot/source_api.py` |
 | Change the Draft model, states, or persistence | `src/social_bot/drafts.py`, `tests/test_drafts.py` |
 | Change scan / rewrite / publish orchestration | `src/social_bot/draft_pipeline.py`, `tests/test_draft_pipeline.py` |
+| Trigger a rewrite from the UI (the rewriter worker) | `scripts/rewrite_worker.py` + `Draft.rewrite_requested_at` (`drafts.py`) + `draft_pipeline.py` (`request_rewrite`/`rewrite_queue`) + `web.py` (`/api/rewrite-queue`), `tests/test_rewrite_worker.py` |
 | Change the post queue order (manual ordering) | the **Post queue** tab's queue panel in `dashboard_html.py` (`render_queue_html`, `_queue_panel`, `_queue_row`) + `draft_pipeline.py` (`_queue_key`, `set_queue_order`, `move_in_queue`) + `Draft.queue_order` in `drafts.py`, `tests/test_dashboard_html.py` / `tests/test_draft_pipeline.py` |
 | Change the AI-tell checks shown on /review (advisory lint) | `src/social_bot/caption_lint.py`, `tests/test_caption_lint.py` |
 | Change AI image generation (prompt, endpoint, provider) | `src/social_bot/image_gen.py`, `tests/test_image_gen.py` |

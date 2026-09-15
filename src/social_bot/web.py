@@ -368,6 +368,17 @@ def image_jobs_view(enabled: bool, images: dict) -> dict:
     }
 
 
+def rewrite_view(enabled: bool, drafts: list) -> dict:
+    """Serialize the pending rewriter requests for /api/status (pure).
+
+    ``drafts`` is ``draft_pipeline.rewrite_queue``'s list. ``requested`` is the
+    ids still awaiting a rewrite: the detail page's poll script reloads once its
+    own id drops out of that list (a rewrite landed, or the worker failed).
+    """
+    ids = [draft.id for draft in drafts if draft.rewrite_requested_at]
+    return {"enabled": enabled, "count": len(ids), "requested": ids}
+
+
 def safe_local_path(value: str, default: str = "/") -> str:
     """A same-site path for a post-action redirect, or ``default``.
 
@@ -417,6 +428,9 @@ def create_app(
         post_times = list(post_at)
     private = bool(cfg.get("publish", {}).get("private", False))
     image_enabled = bool(pipeline.image_gen_config(cfg).get("enabled"))
+    # The rewriter runs on a host-side worker (scripts/rewrite_worker.py); this
+    # only gates the button that requests one, and the status the worker reports.
+    rewrite_enabled = bool(pipeline.rewrite_config(cfg).get("enabled"))
     # The account reader for the enabled destinations (facebook today). None when
     # no enabled destination can read a feed, so the feed panels and the
     # page/token loops stay off rather than failing.
@@ -907,6 +921,10 @@ def create_app(
         """Background image jobs, newest last — how /api/status reports them."""
         return image_jobs_view(image_enabled, state["images"])
 
+    def _rewrite_runtime() -> dict:
+        """Pending rewriter-worker requests (draft ids) for /api/status."""
+        return rewrite_view(rewrite_enabled, pipeline.rewrite_queue(cfg))
+
     def _page(markup: str, status_code: int = 200) -> HTMLResponse:
         return HTMLResponse(markup, status_code=status_code, headers={"Cache-Control": "no-cache"})
 
@@ -1045,6 +1063,7 @@ def create_app(
                 "post": _post_runtime(),
                 "token": _token_runtime(),
                 "images": _image_runtime(),
+                "rewrite": await asyncio.to_thread(_rewrite_runtime),
                 "lifecycle": {
                     "shutting_down": state["shutting_down"],
                     "inflight_publishes": state["inflight_publishes"],
@@ -1281,6 +1300,7 @@ def create_app(
                 message_kind=kind,
                 private=private,
                 image_enabled=image_enabled and draft.state in pipeline.REVIEW_STATES,
+                rewrite_enabled=rewrite_enabled,
                 image_status=state["images"].get(draft_id),
                 image_generated=pipeline.image_is_generated(cfg, draft),
                 image_styles=pipeline.image_style_choices(cfg),
@@ -1474,6 +1494,45 @@ def create_app(
             status_code=303,
         )
 
+    @app.post("/review/{draft_id}/request-rewrite")
+    async def review_request_rewrite(draft_id: str):
+        """Mark a draft for the host-side rewriter worker. Never rewrites itself.
+
+        The worker (scripts/rewrite_worker.py) picks the request up from
+        GET /api/rewrite-queue and posts the rewrite back; only a human approves
+        or posts.
+        """
+        target = f"/review/{urllib.parse.quote(draft_id)}"
+        if state["shutting_down"]:
+            text, kind = "Shutting down — try again shortly.", "warning"
+        elif not rewrite_enabled:
+            text, kind = "The rewriter is disabled (rewrite.enabled).", "error"
+        else:
+            try:
+                await asyncio.to_thread(pipeline.request_rewrite, cfg, draft_id)
+                text = "Rewrite requested — the Command Code worker will pick it up."
+                kind = "success"
+            except ValueError as exc:
+                text, kind = str(exc), "error"
+        return RedirectResponse(
+            f"{target}?message={urllib.parse.quote(text)}&kind={kind}", status_code=303
+        )
+
+    @app.post("/review/{draft_id}/cancel-rewrite")
+    async def review_cancel_rewrite(draft_id: str):
+        """Drop a pending rewriter request (never touches the caption)."""
+        target = f"/review/{urllib.parse.quote(draft_id)}"
+        try:
+            await asyncio.to_thread(pipeline.cancel_rewrite, cfg, draft_id)
+        except ValueError as exc:
+            return RedirectResponse(
+                f"{target}?message={urllib.parse.quote(str(exc))}&kind=error", status_code=303
+            )
+        return RedirectResponse(
+            f"{target}?message={urllib.parse.quote('Rewrite request cancelled.')}&kind=success",
+            status_code=303,
+        )
+
     # -- operator pages: publish log + status ----------------------------
 
     @app.get("/publish", response_class=HTMLResponse)
@@ -1593,5 +1652,69 @@ def create_app(
             return JSONResponse({"error": str(exc)}, status_code=400)
         draft = pipeline.get_draft(cfg, draft_id)
         return JSONResponse({**result, "draft": draft.to_dict() if draft else None})
+
+    @app.get("/api/rewrite-queue")
+    async def api_rewrite_queue():
+        """The drafts a human asked to rewrite, plus the brand context a worker needs.
+
+        Polled by scripts/rewrite_worker.py: the draft's own fields, the DNA brief,
+        the voice menu, the masthead and image-style choices, and the recent
+        captions (so the rewriter does not repeat them). The worker runs the
+        Command Code CLI per draft and POSTs the result back to
+        /api/drafts/{id}/rewrite; a failure goes to /api/drafts/{id}/rewrite-error.
+        """
+
+        def _load():
+            choices = pipeline.voice_choices(cfg)
+            return (
+                pipeline.rewrite_queue(cfg),
+                pipeline.dna_text(cfg),
+                choices,
+                {key: pipeline.voice_text(cfg, key) for key in choices},
+                pipeline.default_voice(cfg),
+                pipeline.recent_captions(cfg),
+            )
+
+        drafts, dna, voice_choices, voices, default_voice, recent = await asyncio.to_thread(_load)
+        return JSONResponse(
+            {
+                "generated_at": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
+                "count": len(drafts),
+                "dna": dna,
+                "voices": voices,
+                "voice_choices": voice_choices,
+                "default_voice": default_voice,
+                "mastheads": pipeline.masthead_config(cfg),
+                "image_styles": pipeline.image_style_choices(cfg),
+                "default_style": pipeline.default_image_style(cfg),
+                "recent": [
+                    {"id": draft.id, "source": draft.source, "caption": draft.caption}
+                    for draft in recent
+                ],
+                "drafts": [draft.to_dict() for draft in drafts],
+            }
+        )
+
+    @app.post("/api/drafts/{draft_id}/rewrite-error")
+    async def api_rewrite_error(draft_id: str, request: Request):
+        """Record the rewriter worker's failure and close the request.
+
+        Clearing the request keeps it from waiting forever (the operator can ask
+        again); the error is stored on the draft and shown on /review/{id}. Never
+        approves, rewrites, or posts.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+        try:
+            draft = await asyncio.to_thread(
+                pipeline.record_rewrite_error, cfg, draft_id, str(body.get("error", "") or "")
+            )
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"draft": draft.to_dict()})
 
     return app

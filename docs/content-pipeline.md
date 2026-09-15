@@ -17,10 +17,11 @@ posts, with an external AI doing the rewrite.
 ```
 
 The rewrite is done by an **external agent** (Command Code applying the Atento
-DNA), not by this codebase. The bot only exposes the drafts and accepts the
-result back. The scan and refresh loops never publish. Publishing only ever
-happens for drafts a human approved: the posting scheduler (`publish.post_at`)
-picks *when* an approved draft goes out — it never approves anything itself.
+DNA), not by this codebase — run by hand, or by the optional host-side worker
+(§2a). The bot only exposes the drafts and accepts the result back. The scan and
+refresh loops never publish. Publishing only ever happens for drafts a human
+approved: the posting scheduler (`publish.post_at`) picks *when* an approved
+draft goes out — it never approves anything itself.
 
 ## State machine (`drafts.py`)
 
@@ -126,6 +127,33 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   `social-bot blog masthead` fills the default in (idempotent, never replaces a
   chosen label, never touches the image). Re-label a misjudged post on
   `/review/{id}`.
+
+### 2a. Rewriter worker (`scripts/rewrite_worker.py`, optional)
+- The rewrite is normally run by hand (an agent calls `GET /api/drafts` and POSTs
+  the result). When `rewrite.enabled` is on, `/review/{id}` also offers a
+  **Rewrite with Command Code** button — but it only *marks* the draft
+  (`Draft.rewrite_requested_at`); the app never runs the agent itself.
+- A host-side worker polls `GET /api/rewrite-queue` (the marked drafts plus the
+  DNA, the voice menu, the masthead/`image_style` choices, and `recent`), runs the
+  Command Code CLI headlessly per draft (`commandcode -p --output-format json
+  --skip-onboarding --max-turns N`, with the whole brief in the prompt so the run
+  needs no tools), parses the JSON from the final `result` frame, and POSTs it to
+  `POST /api/drafts/{id}/rewrite` — which clears the request. A failure goes to
+  `POST /api/drafts/{id}/rewrite-error`, which stores `Draft.rewrite_error` and
+  closes the request, so the page shows why nothing came back instead of a request
+  that waits forever.
+- It runs on the **host**, not in the app: the CLI and its auth live there (the
+  container image is python-slim with no Node), and headless runs need no
+  `--yolo` — the rewriter only reads its prompt and prints JSON, so file writes
+  and shell stay blocked. Start it beside the service (see
+  [operations.md](operations.md)).
+- Only `extracted`/`ai_draft` drafts can be requested (`can_receive_rewrite`): an
+  `approved` draft is already queued to post, so a rewrite would have to undo the
+  approval. `/review/{id}` shows the pending state with **Cancel rewrite**, and
+  the page reloads itself once the request clears (`GET /api/status` →
+  `rewrite.requested`).
+- It never approves or posts: the worker reaches the same `receive_rewrite` path a
+  manual rewrite uses, and the human gate is untouched.
 
 ### 2b. Images (`image_gen.py`, optional)
 - Images are generated **after** the rewrite, on demand via
@@ -351,12 +379,16 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | POST | `/review/{id}/reject` | Reject. |
 | POST | `/review/{id}/image` | Save the compose edits and regenerate the draft's image in the background (form; redirects back immediately; the page then shows the job). |
 | POST | `/review/{id}/restore-image` | Put the source post's own image back, replacing a generated one (reads the source page once when the draft has no stored original). |
+| POST | `/review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (`rewrite.enabled`); never rewrites itself. |
+| POST | `/review/{id}/cancel-rewrite` | Drop a pending rewrite request. |
 | POST | `/queue/{id}/move` | Move an approved draft in the post queue (`direction=up\|down\|top\|bottom`, plus a `next` return path — the queue page sends `/queue#post-queue`); never posts. |
 | POST | `/queue/order` | Persist a drag-and-drop reorder: JSON `{"ids": [...]}` (a subset is fine), returns `{"ok": true, "order": [...]}`. |
 | POST | `/queue/reset` | Clear every manual position, restoring the default oldest-first order. |
 | GET | `/api/drafts` | Open drafts + DNA (`dna`) + the voice menu (`voices`, `voice_choices`, `default_voice`) + `recent` captions, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
 | POST | `/api/drafts/{id}/rewrite` | Store the rewrite. |
 | POST | `/api/drafts/{id}/image` | Generate an image for one draft (JSON), for the rewriter/operator. |
+| GET | `/api/rewrite-queue` | The drafts a human asked to rewrite, plus the brand context (DNA, voices, mastheads, image styles, `recent`) — polled by the host-side rewriter worker. |
+| POST | `/api/drafts/{id}/rewrite-error` | Record the rewriter worker's failure and close the request; shown on `/review/{id}`. |
 
 ## Extending
 

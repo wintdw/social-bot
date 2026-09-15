@@ -179,3 +179,20 @@ image_gen:
   width: 1080                 # portrait 1080x1350 = most feed real estate
   height: 1350
   timeout_seconds: 300.0      # gpt-image models are slow; be generous
+
+# --- Rewriter worker ----------------------------------------------------------
+# When enabled, /review/{id} offers a "Rewrite with Command Code" button that
+# marks the draft. A host-side worker (scripts/rewrite_worker.py) polls
+# GET /api/rewrite-queue, runs the Command Code CLI headlessly for each request
+# (`commandcode -p`), and posts the result back to /api/drafts/{id}/rewrite —
+# which clears the request. The bot never runs the agent itself: Command Code and
+# its auth stay on the host (the container has no Node). Run the worker beside
+# the service, e.g. `python scripts/rewrite_worker.py`.
+rewrite:
+  enabled: true               # show the button; false hides it
+  command: commandcode        # the CLI to run (alias: `cmd`)
+  model: ""                   # `-m` value; "" uses the CLI's configured model
+  max_turns: 40               # `--max-turns` cap for one rewrite
+  timeout_seconds: 600.0      # kill a run that hangs
+  poll_seconds: 15.0          # how often the worker asks for new requests
+  api_base: http://127.0.0.1:8083  # where the worker reaches this app

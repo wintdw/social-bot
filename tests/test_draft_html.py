@@ -747,6 +747,54 @@ class TestNoQueueControlsOnReview:
         assert "/review/a/move" not in out
 
 
+class TestRewriteButton:
+    """The rewriter runs on a host worker; the button only marks the draft."""
+
+    def test_offers_the_button_for_an_open_draft(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", state="extracted"),
+            rewrite_enabled=True,
+            generated_at=GENERATED,
+        )
+        assert 'action="/review/p/request-rewrite"' in out
+        assert "Rewrite with Command Code" in out
+
+    def test_hidden_when_the_rewriter_is_disabled(self):
+        out = render_draft_html(Draft(id="p", title="T", state="extracted"), generated_at=GENERATED)
+        assert "Rewrite with Command Code" not in out
+        assert "request-rewrite" not in out
+
+    def test_a_pending_request_shows_a_notice_and_cancel(self):
+        draft = Draft(
+            id="p",
+            title="T",
+            state="extracted",
+            rewrite_requested_at="2026-09-10T08:00:00+00:00",
+        )
+        out = render_draft_html(draft, rewrite_enabled=True, generated_at=GENERATED)
+        assert 'id="rewrite-job"' in out
+        assert 'action="/review/p/cancel-rewrite"' in out
+        assert "Rewrite with Command Code" not in out
+
+    def test_a_failure_is_shown(self):
+        draft = Draft(id="p", state="ai_draft", caption="c", rewrite_error="command not found")
+        out = render_draft_html(draft, rewrite_enabled=True, generated_at=GENERATED)
+        assert "Rewriter failed: command not found" in out
+
+    def test_the_error_is_escaped(self):
+        draft = Draft(id="p", state="ai_draft", caption="c", rewrite_error="<b>boom</b>")
+        out = render_draft_html(draft, rewrite_enabled=True, generated_at=GENERATED)
+        assert "&lt;b&gt;boom&lt;/b&gt;" in out
+
+    def test_no_button_for_an_approved_draft(self):
+        out = render_draft_html(
+            Draft(id="p", state="approved", caption="c"),
+            rewrite_enabled=True,
+            generated_at=GENERATED,
+        )
+        assert "Rewrite with Command Code" not in out
+
+
 class TestMessageHtml:
     def test_escapes(self):
         out = render_message_html("Oops", "<script>alert(1)</script>")

@@ -1,0 +1,39 @@
+# The host-side rewriter worker for social-bot (see docs/operations.md).
+#
+# It polls the deployed app's GET /api/rewrite-queue and runs the Command Code
+# CLI for each draft a human marked with "Rewrite with Command Code". It lives on
+# the host, not in the container, because the CLI and its auth (~/.commandcode)
+# are here and the image has no Node.
+#
+# Install (user service, no root needed):
+#   mkdir -p ~/.config/systemd/user
+#   ln -sf ~/social-bot/deploy/social-bot-rewriter.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now social-bot-rewriter
+#   systemctl --user status social-bot-rewriter
+#
+# To keep it running after logout / across reboots, enable lingering for the user
+# (needs root once):
+#   sudo loginctl enable-linger $USER
+#
+# Logs: journalctl --user -u social-bot-rewriter -f
+
+[Unit]
+Description=social-bot rewriter worker (Command Code)
+Documentation=file:%h/social-bot/docs/operations.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/social-bot
+# `commandcode` is a global npm bin; keep it on PATH for the minimal service env.
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+ExecStart=%h/social-bot/.venv/bin/python %h/social-bot/scripts/rewrite_worker.py
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

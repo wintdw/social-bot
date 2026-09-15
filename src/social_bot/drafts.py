@@ -91,6 +91,14 @@ class Draft:
     # back to publish.default_voice when the API delivers the voice menu.
     # Overridable on /review/{id}.
     voice: str = ""
+    # A human asked the rewriter worker to rewrite this draft (the "Rewrite with
+    # Command Code" button on /review/{id}). An ISO timestamp while the request
+    # is open; the whole thing is the host-side worker's queue. Cleared when a
+    # rewrite lands (apply_rewrite) or the request is cancelled. `rewrite_error`
+    # carries the worker's last failure, so the operator can see why nothing
+    # came back instead of a request that waits forever.
+    rewrite_requested_at: str = ""
+    rewrite_error: str = ""
     # Advisory AI-tell warnings from caption_lint, written at rewrite/edit time
     # and shown on /review/{id}. Never blocks a rewrite or a post; empty when the
     # caption reads clean. Each entry is {"code", "message"}.
@@ -161,6 +169,9 @@ class Draft:
             self.image_style = image_style
         if voice:
             self.voice = voice
+        # A rewrite fulfils any pending rewriter-worker request.
+        self.rewrite_requested_at = ""
+        self.rewrite_error = ""
         self.state = AI_DRAFT
         self.touch()
 

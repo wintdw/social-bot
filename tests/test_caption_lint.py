@@ -89,6 +89,20 @@ class TestCrossPostTells:
         caption = "Mở bài hai.\n\nNên mình vẫn giữ nền tảng mở." + cta
         assert "repeated-closer" not in _codes(caption, recent)
 
+    def test_the_source_credit_is_not_a_closer(self):
+        # The credit line (DNA §7.3) repeats verbatim for a frequent source; it is
+        # boilerplate, not the post's own closing move.
+        credit = '\n\nNguồn: Sean Goedecke — "Some post".'
+        recent = ["Mở bài một.\n\nChuyện con số thì để sau." + credit]
+        caption = "Mở bài hai.\n\nNên mình vẫn giữ nền tảng mở." + credit
+        assert "repeated-closer" not in _codes(caption, recent)
+
+    def test_a_real_closer_still_flags_above_the_credit_line(self):
+        credit = '\n\nNguồn: Sean Goedecke — "Some post".'
+        recent = ["Mở bài một.\n\nCái khó không nằm ở tốc độ." + credit]
+        caption = "Mở bài hai.\n\nCái khó không nằm ở tốc độ." + credit
+        assert "repeated-closer" in _codes(caption, recent)
+
     def test_short_lines_are_not_compared(self):
         # Below the comparison floor a match would be noise, not a repeated tell.
         recent = ["Ok."]

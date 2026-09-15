@@ -43,5 +43,6 @@ ignore = ["E501"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+# `scripts` so tests can import the host-side helpers (e.g. rewrite_worker).
+pythonpath = ["src", "scripts"]
 addopts = "-q"

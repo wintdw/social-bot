@@ -138,3 +138,7 @@ Each `_cmd_*` returns the code; `main` never lets an exception traceback.
    exactly one audit record and the expected state (`posted` publicly; the draft
    stays `approved` after a private send, and a second run the same day skips it).
 7. Only then a real public approve — and only deliberately.
+
+For the optional rewriter worker: with `rewrite.enabled: true`, **Rewrite with
+Command Code** on `/review/{id}` marks the draft; `scripts/rewrite_worker.py
+--once` (or the `deploy/` service) rewrites it and the request clears.

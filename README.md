@@ -150,7 +150,7 @@ docker compose logs -f                # follow refresh/scan runs
 |---|---|
 | `GET /` | **Dashboard** — refresh/scan controls, open-draft and published counts, scheduler state, the next post (time + which draft), and the cached feed. |
 | `GET /review` | **Review queue** — open drafts, newest first (with a **Scan sources now** button). Paged (`?page=`, `?per_page=`, default 20). |
-| `GET /review/{id}` | One draft: editable caption + hashtags + English image prompt, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set, the DNA brief. |
+| `GET /review/{id}` | One draft: editable caption + hashtags + English image prompt, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set, a **Rewrite with Command Code** button when `rewrite.enabled` is set, the DNA brief. |
 | `GET /queue` | **Post queue** — the approved drafts in the order they will post, the one going out next marked, with drag / Top-Up-Down reorder controls and a **Post approved now** button. |
 | `GET /publish` | **Published** — the audit log (public and private sends, with permalinks). |
 | `GET /status` | **Status** — sources, drafts by state, publish settings (min interval, days remaining, next up), and scheduler runs. |
@@ -164,6 +164,8 @@ docker compose logs -f                # follow refresh/scan runs
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only; `approve=1` queues the draft for the next slot instead). |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
 | `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a generated one. |
+| `POST /review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (needs `rewrite.enabled`); never rewrites itself. |
+| `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request. |
 
 All five pages share the same top navigation, so you can move between them
 without editing URLs; `/drafts` redirects to `/review` for old bookmarks.
@@ -214,6 +216,9 @@ auto-posted: the AI rewrite is a suggestion, and only a human approval publishes
 source feeds ── blog scan ──▶ drafts (extracted)
                                   │  GET  /api/drafts   ──▶ you run Command Code
                                   │  POST /api/drafts/{id}/rewrite  (Atento DNA)
+                                  │  — or click "Rewrite with Command Code": the host
+                                  │    worker (scripts/rewrite_worker.py) polls
+                                  │    GET /api/rewrite-queue and posts the rewrite back
                                    ▼  drafts (ai_draft)
                             GET /review/{id}  ── edit caption ──▶ Post now  ──▶ Facebook Page
                                    │                                (destinations in config)
@@ -245,6 +250,14 @@ curl -X POST localhost:8083/api/drafts/post-one/rewrite \
      -d '{"caption":"...","hashtags":["#Atento"],"image_prompt":"a lone tree by a river","image_style":"editorial"}'
 open http://localhost:8083/review                       # edit + Post now / Approve & schedule
 ```
+
+Or let a host-side worker do it: click **Rewrite with Command Code** on
+`/review/{id}` (needs `rewrite.enabled: true`), and run
+`.venv/bin/python scripts/rewrite_worker.py` beside the service. The app only
+*marks* the draft; the worker polls `GET /api/rewrite-queue`, runs the Command
+Code CLI headlessly on the host, and POSTs the result back to
+`/api/drafts/{id}/rewrite` — the app never runs the agent itself (the container
+has no Node). See [operations](docs/operations.md) for running it as a service.
 
 State lives under `data/review/`: `queue.json` (the queue) and `seen.json`
 (dedupe); the publish audit is `data/publish/published.jsonl`. Set
@@ -281,7 +294,11 @@ not a dry run — it does create a post object, just an unpublished one.
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only). |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
 | `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a generated one. |
+| `POST /review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (`rewrite.enabled`); never rewrites itself. |
+| `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request. |
 | `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents (`dna`) + the voice menu `publish.voices` (`voices` = `{key: brief+samples}`, with `voice_choices`/`default_voice`) + `recent` captions, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
+| `GET /api/rewrite-queue` | JSON: the drafts a human asked to rewrite + the brand context (DNA, voices, mastheads, image styles, `recent`), polled by the host-side rewriter worker. |
+| `POST /api/drafts/{id}/rewrite-error` | JSON: record the rewriter worker's failure and close the request (shown on `/review/{id}`). |
 | `GET /api/status` | JSON: full pipeline snapshot — sources, drafts by state, seen, published, schedules, lifecycle. `publish.next_draft` names the oldest approved draft the poster will send next (`publish.approved` counts them, `publish.interval_remaining` is the days still to wait). |
 | `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `image_prompt`, `image_style`, `voice`). |
 

@@ -198,6 +198,15 @@ def test_image_gen_disabled_by_default(tmp_path):
     assert cfg["image_gen"]["default_style"] == ""
 
 
+def test_rewrite_worker_disabled_by_default(tmp_path):
+    cfg = load_config(tmp_path / "missing.yaml")
+    assert cfg["rewrite"]["enabled"] is False
+    assert cfg["rewrite"]["command"] == "commandcode"
+    assert cfg["rewrite"]["model"] == ""
+    assert cfg["rewrite"]["max_turns"] >= 1
+    assert cfg["rewrite"]["api_base"].startswith("http://")
+
+
 def test_credentials_file_supplies_image_key(tmp_path):
     conf = tmp_path / "config.yaml"
     conf.write_text(yaml.safe_dump({"image_gen": {"enabled": True}}), encoding="utf-8")
@@ -236,6 +245,11 @@ def test_credentials_file_supplies_image_key(tmp_path):
         {"image_gen": {"timeout_seconds": 0}},
         {"image_gen": {"width": 0}},
         {"image_gen": {"base_url": "http://gen.pollinations.ai/image"}},
+        {"rewrite": {"timeout_seconds": 0}},
+        {"rewrite": {"poll_seconds": 0}},
+        {"rewrite": {"max_turns": 0}},
+        {"rewrite": {"api_base": "localhost:8083"}},
+        {"rewrite": {"command": "   "}},
     ],
     ids=[
         "empty-sources",
@@ -262,6 +276,11 @@ def test_credentials_file_supplies_image_key(tmp_path):
         "zero-image-timeout",
         "zero-image-width",
         "http-image-base-url",
+        "zero-rewrite-timeout",
+        "zero-rewrite-poll",
+        "zero-rewrite-max-turns",
+        "bad-rewrite-api-base",
+        "blank-rewrite-command",
     ],
 )
 def test_validate_rejects_bad_pipeline_config(override):

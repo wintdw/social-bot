@@ -2077,3 +2077,68 @@ class TestQueueOrdering:
             ],
         )
         assert [row["id"] for row in pipeline.queue_view(cfg)] == ["b", "a"]
+
+
+class TestRewriteRequests:
+    """A human marks a draft; the host worker rewrites it and posts it back."""
+
+    def test_request_marks_the_draft_for_the_worker(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        draft = pipeline.request_rewrite(cfg, "post-one")
+        assert draft.rewrite_requested_at
+        assert draft.rewrite_error == ""
+        assert [d.id for d in pipeline.rewrite_queue(cfg)] == ["post-one"]
+
+    def test_request_rejects_an_approved_draft(self, tmp_path):
+        # An approved draft is queued to post; rewriting it would undo that.
+        cfg = _seed_draft(tmp_path, state=APPROVED)
+        with pytest.raises(ValueError, match="cannot be rewritten"):
+            pipeline.request_rewrite(cfg, "post-one")
+
+    def test_request_rejects_an_unknown_draft(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        with pytest.raises(ValueError, match="no draft"):
+            pipeline.request_rewrite(cfg, "nope")
+
+    def test_queue_is_oldest_request_first(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg),
+            [
+                Draft(id="b", rewrite_requested_at="2026-09-02T10:00:00+00:00"),
+                Draft(id="a", rewrite_requested_at="2026-09-01T10:00:00+00:00"),
+                Draft(id="c"),  # never requested
+            ],
+        )
+        assert [d.id for d in pipeline.rewrite_queue(cfg)] == ["a", "b"]
+
+    def test_cancel_clears_the_request(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        pipeline.request_rewrite(cfg, "post-one")
+        draft = pipeline.cancel_rewrite(cfg, "post-one")
+        assert draft.rewrite_requested_at == ""
+        assert pipeline.rewrite_queue(cfg) == []
+
+    def test_error_closes_the_request_and_is_kept(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        pipeline.request_rewrite(cfg, "post-one")
+        draft = pipeline.record_rewrite_error(cfg, "post-one", "boom")
+        assert draft.rewrite_requested_at == ""
+        assert draft.rewrite_error == "boom"
+        assert pipeline.rewrite_queue(cfg) == []
+
+    def test_error_defaults_when_blank(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        pipeline.request_rewrite(cfg, "post-one")
+        draft = pipeline.record_rewrite_error(cfg, "post-one", "  ")
+        assert draft.rewrite_error == "unknown error"
+
+    def test_a_landed_rewrite_clears_the_request(self, tmp_path):
+        cfg = _set_mastheads(_seed_draft(tmp_path))
+        pipeline.request_rewrite(cfg, "post-one")
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": f"{HOC}\n\nMột caption.", "hashtags": ["#Atento"]}
+        )
+        assert draft.rewrite_requested_at == ""
+        assert draft.rewrite_error == ""
+        assert pipeline.rewrite_queue(cfg) == []

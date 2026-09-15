@@ -271,6 +271,11 @@ def image_gen_config(cfg: dict) -> dict:
     return dict(cfg.get("image_gen", {}) or {})
 
 
+def rewrite_config(cfg: dict) -> dict:
+    """The rewriter-worker settings (``rewrite``); see scripts/rewrite_worker.py."""
+    return dict(cfg.get("rewrite", {}) or {})
+
+
 def _generate_image(
     cfg: dict,
     *,
@@ -1007,6 +1012,64 @@ def edit_draft(
         draft.lint = lint_caption(draft.caption, recent=_recent_texts(drafts, cfg, draft_id))
     save_drafts(queue_path(cfg), drafts)
     return draft
+
+
+def request_rewrite(cfg: dict, draft_id: str) -> Draft:
+    """Ask the rewriter worker to rewrite a draft (a human action on /review).
+
+    Only a draft still awaiting a rewrite (``extracted``/``ai_draft``) can be
+    requested — an ``approved`` draft is already queued to post, and rewriting it
+    would have to undo that approval. This only *marks* the draft; the host-side
+    worker (``scripts/rewrite_worker.py``) picks the request up from
+    ``GET /api/rewrite-queue`` and posts the result back through
+    ``receive_rewrite``, which clears the request. Nothing here rewrites,
+    approves, or posts.
+    """
+    now = now_iso()
+
+    def _mutate(draft: Draft) -> None:
+        if not draft.can_receive_rewrite():
+            raise ValueError(f"draft {draft.id!r} in state {draft.state!r} cannot be rewritten")
+        draft.rewrite_requested_at = now
+        draft.rewrite_error = ""
+
+    return _save_one(cfg, draft_id, _mutate)
+
+
+def cancel_rewrite(cfg: dict, draft_id: str) -> Draft:
+    """Drop a pending rewriter request (and any error it left behind)."""
+
+    def _mutate(draft: Draft) -> None:
+        draft.rewrite_requested_at = ""
+        draft.rewrite_error = ""
+
+    return _save_one(cfg, draft_id, _mutate)
+
+
+def record_rewrite_error(cfg: dict, draft_id: str, error: str) -> Draft:
+    """Close a rewriter request with the worker's failure recorded on the draft.
+
+    The request is cleared so it does not sit open forever (the operator can ask
+    again), and the error is stored so ``/review/{id}`` can say why nothing came
+    back instead of showing a request that waits indefinitely.
+    """
+
+    def _mutate(draft: Draft) -> None:
+        draft.rewrite_error = str(error or "").strip() or "unknown error"
+        draft.rewrite_requested_at = ""
+
+    return _save_one(cfg, draft_id, _mutate)
+
+
+def rewrite_queue(cfg: dict) -> list[Draft]:
+    """The drafts a human asked to rewrite, oldest request first (the worker's FIFO).
+
+    Read by ``GET /api/rewrite-queue`` for the rewriter worker; a draft leaves
+    the queue when its rewrite lands (``receive_rewrite``) or the request is
+    cancelled / fails.
+    """
+    pending = [draft for draft in load_drafts(queue_path(cfg)) if draft.rewrite_requested_at]
+    return sorted(pending, key=lambda d: parse_when(d.rewrite_requested_at) or _EPOCH)
 
 
 def reject_draft(cfg: dict, draft_id: str) -> Draft:
