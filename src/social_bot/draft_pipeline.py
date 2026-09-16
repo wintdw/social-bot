@@ -20,6 +20,7 @@ from .drafts import (
     APPROVED,
     EXTRACTED,
     REWRITE_CAPTION,
+    REWRITE_CAPTION_VOICE,
     REWRITE_IMAGE,
     STATES,
     Draft,
@@ -994,6 +995,13 @@ def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
     converges on (a repeated hook or closer, a stock opener, a flat rhythm, the
     rule of three) are stored on the draft for the reviewer to see; the pipeline
     never edits the text itself (DNA §12).
+
+    A **voice-locked** request ("Rewrite in this voice") keeps the voice the
+    operator picked: the register on the draft was saved with the request, and it is
+    this side — not the agent — that decides, so a run that ignored the prompt's
+    instruction cannot quietly relabel the post. Same reasoning as
+    ``receive_image_prompt`` refusing an ``image_style`` from the body: the pick is
+    the operator's. Read before ``apply_rewrite``, which clears the request.
     """
     choices = masthead_choices(cfg)
     fallback = default_masthead(cfg)
@@ -1003,6 +1011,9 @@ def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
         raise ValueError(f"no draft {draft_id!r}")
     if not draft.can_receive_rewrite():
         raise ValueError(f"draft {draft_id!r} in state {draft.state!r} cannot be rewritten")
+    locked_voice = (
+        _resolve_voice(cfg, draft.voice) if draft.rewrite_kind() == REWRITE_CAPTION_VOICE else ""
+    )
     hashtags = body.get("hashtags")
     draft.apply_rewrite(
         caption=_ensure_masthead(str(body.get("caption", "") or ""), fallback, choices),
@@ -1011,7 +1022,7 @@ def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
         commentary=str(body.get("commentary", "") or ""),
         image_prompt=str(body.get("image_prompt", "") or ""),
         image_style=_resolve_image_style(cfg, body.get("image_style")),
-        voice=_resolve_voice(cfg, body.get("voice")),
+        voice=_resolve_voice(cfg, locked_voice or body.get("voice")),
     )
     draft.lint = lint_caption(draft.caption, recent=_recent_texts(drafts, cfg, draft_id))
     save_drafts(queue_path(cfg), drafts)
@@ -1082,6 +1093,9 @@ def edit_draft(
 def request_rewrite(cfg: dict, draft_id: str) -> Draft:
     """Ask the rewriter worker to rewrite a draft (a human action on /review).
 
+    The agent picks the voice here, like the masthead and the image treatment;
+    ``request_voice_rewrite`` is the sibling that locks it to the operator's pick.
+
     Only a draft still awaiting a rewrite (``extracted``/``ai_draft``) can be
     requested — an ``approved`` draft is already queued to post, and rewriting it
     would have to undo that approval. This only *marks* the draft; the host-side
@@ -1097,6 +1111,33 @@ def request_rewrite(cfg: dict, draft_id: str) -> Draft:
             raise ValueError(f"draft {draft.id!r} in state {draft.state!r} cannot be rewritten")
         draft.rewrite_requested_at = now
         draft.rewrite_mode = REWRITE_CAPTION
+        draft.rewrite_error = ""
+
+    return _save_one(cfg, draft_id, _mutate)
+
+
+def request_voice_rewrite(cfg: dict, draft_id: str) -> Draft:
+    """Ask the worker to rewrite a draft *in the voice the operator picked*.
+
+    The "Rewrite in this voice" action on /review/{id}: the same full rewrite as
+    ``request_rewrite``, except the caption's register is not the agent's to choose.
+    It submits the compose form, so the Voice pick is saved before this runs;
+    ``build_prompt`` then names that key and forbids another, and ``receive_rewrite``
+    re-asserts it on the way back in. Same gate as ``request_rewrite``
+    (``extracted``/``ai_draft``) — an ``approved`` draft's caption is what a human
+    already approved. Like every request this only *marks* the draft, and never
+    touches the caption, the state, or a post.
+    """
+    now = now_iso()
+
+    def _mutate(draft: Draft) -> None:
+        if not draft.can_receive_rewrite():
+            raise ValueError(f"draft {draft.id!r} in state {draft.state!r} cannot be rewritten")
+        # Resolve first: the lock has to name a register that exists, or the prompt's
+        # hard rule would point the agent at a key that is not in the menu.
+        draft.voice = _resolve_voice(cfg, draft.voice)
+        draft.rewrite_requested_at = now
+        draft.rewrite_mode = REWRITE_CAPTION_VOICE
         draft.rewrite_error = ""
 
     return _save_one(cfg, draft_id, _mutate)
@@ -1159,10 +1200,11 @@ def record_rewrite_error(cfg: dict, draft_id: str, error: str) -> Draft:
 def rewrite_queue(cfg: dict) -> list[Draft]:
     """The drafts a human asked the rewriter for, oldest request first (the worker's FIFO).
 
-    Both kinds of request are here — a full rewrite and a prompt-only one — each
-    marked with ``Draft.rewrite_mode`` so the worker knows which it is; a draft
-    leaves the queue when its result lands (``receive_rewrite`` /
-    ``receive_image_prompt``) or the request is cancelled / fails.
+    Every kind of request is here — a full rewrite, a full rewrite in a voice the
+    operator picked, and a prompt-only one — each marked with ``Draft.rewrite_mode``
+    so the worker knows which it is; a draft leaves the queue when its result lands
+    (``receive_rewrite`` / ``receive_image_prompt``) or the request is cancelled /
+    fails.
     """
     pending = [draft for draft in load_drafts(queue_path(cfg)) if draft.rewrite_requested_at]
     return sorted(pending, key=lambda d: parse_when(d.rewrite_requested_at) or _EPOCH)

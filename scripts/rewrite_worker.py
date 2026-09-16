@@ -7,12 +7,19 @@ result back — which clears the request. A failure is posted to
 ``POST /api/drafts/{id}/rewrite-error`` so the draft page can show it, instead of
 the request waiting forever.
 
-Two kinds of request ride that one queue, told apart by the draft's
+Three kinds of request ride that one queue, told apart by the draft's
 ``rewrite_mode``:
 
 ``caption``
     "Rewrite with Command Code" — the whole rewrite (``build_prompt``, the DNA and
-    voice menu included), posted back to ``POST /api/drafts/{id}/rewrite``.
+    voice menu included), the agent choosing the register, posted back to
+    ``POST /api/drafts/{id}/rewrite``.
+``caption-voice``
+    "Rewrite in this voice" — the same whole rewrite, except the register is the
+    one the operator picked (``build_prompt(..., voice_locked=True)``: the contract
+    names that key and forbids another). Posted back to the same endpoint, where
+    ``receive_rewrite`` re-asserts the pick rather than taking the run's word for it
+    — the operator's call, like the ``image_style`` in the kind below.
 ``image``
     "Regenerate image prompt" — the caption is already settled, only a fresh
     ``image_prompt`` is wanted (``build_image_prompt``, a much smaller task), posted
@@ -53,7 +60,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from social_bot.config import load_config  # noqa: E402
 from social_bot.draft_pipeline import rewrite_config  # noqa: E402
-from social_bot.drafts import REWRITE_IMAGE  # noqa: E402
+from social_bot.drafts import REWRITE_CAPTION_VOICE, REWRITE_IMAGE  # noqa: E402
 
 
 class WorkerError(Exception):
@@ -125,17 +132,36 @@ def _recent_images_block(payload: dict) -> str:
     )
 
 
-def build_prompt(payload: dict, draft: dict) -> str:
+def build_prompt(payload: dict, draft: dict, *, voice_locked: bool = False) -> str:
     """The single self-contained task handed to one headless Command Code run.
 
     Everything rides in the prompt (the DNA, the voice menu, the recent captions,
     the draft) so the run needs no tools and no network: it only reads its input
     and prints the rewrite JSON, which the worker parses and posts back.
+
+    ``voice_locked`` is "Rewrite in this voice": the operator picked a register on
+    /review/{id}, so the caption's voice is not the agent's to choose — the menu
+    stays (the chosen register's own brief and samples *are* the text it writes
+    from), but the contract names that one key and a hard rule forbids substituting
+    another. Absent a key on the draft there is nothing to hold, so the wording
+    falls back to the free choice.
     """
     voices = payload.get("voices") or {}
     voice_block = (
         "\n\n".join(f"### voice: {key}\n{text}" for key, text in voices.items() if text)
         or "(no voice menu configured)"
+    )
+    locked_voice = str(draft.get("voice") or "").strip() if voice_locked else ""
+    voice_contract = (
+        f'  "voice":        exactly "{locked_voice}" — the reviewer chose it; do not pick another'
+        if locked_voice
+        else '  "voice":        exactly one of: ' + _bullet_list(payload.get("voice_choices"))
+    )
+    voice_rule = (
+        f'- Write in the reviewer\'s chosen voice "{locked_voice}" — do not '
+        "substitute another register from the menu.\n"
+        if locked_voice
+        else ""
     )
     recent = payload.get("recent") or []
     recent_block = (
@@ -169,13 +195,13 @@ def build_prompt(payload: dict, draft: dict) -> str:
         "labels). Also the image's alt text.\n"
         '  "image_style":  exactly one of: '
         f"{_bullet_list(payload.get('image_styles'))}\n"
-        '  "voice":        exactly one of: '
-        f"{_bullet_list(payload.get('voice_choices'))}\n\n"
+        f"{voice_contract}\n\n"
         "Hard rules:\n"
         f"- Pick exactly ONE masthead, verbatim, as line 1 — from: "
         f"{_bullet_list(mastheads.get('choices'))} (default "
         f"{mastheads.get('default') or 'none'}).\n"
         "- Write in ONE voice only; do not mix registers.\n"
+        f"{voice_rule}"
         "- Do NOT imitate the recent captions' openers, closers, or vocabulary.\n"
         "- Do NOT reuse a subject or a composition from the recent images — pick "
         "something different for THIS post's idea.\n"
@@ -330,11 +356,17 @@ def process_once(cfg: dict, *, draft_id: str = "", dry_run: bool = False) -> int
     done = 0
     for draft in drafts:
         ident = str(draft.get("id") or "")
-        # Two kinds of request share this queue: a full rewrite, and a prompt-only
-        # one ("the caption is fine, the picture is not"), which is the same run
-        # with a smaller prompt and a different endpoint to post back to.
+        # Three kinds of request share this queue: a full rewrite, the same rewrite
+        # in a voice the operator picked, and a prompt-only one ("the caption is
+        # fine, the picture is not") — which is the same run with a smaller prompt
+        # and a different endpoint to post back to.
         image_only = draft.get("rewrite_mode") == REWRITE_IMAGE
-        prompt = build_image_prompt(payload, draft) if image_only else build_prompt(payload, draft)
+        voice_locked = draft.get("rewrite_mode") == REWRITE_CAPTION_VOICE
+        prompt = (
+            build_image_prompt(payload, draft)
+            if image_only
+            else build_prompt(payload, draft, voice_locked=voice_locked)
+        )
         task = f"a new image prompt for {ident}" if image_only else ident
         endpoint = "image-prompt" if image_only else "rewrite"
         if dry_run:

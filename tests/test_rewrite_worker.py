@@ -89,6 +89,29 @@ class TestBuildPrompt:
         prompt = worker.build_prompt(payload, {"id": "d1"})
         assert "RECENT IMAGES (avoid repeating these subjects) ===\n(none)" in prompt
 
+    def test_a_locked_voice_names_the_key_and_forbids_another(self):
+        # "Rewrite in this voice": the operator picked the register, so there is no
+        # choice to make — the contract names that one key and a rule forbids
+        # substituting another. The menu still rides along: the chosen register's
+        # brief *is* the text the caption is written from.
+        prompt = worker.build_prompt(_payload(), {"id": "d1", "voice": "essay"}, voice_locked=True)
+        assert '"voice":        exactly "essay" — the reviewer chose it' in prompt
+        assert '"voice":        exactly one of' not in prompt
+        assert '- Write in the reviewer\'s chosen voice "essay"' in prompt
+        assert "Voice brief" in prompt
+
+    def test_an_unlocked_voice_is_the_agents_choice(self):
+        prompt = worker.build_prompt(_payload(), {"id": "d1", "voice": "essay"})
+        assert '"voice":        exactly one of: technical, essay' in prompt
+        assert "the reviewer chose it" not in prompt
+        assert "reviewer's chosen voice" not in prompt
+
+    def test_a_lock_with_no_voice_falls_back_to_the_free_choice(self):
+        # Nothing picked means nothing to hold, so the agent chooses as usual.
+        prompt = worker.build_prompt(_payload(), {"id": "d1"}, voice_locked=True)
+        assert '"voice":        exactly one of: technical, essay' in prompt
+        assert "reviewer's chosen voice" not in prompt
+
 
 class TestBuildImagePrompt:
     """The prompt-only task: a new image prompt, caption untouched."""
@@ -217,6 +240,31 @@ class TestProcessOnce:
             result={"caption": "hi"},
         )
         assert worker.process_once(_cfg()) == 1
+        assert calls[-1][1].endswith("/api/drafts/d1/rewrite")
+
+    def test_a_voice_locked_request_is_the_full_task_with_the_voice_pinned(self, monkeypatch):
+        prompts = []
+        calls = []
+        self._patch(
+            monkeypatch,
+            calls,
+            drafts=[{"id": "d1", "rewrite_mode": "caption-voice", "voice": "essay"}],
+            result={"caption": "hi"},
+        )
+        original = worker.run_commandcode
+
+        def capture(settings, prompt):
+            prompts.append(prompt)
+            return original(settings, prompt)
+
+        monkeypatch.setattr(worker, "run_commandcode", capture)
+        assert worker.process_once(_cfg()) == 1
+        # The whole rewrite, not the smaller prompt-only task…
+        assert "DNA BRIEF" in prompts[0]
+        assert "IMAGE STYLE BRIEFS" in prompts[0]
+        # …with the operator's register pinned.
+        assert '"voice":        exactly "essay"' in prompts[0]
+        # …and posted back where a caption rewrite lands, not to the image endpoint.
         assert calls[-1][1].endswith("/api/drafts/d1/rewrite")
 
     def test_each_draft_uses_its_own_prompt(self, monkeypatch):

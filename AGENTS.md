@@ -189,7 +189,8 @@ entirely, leaving approval as the only publish path.**
   yields literal cloud-and-arrow flowcharts and people), and neither the palette
   nor the subject line may prescribe a medium (the per-post treatment does).
 - **The rewriter can be triggered from the UI, but the app never runs it.** The
-  **Rewrite with Command Code** button on `/review/{id}` only *marks* the draft
+  **Rewrite with Command Code** and **Rewrite in this voice** buttons on
+  `/review/{id}` only *mark* the draft
   (`Draft.rewrite_requested_at`, gated by `rewrite.enabled`); a host-side worker
   (`scripts/rewrite_worker.py`; systemd unit in `deploy/`) polls
   `GET /api/rewrite-queue`, runs the CLI
@@ -204,7 +205,17 @@ entirely, leaving approval as the only publish path.**
 - **A request carries its kind: `Draft.rewrite_mode`.** One pending request per
   draft, one flag plus one kind — so "a caption rewrite and an image rewrite are
   both pending" cannot exist — and the worker tells them apart from the queue
-  payload. `caption` is the button above (the whole rewrite). `image` is
+  payload. `caption` is the button above (the whole rewrite, the agent picking the
+  register). `caption-voice` is **Rewrite in this voice** on `/review/{id}`
+  (`POST /review/{id}/request-voice-rewrite`): the *same* full rewrite, except the
+  register is not the agent's to choose. That button **submits the compose form**
+  (unlike `caption`, whose field-less form carries no edits), because the Voice
+  select *is* the request — `web.compose_edits` saves the pick first,
+  `build_prompt(..., voice_locked=True)` names that key in the contract and forbids
+  another, and `draft_pipeline.receive_rewrite` **re-asserts it on the way back in**
+  instead of taking the run's word for it, exactly as `receive_image_prompt` refuses
+  a style from the body: the pick is the operator's. `request_voice_rewrite` resolves
+  the key first so the lock always names a register that exists. `image` is
   **Regenerate image prompt** on `/review/{id}`
   (`POST /review/{id}/request-image-prompt`): the caption is fine and the
   *picture* is not, so the worker runs a much smaller task

@@ -746,6 +746,8 @@ class TestComposeToolGroups:
             rewrite_enabled=True,
             image_generated=True,
             scheduling=True,
+            voices=["technical", "funny"],
+            default_voice="technical",
             **kwargs,
         )
 
@@ -763,6 +765,7 @@ class TestComposeToolGroups:
         assert "/review/p/image" not in bar
         assert "/review/p/restore-image" not in bar
         assert "/review/p/request-rewrite" not in bar
+        assert "/review/p/request-voice-rewrite" not in bar
         assert "/review/p/request-image-prompt" not in bar
 
     def test_image_tools_are_grouped_in_the_composer(self):
@@ -777,7 +780,7 @@ class TestComposeToolGroups:
         # In the Compose panel, above the bar.
         assert out.index('aria-label="Image tools"') < out.index('<div class="action-bar">')
 
-    def test_the_rewrite_tool_is_grouped_in_the_composer(self):
+    def test_the_rewrite_tools_are_grouped_in_the_composer(self):
         out = self._out()
         group = out[
             out.index('aria-label="Rewrite caption"') : out.index('<div class="action-bar">')
@@ -785,6 +788,8 @@ class TestComposeToolGroups:
         assert '<span class="toolgroup-label">Rewrite caption</span>' in group
         assert 'action="/review/p/request-rewrite"' in group
         assert "Rewrite with Command Code" in group
+        assert 'formaction="/review/p/request-voice-rewrite"' in group
+        assert "Rewrite in this voice" in group
 
     def test_no_tool_groups_without_any_tool(self):
         out = render_draft_html(Draft(id="p", title="T", caption="Hi", state="ai_draft"))
@@ -895,6 +900,125 @@ class TestRewriteButton:
             generated_at=GENERATED,
         )
         assert "Rewrite with Command Code" not in out
+
+
+class TestVoiceRewriteButton:
+    """The voice-locked rewrite: "Rewrite in this voice", beside the auto-pick one.
+
+    Rewrite with Command Code is deliberately its own field-less form; this one
+    submits the compose form, because the Voice select *is* the request — a
+    field-less button dropped the pick twice over, never saving it here and leaving
+    the worker to choose a register of its own.
+    """
+
+    def _out(self, draft=None, **kwargs):
+        return render_draft_html(
+            draft or Draft(id="p", title="T", state="extracted", voice="funny"),
+            rewrite_enabled=True,
+            voices=["technical", "funny"],
+            default_voice="technical",
+            generated_at=GENERATED,
+            **kwargs,
+        )
+
+    def test_offers_it_beside_rewrite_with_command_code(self):
+        out = self._out()
+        assert 'formaction="/review/p/request-voice-rewrite"' in out
+        assert "Rewrite in this voice" in out
+        assert "Rewrite with Command Code" in out  # the auto-pick twin stays
+
+    def test_it_carries_the_compose_form_holding_the_voice_picker(self):
+        out = self._out()
+        target = out.index("/review/p/request-voice-rewrite")
+        button = out[out.rindex("<button", 0, target) : out.index("</button>", target)]
+        assert 'form="publish-form"' in button
+        start = out.index('id="publish-form"')
+        assert 'name="voice"' in out[start : out.index("</form>", start)]
+
+    def test_hidden_when_the_rewriter_is_disabled(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", state="extracted"),
+            voices=["technical", "funny"],
+            generated_at=GENERATED,
+        )
+        assert "request-voice-rewrite" not in out
+
+    def test_hidden_without_a_voice_menu(self):
+        # No registers to choose from: there is nothing to lock.
+        out = render_draft_html(
+            Draft(id="p", title="T", state="extracted"),
+            rewrite_enabled=True,
+            generated_at=GENERATED,
+        )
+        assert "request-voice-rewrite" not in out
+
+    def test_no_button_for_an_approved_draft(self):
+        out = self._out(Draft(id="p", state="approved", caption="c", voice="funny"))
+        assert "request-voice-rewrite" not in out
+
+    def test_a_pending_caption_rewrite_gives_way_to_cancel(self):
+        draft = Draft(
+            id="p",
+            state="ai_draft",
+            caption="c",
+            voice="funny",
+            rewrite_requested_at="2026-09-10T08:00:00+00:00",
+            rewrite_mode="caption-voice",
+        )
+        out = self._out(draft)
+        assert "Cancel rewrite" in out
+        assert "request-voice-rewrite" not in out
+
+    def test_a_pending_prompt_request_still_offers_it(self):
+        # An open prompt-only request does not block a full rewrite — that brings
+        # its own image prompt and supersedes it — so the pick can be re-asked.
+        draft = Draft(
+            id="p",
+            state="ai_draft",
+            caption="c",
+            voice="funny",
+            rewrite_requested_at="2026-09-10T08:00:00+00:00",
+            rewrite_mode="image",
+        )
+        out = self._out(draft)
+        assert "Rewrite caption instead" in out
+        assert "request-voice-rewrite" in out
+
+    def test_the_pending_notice_names_the_voice(self):
+        draft = Draft(
+            id="p",
+            state="ai_draft",
+            caption="c",
+            voice="funny",
+            rewrite_requested_at="2026-09-10T08:00:00+00:00",
+            rewrite_mode="caption-voice",
+        )
+        out = self._out(draft)
+        assert 'id="rewrite-job"' in out  # the poll script reloads on this id
+        assert "Rewriter requested in voice “funny”" in out
+        assert "New image prompt requested" not in out
+
+    def test_the_generic_hint_only_names_the_button_that_is_there(self):
+        # The fallback hint (no per-voice paragraph configured) points the operator
+        # at the control that acts on the pick. An approved draft has no such
+        # control, and a hint naming a missing button is worse than a plain one.
+        offered = self._out(Draft(id="p", title="T", state="ai_draft", voice="funny"))
+        assert "then “Rewrite in this voice”" in offered
+        approved = self._out(Draft(id="p", state="approved", caption="c", voice="funny"))
+        assert "then “Rewrite in this voice”" not in approved
+        assert 'id="voice_hint"' in approved  # the select itself is still there
+
+    def test_the_notice_escapes_a_hand_edited_voice(self):
+        draft = Draft(
+            id="p",
+            state="ai_draft",
+            caption="c",
+            voice="<b>funny</b>",
+            rewrite_requested_at="2026-09-10T08:00:00+00:00",
+            rewrite_mode="caption-voice",
+        )
+        out = self._out(draft)
+        assert "&lt;b&gt;funny&lt;/b&gt;" in out
 
 
 class TestImagePromptButton:

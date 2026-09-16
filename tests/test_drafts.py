@@ -12,6 +12,7 @@ from social_bot.drafts import (
     POSTED,
     REJECTED,
     REWRITE_CAPTION,
+    REWRITE_CAPTION_VOICE,
     REWRITE_IMAGE,
     Draft,
     append_audit,
@@ -117,6 +118,24 @@ class TestImagePromptRewrite:
             _draft(rewrite_requested_at=stamp, rewrite_mode=REWRITE_IMAGE).rewrite_kind()
             == REWRITE_IMAGE
         )
+
+    def test_rewrite_kind_reports_a_voice_locked_caption_rewrite(self):
+        # Membership in REWRITE_MODES is what keeps this from being normalized to
+        # REWRITE_CAPTION — which would read as the auto-pick button everywhere.
+        stamp = "2026-09-10T08:00:00+00:00"
+        assert (
+            _draft(rewrite_requested_at=stamp, rewrite_mode=REWRITE_CAPTION_VOICE).rewrite_kind()
+            == REWRITE_CAPTION_VOICE
+        )
+
+    def test_apply_image_prompt_leaves_a_pending_voice_rewrite_alone(self):
+        draft = _draft(
+            rewrite_requested_at="2026-09-10T08:00:00+00:00",
+            rewrite_mode=REWRITE_CAPTION_VOICE,
+        )
+        draft.apply_image_prompt(image_prompt="x")
+        assert draft.rewrite_requested_at == "2026-09-10T08:00:00+00:00"
+        assert draft.rewrite_kind() == REWRITE_CAPTION_VOICE
 
     def test_re_imaging_is_wider_than_a_caption_rewrite(self):
         approved = _draft(state=APPROVED)

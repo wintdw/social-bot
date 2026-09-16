@@ -19,6 +19,7 @@ from social_bot.drafts import (
     POSTED,
     REJECTED,
     REWRITE_CAPTION,
+    REWRITE_CAPTION_VOICE,
     REWRITE_IMAGE,
     Draft,
 )
@@ -2247,6 +2248,67 @@ class TestRewriteRequests:
         assert draft.rewrite_requested_at == ""
         assert draft.rewrite_error == ""
         assert pipeline.rewrite_queue(cfg) == []
+
+
+class TestVoiceRewriteRequest:
+    """The voice-locked rewrite: the same task, in the register the operator picked.
+
+    The pick *is* the request: it reaches the pipeline from the compose form, the
+    worker's prompt names that one key, and this side re-asserts it when the result
+    lands — so a run that chose a register of its own cannot relabel the post.
+    """
+
+    def test_request_marks_it_as_a_voice_locked_rewrite(self, tmp_path):
+        cfg = _set_voices(_seed_draft(tmp_path))
+        draft = pipeline.request_voice_rewrite(cfg, "post-one")
+        assert draft.rewrite_requested_at
+        assert draft.rewrite_kind() == REWRITE_CAPTION_VOICE
+        assert draft.rewrite_error == ""
+        assert [d.id for d in pipeline.rewrite_queue(cfg)] == ["post-one"]
+
+    def test_request_resolves_the_register_the_lock_has_to_hold(self, tmp_path):
+        # Nothing picked yet: the lock still has to name a register that exists.
+        cfg = _set_voices(_seed_draft(tmp_path))
+        assert pipeline.request_voice_rewrite(cfg, "post-one").voice == "technical"
+
+    def test_request_keeps_the_voice_saved_with_it(self, tmp_path):
+        cfg = _set_voices(_seed_draft(tmp_path))
+        pipeline.edit_draft(cfg, "post-one", voice="funny")  # what the compose form sends
+        assert pipeline.request_voice_rewrite(cfg, "post-one").voice == "funny"
+
+    def test_request_rejects_an_approved_draft(self, tmp_path):
+        cfg = _set_voices(_seed_draft(tmp_path, state=APPROVED))
+        with pytest.raises(ValueError, match="cannot be rewritten"):
+            pipeline.request_voice_rewrite(cfg, "post-one")
+
+    def test_a_landed_rewrite_keeps_the_operators_voice(self, tmp_path):
+        cfg = _set_voices(_seed_draft(tmp_path))
+        pipeline.edit_draft(cfg, "post-one", voice="funny")
+        pipeline.request_voice_rewrite(cfg, "post-one")
+        # The run answered with a different register; the operator's pick wins.
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "Một caption.", "voice": "technical"}
+        )
+        assert draft.voice == "funny"
+        assert draft.rewrite_requested_at == ""
+
+    def test_a_plain_rewrite_still_takes_the_agents_voice(self, tmp_path):
+        cfg = _set_voices(_seed_draft(tmp_path))
+        pipeline.edit_draft(cfg, "post-one", voice="funny")
+        pipeline.request_rewrite(cfg, "post-one")
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "Một caption.", "voice": "technical"}
+        )
+        assert draft.voice == "technical"
+
+    def test_a_manual_rewrite_is_never_locked(self, tmp_path):
+        # The by-hand path: no request was ever made, so there is nothing to hold.
+        cfg = _set_voices(_seed_draft(tmp_path))
+        pipeline.edit_draft(cfg, "post-one", voice="funny")
+        draft = pipeline.receive_rewrite(
+            cfg, "post-one", {"caption": "Một caption.", "voice": "technical"}
+        )
+        assert draft.voice == "technical"
 
 
 class TestImagePromptRequest:

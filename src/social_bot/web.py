@@ -1579,6 +1579,43 @@ def create_app(
             f"{target}?message={urllib.parse.quote(text)}&kind={kind}", status_code=303
         )
 
+    @app.post("/review/{draft_id}/request-voice-rewrite")
+    async def review_request_voice_rewrite(draft_id: str, request: Request):
+        """Mark a draft for a rewrite *in the voice chosen on this page*.
+
+        The "Rewrite in this voice" action: the same full rewrite as
+        /request-rewrite, except the register is the operator's pick rather than the
+        agent's. It submits the compose form (like Regenerate image and Regenerate
+        image prompt), so the Voice select is saved with the request — a field-less
+        button dropped the pick twice over, once here and once at the worker, which
+        then chose a register of its own. The prompt names the key and forbids
+        another, and ``receive_rewrite`` re-asserts it when the result lands. Like
+        every rewriter request this only marks the draft: it never rewrites, approves,
+        or posts.
+        """
+        target = f"/review/{urllib.parse.quote(draft_id)}"
+        if state["shutting_down"]:
+            text, kind = "Shutting down — try again shortly.", "warning"
+        elif not rewrite_enabled:
+            text, kind = "The rewriter is disabled (rewrite.enabled).", "error"
+        else:
+            form = await request.form()
+            edits = compose_edits(form)
+            try:
+                if edits:
+                    await asyncio.to_thread(pipeline.edit_draft, cfg, draft_id, **edits)
+                draft = await asyncio.to_thread(pipeline.request_voice_rewrite, cfg, draft_id)
+                text = (
+                    f"Rewrite requested in voice “{draft.voice}” — "
+                    "the Command Code worker will pick it up."
+                )
+                kind = "success"
+            except ValueError as exc:
+                text, kind = str(exc), "error"
+        return RedirectResponse(
+            f"{target}?message={urllib.parse.quote(text)}&kind={kind}", status_code=303
+        )
+
     @app.post("/review/{draft_id}/request-image-prompt")
     async def review_request_image_prompt(draft_id: str, request: Request):
         """Mark a draft for a *prompt-only* rewrite by the host-side worker.

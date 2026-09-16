@@ -22,11 +22,13 @@ REJECTED = "rejected"
 STATES = (EXTRACTED, AI_DRAFT, APPROVED, POSTED, REJECTED)
 
 # What a pending rewriter request asks for (``Draft.rewrite_mode``): the whole
-# rewrite (caption + image prompt), or *only* a fresh image prompt for a post
-# whose caption is already settled — often already approved and queued.
+# rewrite (caption + image prompt), the same rewrite *in a voice the operator
+# picked* instead of one the agent chooses, or *only* a fresh image prompt for a
+# post whose caption is already settled — often already approved and queued.
 REWRITE_CAPTION = "caption"
+REWRITE_CAPTION_VOICE = "caption-voice"
 REWRITE_IMAGE = "image"
-REWRITE_MODES = (REWRITE_CAPTION, REWRITE_IMAGE)
+REWRITE_MODES = (REWRITE_CAPTION, REWRITE_CAPTION_VOICE, REWRITE_IMAGE)
 
 # States a draft can be published from (an explicit human click implies approval).
 _PUBLISHABLE = (AI_DRAFT, APPROVED)
@@ -101,19 +103,22 @@ class Draft:
     # The voice/register key (publish.voices), chosen per post by the rewriter by
     # content — like the masthead and image_style (DNA §3). Empty or unknown falls
     # back to publish.default_voice when the API delivers the voice menu.
-    # Overridable on /review/{id}.
+    # Overridable on /review/{id}, and the pick can be *locked* for one rewrite by
+    # "Rewrite in this voice" (REWRITE_CAPTION_VOICE): the agent then writes in this
+    # register instead of choosing one of its own.
     voice: str = ""
-    # A human asked the rewriter worker to rewrite this draft (the "Rewrite with
-    # Command Code" button on /review/{id}). An ISO timestamp while the request
-    # is open; the whole thing is the host-side worker's queue. Cleared when a
-    # rewrite lands (apply_rewrite) or the request is cancelled. `rewrite_error`
-    # carries the worker's last failure, so the operator can see why nothing
-    # came back instead of a request that waits forever.
+    # A human asked the rewriter worker to rewrite this draft ("Rewrite with
+    # Command Code" or "Rewrite in this voice" on /review/{id}). An ISO timestamp
+    # while the request is open; the whole thing is the host-side worker's queue.
+    # Cleared when a rewrite lands (apply_rewrite) or the request is cancelled.
+    # `rewrite_error` carries the worker's last failure, so the operator can see why
+    # nothing came back instead of a request that waits forever.
     rewrite_requested_at: str = ""
     rewrite_error: str = ""
-    # What that open request asks for (REWRITE_CAPTION / REWRITE_IMAGE); empty
-    # when nothing is pending. One flag + one kind rather than a flag per kind, so
-    # "a caption rewrite and an image rewrite are both pending" cannot exist.
+    # What that open request asks for (REWRITE_CAPTION / REWRITE_CAPTION_VOICE /
+    # REWRITE_IMAGE); empty when nothing is pending. One flag + one kind rather than
+    # a flag per kind, so "a caption rewrite and an image rewrite are both pending"
+    # cannot exist.
     rewrite_mode: str = ""
     # Advisory AI-tell warnings from caption_lint, written at rewrite/edit time
     # and shown on /review/{id}. Never blocks a rewrite or a post; empty when the

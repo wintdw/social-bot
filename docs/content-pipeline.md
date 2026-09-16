@@ -115,7 +115,9 @@ end of the queue.
   register the caption was actually rewritten in is labelled **`<key> (current)`**
   (and is the default selection), so any other option reads as the next one. The
   whole menu (brief + samples) rides along
-  as `GET /api/drafts` `voices`.
+  as `GET /api/drafts` `voices`. Overriding it and pressing **Rewrite in this
+  voice** (§2a) is what makes the pick the *instruction* rather than a note: the
+  other rewrite button lets the rewriter choose.
 - `image_gen.styles` (config.yaml) is the same pattern for the image's **visual
   treatment**: a menu of `key → docs/image-styles/<key>.md`, of which the
   rewriter picks one per post by content and tone (DNA §9.2). The key is stored
@@ -161,8 +163,20 @@ end of the queue.
   `POST /api/drafts/{id}/rewrite-error`, which stores `Draft.rewrite_error` and
   closes the request, so the page shows why nothing came back instead of a request
   that waits forever.
-- **Two kinds of request ride that one queue, told apart by `Draft.rewrite_mode`.**
-  `caption` is the button above — the whole rewrite. `image` is **Regenerate
+- **Three kinds of request ride that one queue, told apart by `Draft.rewrite_mode`.**
+  `caption` is the button above — the whole rewrite, the agent choosing the
+  register. `caption-voice` is **Rewrite in this voice**, beside it: the same full
+  rewrite with the register pinned to the one picked in the compose form's Voice
+  select, for when you want the same idea in a specific voice instead of the one
+  the rewriter judges. That button **submits the compose form** (like the two image
+  tools, and unlike `caption`'s field-less form), so the pick is saved with the
+  request — it used to be dropped here *and* at the worker, which then chose a
+  register of its own. `rewrite_worker.build_prompt(..., voice_locked=True)` names
+  that key in the output contract and adds a hard rule against substituting
+  another, and `draft_pipeline.receive_rewrite` keeps the draft's own voice when
+  the pending request was this kind, so a run that ignored the instruction cannot
+  relabel the post. The DNA, the voice menu and the mastheads all ride along as
+  usual. `image` is **Regenerate
   image prompt**: the caption is settled (often already approved) and only the
   picture is wrong, so the worker runs a much smaller task
   (`rewrite_worker.build_image_prompt` — the treatment briefs, the recent images,
@@ -298,6 +312,9 @@ end of the queue.
   posting) and **Post now** (publish immediately) always; **Reject**. A draft
   whose image came from `image_gen` also offers **Restore source image**, which
   swaps the source post's own picture back in and leaves the caption alone.
+  With `rewrite.enabled` on, `extracted`/`ai_draft` drafts also offer the two
+  rewriter buttons — **Rewrite with Command Code** (the agent picks the voice) and
+  **Rewrite in this voice** (the Voice select above is the instruction) — see §2a.
   When `publish.post_at` is non-empty, **Approve & schedule** also appears — it
   saves the caption edits and queues the draft as `approved` for the next slot.
   An already-`approved` draft shows "waiting for the next slot" instead, and
@@ -434,7 +451,8 @@ end of the queue.
 | POST | `/review/{id}/restore-image` | Put the source post's own image back, replacing a generated one (reads the source page once when the draft has no stored original). |
 | POST | `/review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (`rewrite.enabled`); never rewrites itself. |
 | POST | `/review/{id}/request-image-prompt` | Mark the draft for a *prompt-only* rewrite: a fresh `image_prompt`/`image_style` from the worker, then a re-render. Allowed on an approved draft; never rewrites itself. |
-| POST | `/review/{id}/cancel-rewrite` | Drop a pending rewrite request (either kind). |
+| POST | `/review/{id}/request-voice-rewrite` | Mark the draft for a rewrite **in the voice picked on this page**: the compose form is saved first, so the Voice select reaches the worker and is re-asserted on the result. Same gate as `/request-rewrite`; never rewrites itself. |
+| POST | `/review/{id}/cancel-rewrite` | Drop a pending rewrite request (any kind). |
 | POST | `/queue/{id}/move` | Move an approved draft in the post queue (`direction=up\|down\|top\|bottom`, plus a `next` return path — the queue page sends `/queue#post-queue`); never posts. |
 | POST | `/queue/order` | Persist a drag-and-drop reorder: JSON `{"ids": [...]}` (a subset is fine), returns `{"ok": true, "order": [...]}`. |
 | POST | `/queue/reset` | Clear every manual position, restoring the default oldest-first order. |
@@ -442,7 +460,7 @@ end of the queue.
 | POST | `/api/drafts/{id}/rewrite` | Store the rewrite. |
 | POST | `/api/drafts/{id}/image-prompt` | Store a prompt-only rewrite (`image_prompt`, `image_style`) and re-render the image with `overwrite`; the caption and the draft's state are untouched. |
 | POST | `/api/drafts/{id}/image` | Generate an image for one draft (JSON), for the rewriter/operator. |
-| GET | `/api/rewrite-queue` | The drafts a human asked the rewriter for, plus the brand context (DNA, voices, mastheads, image styles **and their briefs**, `recent` captions, `recent_images`) — polled by the host-side rewriter worker. Each draft carries `rewrite_mode` (`caption` or `image`), which decides the worker's prompt and the endpoint it posts back to. |
+| GET | `/api/rewrite-queue` | The drafts a human asked the rewriter for, plus the brand context (DNA, voices, mastheads, image styles **and their briefs**, `recent` captions, `recent_images`) — polled by the host-side rewriter worker. Each draft carries `rewrite_mode` (`caption`, `caption-voice` or `image`), which decides the worker's prompt and the endpoint it posts back to. |
 | POST | `/api/drafts/{id}/rewrite-error` | Record the rewriter worker's failure and close the request; shown on `/review/{id}`. |
 
 ## Extending

@@ -11,7 +11,7 @@ falling back to the source's own title while the draft is still unwritten. The
 detail page reads as a production sheet — image hero, editable caption, a live
 Facebook-style preview, a pipeline stepper, and one clearly primary action. Its
 secondary controls are grouped in the Compose panel under the fields they act on
-(the image tools, then the caption rewrite), so the sticky action bar carries only
+(the image tools, then the caption rewrites), so the sticky action bar carries only
 the terminal actions that move the draft: post, approve & schedule, save, reject.
 """
 
@@ -23,7 +23,7 @@ import urllib.parse
 
 from .caption import display_title, leading_masthead
 from .destinations import label_for, labels_for
-from .drafts import REWRITE_IMAGE, Draft, parse_when
+from .drafts import REWRITE_CAPTION_VOICE, REWRITE_IMAGE, Draft, parse_when
 from .ui import BRAND_EYEBROW, badge, fmt_when, layout
 
 # Human labels for the status filter chips (the badge shows the raw state).
@@ -80,10 +80,10 @@ _DETAIL_SCRIPT = """<script>
     if (form.dataset.submitting === '1') { event.preventDefault(); return; }
     var button = event.submitter;
     // What a submit *does* is read off where it goes, not off a list of button
-    // names: the compose tools (Regenerate image / Write image prompt) and Save
-    // each override the form's action with formaction, so only a submit of the
-    // form's own action publishes — and only that one asks for the posting
-    // confirmation. A submit with no button (Enter in a field) counts as a post.
+    // names: the compose tools (Regenerate image / Write image prompt / Rewrite in
+    // this voice) and Save each override the form's action with formaction, so only
+    // a submit of the form's own action publishes — and only that one asks for the
+    // posting confirmation. A submit with no button (Enter in a field) counts as a post.
     var target = (button && button.getAttribute('formaction')) || form.getAttribute('action');
     var posts = target === form.getAttribute('action');
     var isApprove = !!button && button.name === 'approve';
@@ -618,12 +618,19 @@ def render_draft_html(
     if rewrite_enabled and draft.can_request_image_prompt():
         kind = draft.rewrite_kind()
         if kind:
-            pending = (
-                "Writing a new image prompt — render it with “Regenerate image” when it lands."
-                if kind == REWRITE_IMAGE
-                else "This page refreshes when a rewrite lands."
-            )
-            what = "New image prompt requested" if kind == REWRITE_IMAGE else "Rewriter requested"
+            if kind == REWRITE_IMAGE:
+                what = "New image prompt requested"
+                pending = (
+                    "Writing a new image prompt — render it with “Regenerate image” when it lands."
+                )
+            elif kind == REWRITE_CAPTION_VOICE:
+                # Say *which* of the two caption buttons is running: the difference
+                # between them is the one thing the operator wants to see here.
+                what = html.escape(f"Rewriter requested in voice “{draft.voice}”")
+                pending = "This page refreshes when a rewrite lands."
+            else:
+                what = "Rewriter requested"
+                pending = "This page refreshes when a rewrite lands."
             rewrite_note = (
                 '<div class="notice" id="rewrite-job" role="status" '
                 f'data-draft-id="{html.escape(draft.id)}">'
@@ -681,6 +688,16 @@ def render_draft_html(
     # like the masthead; an operator can override it here. The hint under it is
     # the chosen voice file's own "when to use" line, so the page says what each
     # register is for instead of keeping a second copy of the docs.
+    #
+    # Whether the override can be *acted on* right now ("Rewrite in this voice"),
+    # computed once here and reused by the button below: the generic hint names that
+    # control, so it must not point at one the draft's state does not offer.
+    voice_locked_available = bool(
+        rewrite_enabled
+        and voices
+        and draft.can_receive_rewrite()
+        and not (draft.rewrite_requested_at and draft.rewrite_kind() != REWRITE_IMAGE)
+    )
     voice_field = ""
     if voices:
         hints = voice_hints or {}
@@ -699,7 +716,9 @@ def render_draft_html(
         )
         hint = hints.get(chosen) or (
             "Voice (register) for this caption, chosen per post by the rewriter. "
-            "Override it to rewrite the same idea in another voice."
+            "Override it, then “Rewrite in this voice” to redraft the same idea in it."
+            if voice_locked_available
+            else "Voice (register) for this caption, chosen per post by the rewriter."
         )
         voice_field = (
             '<div class="field"><label for="voice">Voice</label>'
@@ -778,6 +797,20 @@ def render_draft_html(
                 '<button type="submit" class="btn">Rewrite with Command Code</button>'
                 "</form>"
             )
+    # "Rewrite in this voice": the same full rewrite, except the register is the one
+    # picked in the Voice field above instead of the agent's own choice. Unlike the
+    # button before it, this one *submits the compose form* — the pick is the whole
+    # request, and a field-less form dropped it twice over: here (never saved) and at
+    # the worker (which then chose a register of its own). Offered wherever a full
+    # rewrite can be asked for, which is exactly where the other one is — while a
+    # caption rewrite is already pending both give way to Cancel.
+    voice_rewrite_button = ""
+    if voice_locked_available:
+        voice_rewrite_button = (
+            f'<button type="submit" form="publish-form" '
+            f'formaction="{action}/request-voice-rewrite" class="btn">'
+            "Rewrite in this voice</button>"
+        )
     # "Regenerate image prompt": the other side of Regenerate image — that one
     # renders exactly the prompt and style typed above, this one asks Command Code
     # to write a new *subject* for the style picked above, and stops there. The
@@ -839,11 +872,11 @@ def render_draft_html(
             '<span class="toolgroup-label">Image</span>'
             f'<div class="cmdbar">{image_tools}</div></div>'
         )
-    if rewrite_button:
+    if rewrite_button or voice_rewrite_button:
         tool_groups += (
             '<div class="toolgroup" role="group" aria-label="Rewrite caption">'
             '<span class="toolgroup-label">Rewrite caption</span>'
-            f'<div class="cmdbar">{rewrite_button}</div></div>'
+            f'<div class="cmdbar">{rewrite_button}{voice_rewrite_button}</div></div>'
         )
 
     masthead = leading_masthead(draft.caption)
