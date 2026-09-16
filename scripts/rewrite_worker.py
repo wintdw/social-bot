@@ -1,12 +1,24 @@
 """Run the Command Code rewriter for drafts requested from /review.
 
-The operator app never runs an AI agent itself: the "Rewrite with Command Code"
-button on /review/{id} only *marks* the draft. This host-side worker polls
-``GET /api/rewrite-queue``, runs the Command Code CLI headlessly for each request
-(``commandcode -p``), and posts the caption back to
-``POST /api/drafts/{id}/rewrite`` — which clears the request. A failure is posted
-to ``POST /api/drafts/{id}/rewrite-error`` so the draft page can show it, instead
-of the request waiting forever.
+The operator app never runs an AI agent itself: the buttons on /review/{id} only
+*mark* the draft. This host-side worker polls ``GET /api/rewrite-queue``, runs the
+Command Code CLI headlessly for each request (``commandcode -p``), and posts the
+result back — which clears the request. A failure is posted to
+``POST /api/drafts/{id}/rewrite-error`` so the draft page can show it, instead of
+the request waiting forever.
+
+Two kinds of request ride that one queue, told apart by the draft's
+``rewrite_mode``:
+
+``caption``
+    "Rewrite with Command Code" — the whole rewrite (``build_prompt``, the DNA and
+    voice menu included), posted back to ``POST /api/drafts/{id}/rewrite``.
+``image``
+    "Regenerate image prompt" — the caption is already settled, only a fresh
+    ``image_prompt`` is wanted (``build_image_prompt``, a much smaller task), posted
+    back to ``POST /api/drafts/{id}/image-prompt``, which stores it and leaves the
+    caption, the operator's chosen ``image_style`` and the draft's state alone.
+    Nothing is rendered: the operator presses "Regenerate image" when it reads right.
 
 **Why a worker and not the app.** Command Code and its auth live on the host (the
 container image is python-slim with no Node), and keeping the agent outside the
@@ -41,6 +53,7 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from social_bot.config import load_config  # noqa: E402
 from social_bot.draft_pipeline import rewrite_config  # noqa: E402
+from social_bot.drafts import REWRITE_IMAGE  # noqa: E402
 
 
 class WorkerError(Exception):
@@ -86,6 +99,32 @@ def _bullet_list(values) -> str:
     return ", ".join(str(value) for value in (values or [])) or "(none configured)"
 
 
+def _style_block(payload: dict) -> str:
+    """Every configured treatment's own brief, as prompt headings.
+
+    The briefs, not just their key names: a prompt has to *serve* the style it
+    picks, and a name alone cannot say what that style draws.
+    """
+    briefs = payload.get("image_style_briefs") or {}
+    return (
+        "\n\n".join(f"### image_style: {key}\n{text}" for key, text in briefs.items() if text)
+        or "(no treatment briefs configured — follow the DNA §9.2 table)"
+    )
+
+
+def _recent_images_block(payload: dict) -> str:
+    """The image prompts already written, newest first — what not to repeat."""
+    recent = payload.get("recent_images") or []
+    return (
+        "\n".join(
+            f"- [{item.get('image_style') or 'default'}] {item.get('image_prompt')}"
+            for item in recent
+            if item.get("image_prompt")
+        )
+        or "(none)"
+    )
+
+
 def build_prompt(payload: dict, draft: dict) -> str:
     """The single self-contained task handed to one headless Command Code run.
 
@@ -108,6 +147,8 @@ def build_prompt(payload: dict, draft: dict) -> str:
         or "(none)"
     )
     mastheads = payload.get("mastheads") or {}
+    style_block = _style_block(payload)
+    recent_images_block = _recent_images_block(payload)
     return (
         "You are the Atento rewriter. Rewrite exactly ONE draft into a Facebook "
         "Page caption, following the brand brief and the chosen voice below.\n\n"
@@ -123,7 +164,9 @@ def build_prompt(payload: dict, draft: dict) -> str:
         '  "commentary":   2-4 sentences for the reviewer: voice, format/hook, '
         "drama level, anything to confirm.\n"
         '  "image_prompt": English; ONE concrete visual concept for this post, '
-        "also its alt text.\n"
+        "written to serve the image_style you chose — read that style's brief "
+        "below (it says what the style draws, and `diagram` says how to name its "
+        "labels). Also the image's alt text.\n"
         '  "image_style":  exactly one of: '
         f"{_bullet_list(payload.get('image_styles'))}\n"
         '  "voice":        exactly one of: '
@@ -134,14 +177,62 @@ def build_prompt(payload: dict, draft: dict) -> str:
         f"{mastheads.get('default') or 'none'}).\n"
         "- Write in ONE voice only; do not mix registers.\n"
         "- Do NOT imitate the recent captions' openers, closers, or vocabulary.\n"
+        "- Do NOT reuse a subject or a composition from the recent images — pick "
+        "something different for THIS post's idea.\n"
         "- No hype, no invented facts, no engagement bait, no domain in the caption.\n\n"
         "=== RECENT CAPTIONS (avoid repeating) ===\n"
         f"{recent_block}\n\n"
+        "=== RECENT IMAGES (avoid repeating these subjects) ===\n"
+        f"{recent_images_block}\n\n"
         "=== BRAND BRIEF (Atento DNA) ===\n"
         f"{payload.get('dna') or '(no DNA configured)'}\n\n"
         "=== VOICE MENU (pick one key) ===\n"
         f"{voice_block}\n\n"
+        "=== IMAGE STYLE BRIEFS (write the image_prompt to serve the one you pick) ===\n"
+        f"{style_block}\n\n"
         "=== DRAFT TO REWRITE ===\n"
+        f"{json.dumps(draft, ensure_ascii=False, indent=2)}\n"
+    )
+
+
+def build_image_prompt(payload: dict, draft: dict) -> str:
+    """The task for a *prompt-only* rewrite: a fresh image prompt, caption untouched.
+
+    Much smaller than ``build_prompt``: the caption is not being rewritten, so the
+    DNA, the voice menu and the masthead choices are all beside the point. What
+    matters is what the picture must be — the treatment briefs, the subjects
+    already used, and this post's own caption — which is exactly the pair the
+    caption rewrite was missing when it illustrated three posts the same way.
+
+    The treatment is **not** the agent's to pick here, unlike ``build_prompt``: the
+    operator chose it on /review/{id} and it is the post's own ``image_style``, so
+    the task is to write a subject that serves *that* brief. The result carries no
+    ``image_style`` at all — ``receive_image_prompt`` would ignore one — and asking
+    for it only invited the agent to overrule the pick.
+    """
+    return (
+        "You are the Atento image rewriter. Write a NEW image prompt for exactly ONE "
+        "post. Its caption is already written and approved: do not rewrite it, quote "
+        "it, or comment on it.\n\n"
+        "The image style is already chosen for this post — it is the `image_style` "
+        "field in the post below — so do NOT pick one. Write the prompt for that "
+        "style, serving its brief (it says what the style draws, and `diagram` says "
+        "how to name its labels).\n\n"
+        "Reply with ONLY a single JSON object — no prose, no markdown fence — with "
+        "exactly this one key:\n"
+        '  "image_prompt": English; ONE concrete visual concept for this post, '
+        "written to serve the post's image_style. Also the image's alt text.\n\n"
+        "Hard rules:\n"
+        "- Depict THIS post's idea as something you can see, not a paraphrase of the "
+        "caption.\n"
+        "- Serve the post's image_style brief; do not restate or contradict it, and "
+        "do not send an image_style of your own.\n"
+        "- Do NOT reuse a subject or a composition from the recent images below.\n\n"
+        "=== RECENT IMAGES (avoid repeating these subjects) ===\n"
+        f"{_recent_images_block(payload)}\n\n"
+        "=== IMAGE STYLE BRIEFS (write the image_prompt to serve the post's own) ===\n"
+        f"{_style_block(payload)}\n\n"
+        "=== POST (its image is being redone) ===\n"
         f"{json.dumps(draft, ensure_ascii=False, indent=2)}\n"
     )
 
@@ -239,15 +330,24 @@ def process_once(cfg: dict, *, draft_id: str = "", dry_run: bool = False) -> int
     done = 0
     for draft in drafts:
         ident = str(draft.get("id") or "")
-        prompt = build_prompt(payload, draft)
+        # Two kinds of request share this queue: a full rewrite, and a prompt-only
+        # one ("the caption is fine, the picture is not"), which is the same run
+        # with a smaller prompt and a different endpoint to post back to.
+        image_only = draft.get("rewrite_mode") == REWRITE_IMAGE
+        prompt = build_image_prompt(payload, draft) if image_only else build_prompt(payload, draft)
+        task = f"a new image prompt for {ident}" if image_only else ident
+        endpoint = "image-prompt" if image_only else "rewrite"
         if dry_run:
-            print(f"[rewriter] would rewrite {ident} ({len(prompt)} chars of prompt)")
+            print(f"[rewriter] would rewrite {task} ({len(prompt)} chars of prompt)")
             continue
-        print(f"[rewriter] rewriting {ident}…", flush=True)
+        print(f"[rewriter] rewriting {task}…", flush=True)
         try:
             rewrite = run_commandcode(settings, prompt)
-            _request_json(cfg, "POST", f"{base}/api/drafts/{ident}/rewrite", rewrite)
-            print(f"[rewriter] {ident}: rewrite posted", flush=True)
+            _request_json(cfg, "POST", f"{base}/api/drafts/{ident}/{endpoint}", rewrite)
+            print(
+                f"[rewriter] {ident}: {'image prompt' if image_only else 'rewrite'} posted",
+                flush=True,
+            )
             done += 1
         except WorkerError as exc:
             print(f"[rewriter] {ident} failed: {exc}", file=sys.stderr, flush=True)

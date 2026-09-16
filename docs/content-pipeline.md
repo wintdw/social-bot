@@ -29,14 +29,18 @@ draft goes out — it never approves anything itself.
 |---|---|
 | `extracted` | Scanned from a source; awaiting a rewrite. |
 | `ai_draft` | A rewrite has been stored; awaiting human review. |
-| `approved` | Human-approved. Queued for the next posting slot (`publish.post_at`) — or posted immediately if approved with "Post now". |
+| `approved` | Human-approved. Queued for the next posting slot (`publish.post_at`) — or posted immediately if approved with "Post now". Reversible with **Unapprove** until it posts. |
 | `posted` | Published; `post_id`/`permalink`/`posted_at` set and audited. |
 | `rejected` | Dismissed; not published. |
 
 Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approved
-→ posted` (`Draft.mark_posted`), `ai_draft → approved` (`Draft.approve`), any
+→ posted` (`Draft.mark_posted`), `ai_draft → approved` (`Draft.approve`),
+`approved → ai_draft` (`Draft.unapprove`), any
 `→ rejected` (`Draft.reject`).
 `can_receive_rewrite()` = `extracted|ai_draft`; `can_publish()` = `ai_draft|approved`.
+`unapprove()` refuses a draft that already has a public post (a send cannot be
+undone) and drops its manual queue position, so a later re-approval lands at the
+end of the queue.
 
 ## Steps and where they live
 
@@ -67,13 +71,23 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 - The agent calls `GET /api/drafts` (open drafts + `publish.dna_file` contents
   as `dna` + the **voice menu** `publish.voices` as `voices` (`{key: brief +
   samples}`, with `voice_choices` and `default_voice`) + the most recently
-  written captions as `recent`; paged — pass `limit`/`offset` and follow
+  written captions as `recent` + the **treatment briefs** as `image_style_briefs`
+  and the last few image prompts as `recent_images`; paged — pass
+  `limit`/`offset` and follow
   `next_offset`) and
   `POST /api/drafts/{id}/rewrite` with
   `{caption, hashtags, cta, commentary, image_prompt, image_style, voice}`.
 - `recent` (capped by `publish.recent_captions`, 0 = off) exists so the rewriter
   can see what it just wrote and not reopen the same way twice — the "mọi bài
   một màu" failure is invisible in one draft and obvious across several (DNA §12).
+- `recent_images` (capped by `publish.recent_images`, same idea) does that job for
+  the **image**: the last few `image_prompt`/`image_style` pairs, so a rewriter
+  can see it has illustrated the same object five posts running and pick another.
+  Nothing else tells it — which is why the DNA used to *mandate* "a different
+  metaphor per post" instead, a rule that fought any treatment which is not a
+  metaphor. `image_style_briefs` carries each configured treatment's text, so the
+  rewriter writes a prompt that serves the style it picked rather than guessing
+  from a key name.
 - **The caption is linted, advisory only** (`caption_lint.lint_caption`, alongside
   `receive_rewrite`/`edit_draft`). It names the AI-writing tells — a repeated
   hook/closer versus `recent`, a stock opener, the "không phải X mà là Y" engine,
@@ -107,9 +121,13 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   rewriter picks one per post by content and tone (DNA §9.2). The key is stored
   on the draft as `image_style`; `image_gen.default_style` is the fallback when
   the rewriter omits one. At prompt time (`draft_pipeline.image_style_text`) the
-  chosen treatment **leads** and the shared `style_file` floor (palette and
-  prohibitions only) follows, so the medium and composition vary per post while
-  the palette stays constant. A valid
+  chosen treatment **leads** and the shared `style_file` palette follows, so the
+  medium, the composition and what to avoid all vary per post while the palette
+  stays constant. That is the whole rule: a treatment file carries its own
+  prohibitions — people, lettering, the clichés — and nothing outside it forbids
+  anything, so no look can be fought by a rule written somewhere else. `diagram`
+  is the one treatment that writes: its boxes and arrows are labelled, which its
+  file states and the DNA §9.2 tells the rewriter how to feed. A valid
   key is kept, an unknown one falls back to the default — and it is
   **overridable on `/review/{id}`** before regenerating, where the select's hint
   is each style file's own opening paragraph (`draft_pipeline.image_style_hints`)
@@ -134,7 +152,8 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   **Rewrite with Command Code** button — but it only *marks* the draft
   (`Draft.rewrite_requested_at`); the app never runs the agent itself.
 - A host-side worker polls `GET /api/rewrite-queue` (the marked drafts plus the
-  DNA, the voice menu, the masthead/`image_style` choices, and `recent`), runs the
+  DNA, the voice menu, the masthead/`image_style` choices, the treatment briefs
+  themselves, `recent` captions and `recent_images`), runs the
   Command Code CLI headlessly per draft (`commandcode -p --output-format json
   --skip-onboarding --max-turns N`, with the whole brief in the prompt so the run
   needs no tools), parses the JSON from the final `result` frame, and POSTs it to
@@ -142,6 +161,23 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   `POST /api/drafts/{id}/rewrite-error`, which stores `Draft.rewrite_error` and
   closes the request, so the page shows why nothing came back instead of a request
   that waits forever.
+- **Two kinds of request ride that one queue, told apart by `Draft.rewrite_mode`.**
+  `caption` is the button above — the whole rewrite. `image` is **Regenerate
+  image prompt**: the caption is settled (often already approved) and only the
+  picture is wrong, so the worker runs a much smaller task
+  (`rewrite_worker.build_image_prompt` — the treatment briefs, the recent images,
+  and the post's own caption; no DNA, no voice menu, no mastheads) and posts **one
+  field, `image_prompt`** — the subject — to
+  `POST /api/drafts/{id}/image-prompt`. That stores it through
+  `Draft.apply_image_prompt` and **stops — the prompt is the whole delivery,
+  nothing is rendered**. The style is the operator's pick, saved from the compose
+  form with the request: the worker writes *for* it and never returns one of its
+  own (`receive_image_prompt` ignores `image_style`). The new prompt lands on
+  `/review/{id}` to be read (or edited), and **Regenerate image** is the separate
+  move that spends it on a picture; the caption and the draft's state are
+  untouched, so an approved post stays queued. One flag plus one kind means "a
+  caption rewrite and an image rewrite are both pending" cannot exist — the
+  operator's latest ask wins.
 - It runs on the **host**, not in the app: the CLI and its auth live there (the
   container image is python-slim with no Node), and headless runs need no
   `--yolo` — the rewriter only reads its prompt and prints JSON, so file writes
@@ -162,15 +198,25 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   concrete English visual concept for that post — and that is what gets
   illustrated. It is also the image's alt text (there is no separate Vietnamese
   alt), and it is **editable on `/review/{id}`** (saved with the caption), as is
-  the draft's `image_style` treatment. The style picker names the treatment the
-  current image was generated with: that option is labelled **`<key> (current)`**
-  (and is the default selection), so any other option reads as the next one. The
-  label is dropped while a regeneration is running, when the stored style is
-  already the new one but the image on screen is not.
+  the draft's `image_style` treatment. That pick is the operator's dial and it
+  governs **both** image buttons. The style picker names the treatment the current
+  image was generated with: that option is labelled **`<key> (current)`** (and is
+  the default selection), so any other option reads as the next one. The label is
+  dropped while a regeneration is running, when the stored style is already the
+  new one but the image on screen is not.
   **Regenerate image** submits the compose form to `/review/{id}/image`, so the
   edited prompt and style are saved and used for that generation (it also saves
   the caption/hashtags, like Save). The button only appears when
   `image_gen.enabled` is true.
+  **Regenerate image prompt** beside it is the other direction: instead of
+  rendering what the form says, it asks the worker (above) for a fresh prompt — and
+  stops there. The two are deliberately separate moves, so the new prompt can be
+  read (and edited) before **Regenerate image** spends it on a picture. It submits
+  the compose form too, so the style you picked is saved with the request and the
+  agent writes the subject *for* that treatment rather than choosing one of its own
+  (a field-less button dropped the pick, and the worker fell back to the draft's old
+  style). It is the path that repairs a draft whose prompt was written before the
+  current image rules.
 - `blog image` batches, and the **Regenerate image** button runs the provider
   call **in the background** (like the post-rewrite fill): the request returns
   at once and the page shows the job, instead of holding the connection open for
@@ -217,10 +263,12 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   keeps it for next time. Nothing to recover (no source URL, no image on the
   page, an unreachable page) returns a warning, never a broken page.
 - The prompt (`image_gen.build_prompt`) leads with the draft's chosen
-  `image_style` treatment (medium/composition — `docs/image-styles/<key>.md`),
-  then the `image_gen.style_file` shared brand floor (palette and prohibitions
-  only), then the subject (`image_prompt`, under a plain `Subject:` label) and
-  the hard negatives (no people, no text). `image_gen.base_url` selects the endpoint
+  `image_style` treatment (medium, composition and prohibitions —
+  `docs/image-styles/<key>.md`), then the `image_gen.style_file` shared palette,
+  then the subject (`image_prompt`, under a plain `Subject:` label). The builder
+  adds no prohibitions of its own: every one of them belongs to the treatment,
+  so a look is never fought by a rule written elsewhere.
+  `image_gen.base_url` selects the endpoint
   (`gen.pollinations.ai/image` — clean output, needs `api_key`;
   `image.pollinations.ai/prompt` — keyless but watermarked and `sana`-only).
 - A failure is recorded in the summary `errors` and the draft keeps its
@@ -251,8 +299,12 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
   whose image came from `image_gen` also offers **Restore source image**, which
   swaps the source post's own picture back in and leaves the caption alone.
   When `publish.post_at` is non-empty, **Approve & schedule** also appears — it
-  saves the caption edits and queues the draft as `approved` for the next slot
-  (an already-`approved` draft shows "waiting for the next slot" instead).
+  saves the caption edits and queues the draft as `approved` for the next slot.
+  An already-`approved` draft shows "waiting for the next slot" instead, and
+  offers **Unapprove**: it pulls the draft back to `ai_draft`, so the poster skips
+  it while it stays on `/review` for another pass. Unapprove is a bare state
+  change (it submits no compose fields), never posts, and is refused once any
+  destination has a public post.
 - `/queue` is the **Post queue**: the approved drafts in posting order, with the
   ordering controls (§4b) and a **Post approved now** button (`POST /publish/run`)
   to drain them on demand. `/publish` lists the audit log (what has actually been
@@ -361,7 +413,7 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | GET | `/` | Factory dashboard: controls, counts, scheduler state, cached feed. |
 | GET | `/queue` | Post queue: the approved drafts in posting order, with the reorder controls and the **Post approved now** button (when `publish.post_at` is set). |
 | GET | `/review` | Review queue list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters, `?q=<text>` title/excerpt search, and `?sort=oldest`; paged with `?page=<n>&per_page=<n>` (default 20, max 200). |
-| GET | `/review/{id}` | Review detail: editable caption, hashtags, and image prompt; Save / Post now / Reject, plus Approve & schedule when `publish.post_at` is set (+ Generate image when enabled, + Restore source image when the image came from the generator). |
+| GET | `/review/{id}` | Review detail: editable caption, hashtags, and image prompt; Save / Post now / Reject, plus Approve & schedule when `publish.post_at` is set (+ Unapprove on an approved draft, + Generate image when enabled, + Restore source image when the image came from the generator). |
 | GET | `/publish` | Publish audit log (public + private sends). |
 | GET | `/status` | Human-readable snapshot: token validity/expiry, schedules, sources. |
 | GET | `/drafts` | Redirect (307) to `/review` for old links. |
@@ -375,19 +427,22 @@ Transitions: `extracted → ai_draft` (`Draft.apply_rewrite`), `ai_draft|approve
 | POST | `/publish/pause` | Pause the posting scheduler — it skips its slots until resumed (JSON, or a 303 back to `/`); persisted across restarts. |
 | POST | `/publish/resume` | Resume the posting scheduler (JSON, or a 303 back to `/`). |
 | POST | `/review/{id}/save` | Save the compose edits (caption, hashtags, image prompt); never posts. |
+| POST | `/review/{id}/unapprove` | Pull an approved draft out of the post queue: back to `ai_draft`, so the poster skips it, while it stays on `/review`. The inverse of `approve=1`; never posts. |
 | POST | `/review/{id}/publish` | Publish (form; `dry_run=1` to preview). With `approve=1` it saves the edits and queues the draft as `approved` instead of posting. |
 | POST | `/review/{id}/reject` | Reject. |
 | POST | `/review/{id}/image` | Save the compose edits and regenerate the draft's image in the background (form; redirects back immediately; the page then shows the job). |
 | POST | `/review/{id}/restore-image` | Put the source post's own image back, replacing a generated one (reads the source page once when the draft has no stored original). |
 | POST | `/review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (`rewrite.enabled`); never rewrites itself. |
-| POST | `/review/{id}/cancel-rewrite` | Drop a pending rewrite request. |
+| POST | `/review/{id}/request-image-prompt` | Mark the draft for a *prompt-only* rewrite: a fresh `image_prompt`/`image_style` from the worker, then a re-render. Allowed on an approved draft; never rewrites itself. |
+| POST | `/review/{id}/cancel-rewrite` | Drop a pending rewrite request (either kind). |
 | POST | `/queue/{id}/move` | Move an approved draft in the post queue (`direction=up\|down\|top\|bottom`, plus a `next` return path — the queue page sends `/queue#post-queue`); never posts. |
 | POST | `/queue/order` | Persist a drag-and-drop reorder: JSON `{"ids": [...]}` (a subset is fine), returns `{"ok": true, "order": [...]}`. |
 | POST | `/queue/reset` | Clear every manual position, restoring the default oldest-first order. |
-| GET | `/api/drafts` | Open drafts + DNA (`dna`) + the voice menu (`voices`, `voice_choices`, `default_voice`) + `recent` captions, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
+| GET | `/api/drafts` | Open drafts + DNA (`dna`) + the voice menu (`voices`, `voice_choices`, `default_voice`) + `recent` captions + the image treatment briefs (`image_style_briefs`) + `recent_images` prompts, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
 | POST | `/api/drafts/{id}/rewrite` | Store the rewrite. |
+| POST | `/api/drafts/{id}/image-prompt` | Store a prompt-only rewrite (`image_prompt`, `image_style`) and re-render the image with `overwrite`; the caption and the draft's state are untouched. |
 | POST | `/api/drafts/{id}/image` | Generate an image for one draft (JSON), for the rewriter/operator. |
-| GET | `/api/rewrite-queue` | The drafts a human asked to rewrite, plus the brand context (DNA, voices, mastheads, image styles, `recent`) — polled by the host-side rewriter worker. |
+| GET | `/api/rewrite-queue` | The drafts a human asked the rewriter for, plus the brand context (DNA, voices, mastheads, image styles **and their briefs**, `recent` captions, `recent_images`) — polled by the host-side rewriter worker. Each draft carries `rewrite_mode` (`caption` or `image`), which decides the worker's prompt and the endpoint it posts back to. |
 | POST | `/api/drafts/{id}/rewrite-error` | Record the rewriter worker's failure and close the request; shown on `/review/{id}`. |
 
 ## Extending
@@ -423,11 +478,16 @@ voice. The DNA stays the structural contract (masthead, formats, hashtags/CTA,
 output JSON); a voice file only refines how one register sounds.
 
 **Changing the image look.** Edit `docs/atento-image-style.md` (the shared
-palette/prohibition floor prepended to every image prompt) and keep
+palette prepended to every image prompt) and keep
 `image_gen.style_file` pointed at it. The per-post **treatment** menu is
 `image_gen.styles` → `docs/image-styles/<key>.md` with `image_gen.default_style`;
-add, edit, or remove a treatment there (the DNA §9.2 table documents the menu for
-the rewriter). Swap the image endpoint/provider with `image_gen.base_url` +
+add, edit, or remove a treatment by writing its file and listing it there (the
+DNA §9.2 table documents the menu for the rewriter). A treatment's file owns
+everything else about its look — medium, composition, and what to avoid,
+including whether the image may carry lettering, as `diagram` does. Nothing
+outside the file forbids anything, so no config key or prompt rule has to be
+told about a new treatment.
+Swap the image endpoint/provider with `image_gen.base_url` +
 `image_gen.model`.
 
 **Changing what a draft stores.** Edit the `Draft` dataclass in `drafts.py`;

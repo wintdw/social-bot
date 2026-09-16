@@ -682,11 +682,113 @@ class TestRenderDraftHtml:
         assert 'name="approve"' in out
         assert "paused, so it sends when you resume" in out
 
+    def test_approved_draft_offers_unapprove(self):
+        out = render_draft_html(
+            Draft(id="p", title="T", caption="Hi", state="approved"),
+            scheduling=True,
+            next_post="2026-09-11 09:00",
+        )
+        assert 'action="/review/p/unapprove"' in out
+        assert "Unapprove" in out
+        assert "Unapprove pulls it from the queue" in out
+
+    def test_unapprove_is_offered_without_a_schedule_too(self):
+        # A draft left approved after the schedule was turned off still has to be
+        # pullable, so the control does not depend on `scheduling`.
+        out = render_draft_html(Draft(id="p", title="T", caption="Hi", state="approved"))
+        assert 'action="/review/p/unapprove"' in out
+        assert 'id="unapprove-form"' in out
+
+    def test_no_unapprove_before_approval(self):
+        for state in ("extracted", "ai_draft"):
+            out = render_draft_html(Draft(id="p", title="T", caption="Hi", state=state))
+            assert "/unapprove" not in out
+
+    def test_unapprove_carries_no_compose_fields(self):
+        # A state change, not a commit of the caption: it must not submit the
+        # publish form the way Approve & schedule does.
+        out = render_draft_html(
+            Draft(id="p", title="T", caption="Hi", state="approved"), scheduling=True
+        )
+        target = out.index('action="/review/p/unapprove"')
+        button = out[out.index("<button", target) : out.index("</button>", target)]
+        assert "form=" not in button
+
     def test_review_list_never_carries_post_approved_now(self):
         # The drain control lives on the Post queue tab now (test_dashboard_html).
         out = render_drafts_html([], generated_at=GENERATED)
         assert 'action="/publish/run"' not in out
         assert "Post approved now" not in out
+
+
+class TestComposeToolGroups:
+    """The secondary tools are grouped in Compose; the bar keeps the commits.
+
+    Every action on the detail page used to share one sticky bar, which stacked
+    up to nine controls and mixed "post this" with "regenerate the picture". The
+    compose-local tools now sit in the Compose panel, under the fields they act
+    on, so the bar carries only the terminal actions.
+    """
+
+    def _out(self, **kwargs):
+        draft = Draft(
+            id="p",
+            title="T",
+            caption="Body",
+            image="https://gen/x.jpg",
+            image_prompt="a chair",
+            state="ai_draft",
+            destinations=["facebook"],
+        )
+        return render_draft_html(
+            draft,
+            image_enabled=True,
+            rewrite_enabled=True,
+            image_generated=True,
+            scheduling=True,
+            **kwargs,
+        )
+
+    def _action_bar(self, out: str) -> str:
+        # The bar is rendered immediately before the human-gated footnote.
+        return out[out.index('<div class="action-bar">') : out.index("Publishing is human-gated")]
+
+    def test_the_action_bar_holds_only_the_terminal_actions(self):
+        bar = self._action_bar(self._out())
+        assert "Post publicly" in bar
+        assert "Approve &amp; schedule" in bar
+        assert ">Save</button>" in bar
+        assert "Reject" in bar
+        # None of the compose-local tools belong down here any more.
+        assert "/review/p/image" not in bar
+        assert "/review/p/restore-image" not in bar
+        assert "/review/p/request-rewrite" not in bar
+        assert "/review/p/request-image-prompt" not in bar
+
+    def test_image_tools_are_grouped_in_the_composer(self):
+        out = self._out()
+        group = out[
+            out.index('aria-label="Image tools"') : out.index('aria-label="Rewrite caption"')
+        ]
+        assert '<span class="toolgroup-label">Image</span>' in group
+        assert 'formaction="/review/p/image"' in group
+        assert 'formaction="/review/p/request-image-prompt"' in group
+        assert 'action="/review/p/restore-image"' in group
+        # In the Compose panel, above the bar.
+        assert out.index('aria-label="Image tools"') < out.index('<div class="action-bar">')
+
+    def test_the_rewrite_tool_is_grouped_in_the_composer(self):
+        out = self._out()
+        group = out[
+            out.index('aria-label="Rewrite caption"') : out.index('<div class="action-bar">')
+        ]
+        assert '<span class="toolgroup-label">Rewrite caption</span>' in group
+        assert 'action="/review/p/request-rewrite"' in group
+        assert "Rewrite with Command Code" in group
+
+    def test_no_tool_groups_without_any_tool(self):
+        out = render_draft_html(Draft(id="p", title="T", caption="Hi", state="ai_draft"))
+        assert 'class="toolgroup"' not in out
 
 
 class TestDraftLint:
@@ -786,13 +888,155 @@ class TestRewriteButton:
         out = render_draft_html(draft, rewrite_enabled=True, generated_at=GENERATED)
         assert "&lt;b&gt;boom&lt;/b&gt;" in out
 
-    def test_no_button_for_an_approved_draft(self):
+    def test_no_button_for_an_approved_draft(self, tmp_path=None):
         out = render_draft_html(
             Draft(id="p", state="approved", caption="c"),
             rewrite_enabled=True,
             generated_at=GENERATED,
         )
         assert "Rewrite with Command Code" not in out
+
+
+class TestImagePromptButton:
+    """The prompt-only rewrite: "Regenerate image prompt" beside Regenerate image.
+
+    Two separate moves, never one button doing both: the prompt action asks the
+    worker to write the *subject* for the style picked above, and the render is
+    the operator's own click. It submits the compose form, so that pick reaches
+    the agent instead of being dropped on the way.
+    """
+
+    def test_offers_it_next_to_regenerate_image(self):
+        out = render_draft_html(
+            Draft(id="p", state="ai_draft", caption="c", image_prompt="a chair"),
+            rewrite_enabled=True,
+            image_enabled=True,
+            generated_at=GENERATED,
+        )
+        assert 'formaction="/review/p/request-image-prompt"' in out
+        assert "Regenerate image prompt" in out
+        assert 'formaction="/review/p/image"' in out  # the other half of the pair
+
+    def test_it_carries_the_compose_form_holding_the_style_picker(self):
+        # The pick has to reach the worker: it is saved with the request and the
+        # agent writes a subject for it. A field-less form dropped it twice over —
+        # never saved here, and re-chosen by the worker.
+        out = render_draft_html(
+            Draft(id="p", state="ai_draft", caption="c", image_prompt="a chair"),
+            rewrite_enabled=True,
+            image_enabled=True,
+            image_styles=["technical", "editorial", "diagram"],
+            generated_at=GENERATED,
+        )
+        target = out.index("/review/p/request-image-prompt")
+        button = out[out.rindex("<button", 0, target) : out.index("</button>", target)]
+        assert 'form="publish-form"' in button
+        start = out.index('id="publish-form"')
+        assert 'name="image_style"' in out[start : out.index("</form>", start)]
+
+    def test_says_write_when_there_is_no_prompt_yet(self):
+        out = render_draft_html(
+            Draft(id="p", state="extracted", title="T"),
+            rewrite_enabled=True,
+            image_enabled=True,
+            generated_at=GENERATED,
+        )
+        assert "Write image prompt" in out
+
+    def test_an_approved_draft_can_be_re_prompted(self):
+        # The caption was approved; the picture was not.
+        out = render_draft_html(
+            Draft(id="p", state="approved", caption="c", image_prompt="a chair"),
+            rewrite_enabled=True,
+            image_enabled=True,
+            generated_at=GENERATED,
+        )
+        assert "Regenerate image prompt" in out
+        assert "Rewrite with Command Code" not in out  # that one would undo approval
+
+    def test_hidden_when_the_image_generator_is_off(self):
+        out = render_draft_html(
+            Draft(id="p", state="ai_draft", caption="c"),
+            rewrite_enabled=True,
+            generated_at=GENERATED,
+        )
+        assert "request-image-prompt" not in out
+
+    def test_pending_shows_the_prompt_wording_and_cancel(self):
+        draft = Draft(
+            id="p",
+            state="approved",
+            caption="c",
+            image_prompt="a chair",
+            rewrite_requested_at="2026-09-10T08:00:00+00:00",
+            rewrite_mode="image",
+        )
+        out = render_draft_html(
+            draft, rewrite_enabled=True, image_enabled=True, generated_at=GENERATED
+        )
+        assert 'id="rewrite-job"' in out  # the poll script reloads on this id
+        assert "New image prompt requested" in out
+        assert "render it with “Regenerate image”" in out
+        assert 'formaction="/review/p/image"' in out  # the operator's next move
+        assert "Cancel prompt rewrite" in out
+
+    def test_a_pending_prompt_request_offers_the_caption_rewrite_instead(self):
+        # An ai_draft can still go the other way: a full rewrite brings its own
+        # new image prompt, so it supersedes this one.
+        draft = Draft(
+            id="p",
+            state="ai_draft",
+            caption="c",
+            image_prompt="a chair",
+            rewrite_requested_at="2026-09-10T08:00:00+00:00",
+            rewrite_mode="image",
+        )
+        out = render_draft_html(
+            draft, rewrite_enabled=True, image_enabled=True, generated_at=GENERATED
+        )
+        assert "Rewrite caption instead" in out
+        assert 'action="/review/p/cancel-rewrite"' in out
+
+    def test_a_pending_caption_rewrite_reads_as_a_rewrite(self):
+        draft = Draft(
+            id="p",
+            state="ai_draft",
+            caption="c",
+            rewrite_requested_at="2026-09-10T08:00:00+00:00",
+        )
+        out = render_draft_html(
+            draft, rewrite_enabled=True, image_enabled=True, generated_at=GENERATED
+        )
+        assert "Rewriter requested" in out
+        assert "New image prompt requested" not in out
+        assert "Cancel rewrite" in out
+        assert "Cancel prompt rewrite" not in out
+        # A full rewrite brings its own image prompt, so it stays available.
+        assert "request-image-prompt" in out
+
+
+class TestPostConfirmation:
+    """The "Post this publicly?" prompt follows where a submit *goes*.
+
+    The compose tools submit to their own endpoint (formaction) and Save does
+    too, so reading a submit as a post by the button's name meant every nameless
+    button — Regenerate image prompt among them — asked for the posting
+    confirmation. The gate is the submit target against the form's own action.
+    """
+
+    def test_only_the_forms_own_action_is_confirmed(self):
+        out = render_draft_html(
+            Draft(id="p", state="ai_draft", caption="c", image_prompt="a chair"),
+            rewrite_enabled=True,
+            image_enabled=True,
+            generated_at=GENERATED,
+        )
+        script = out[out.index("<script>") : out.index("</script>")]
+        assert "target === form.getAttribute('action')" in script
+        # The tools that must not be read as a post each override the action.
+        assert 'formaction="/review/p/image"' in out
+        assert 'formaction="/review/p/request-image-prompt"' in out
+        assert 'formaction="/review/p/save"' in out
 
 
 class TestMessageHtml:

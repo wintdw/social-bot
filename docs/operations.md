@@ -67,7 +67,12 @@ gate every send.
 
 The **Rewrite with Command Code** button on `/review/{id}` does not run an AI
 itself — it marks the draft. A host-side worker does the rewrite with the Command
-Code CLI and posts the result back (nothing here approves or posts):
+Code CLI and posts the result back (nothing here approves or posts). The same
+worker also serves **Regenerate image prompt**, which asks only for a fresh image
+prompt for the style you picked (the caption is left as approved) and renders
+nothing — the prompt lands on the page for you to read (or edit), and **Regenerate
+image** is what renders it. The request's own kind (`Draft.rewrite_mode`) tells the
+two apart.
 
 ```sh
 .venv/bin/python scripts/rewrite_worker.py             # poll forever
@@ -175,12 +180,17 @@ same id.
 | OAuth error on post | The Page token expired — check `/status` (validity + expiry), mint a fresh one, update `credentials.yaml`, `whoami` to verify. |
 | Approved but nothing shows on the Page | First, the posting schedule: an `approved` draft waits for the next `publish.post_at` slot. Drain it now with **Post approved now** / `POST /publish/run` / `blog publish`, or check `publish.private: true` — a private post is unpublished (page admins only) and stays in the queue. Set `private: false` to post publicly. |
 | Approved drafts never post on schedule | The poster is **paused** (dashboard **Pause posting** / `POST /publish/pause`; the **Post schedule** row reads `paused` and **Next post** shows `—`), `publish.post_at` is empty (timed posting off), `publish.enabled: false`, or `publish.interval_days` hasn't elapsed (a `2` means it skips until two days after the last public post). The dashboard **Next post** card and the `/status` **Post schedule** line both name the draft (`publish.next_draft`; `publish.interval_remaining` counts the days still to wait), and the **Next post** card's time is the first slot that can actually send — so `in 1 day(s)` means today's wake will be skipped, not that it posts later today. |
+| Draft approved by mistake, or queued too early | **Unapprove** on `/review/{id}` (`POST /review/{id}/unapprove`) returns it to `ai_draft`: it leaves the post queue (the poster skips it) but stays on `/review` for another pass, with no caption change. It is refused once a destination has a *public* post (a send cannot be undone); a private test send still un-approves. `reject` is the other exit but throws the draft away. |
 | Hashtags missing from a post | Ensure the image includes the `Draft.post_text` fix (rebuild). Hashtags are appended to the caption at publish time. |
 | Draft stuck `extracted` | No rewrite yet — the external agent must `POST /api/drafts/{id}/rewrite`, or the rewriter worker (next row) must pick up a requested rewrite. |
 | **Rewrite with Command Code** does nothing | The host-side worker isn't running (or `rewrite.enabled` is off). The button only *marks* the draft; start `scripts/rewrite_worker.py`. `GET /api/status` → `rewrite.requested` lists what is waiting, and `/review/{id}` shows any worker error (a request never runs itself; a stuck one can be cancelled). |
+| **Regenerate image prompt** does nothing | Same worker, same rules — it is a second kind of request on the same queue (`Draft.rewrite_mode: image`). One request per draft: asking for either cancels the other kind. |
+| The new prompt landed but the picture did not change | By design: the prompt-only request never renders (a picture must not land from a prompt nobody has read). Press **Regenerate image** on `/review/{id}` to render it. |
+| **Image style** changed but nothing used it | The picker governs both image buttons: **Regenerate image** renders that treatment, **Regenerate image prompt** has the agent write a subject for it. Both submit the compose form, so the pick is saved with the action — no separate **Save** needed. |
+| Every image looks the same | The prompt, not the treatment, is usually the cause. Check `recent_images` in the worker's payload (`GET /api/rewrite-queue`) — the agent is told not to repeat those subjects, so a stale or empty list lets it loop. **Regenerate image prompt** on `/review/{id}` replaces one draft's prompt without touching its approved caption or the style you picked; render it with **Regenerate image**. |
 | Draft has no image after a rewrite | `serve` generates it in the background; a restart (or a provider 5xx) can leave it empty. Check the **Image jobs** section on `/status` (or the dashboard, or `GET /api/status` → `images`), then run `social-bot blog image` or the **Generate image** button on `/review/{id}`. |
 | Image generation fails (`HTTP 401`) | `image_gen.api_key` missing/invalid. The default `gen.pollinations.ai/image` endpoint requires a key (see `credentials.example.yaml`). |
-| A generated image took a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. Generation never replaces a cover on its own — only the **Regenerate image** button / `--overwrite` does, deliberately. |
+| A generated image took a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. Generation never replaces a cover on its own — only the **Regenerate image** button / `--overwrite` does, deliberately. **Regenerate image prompt** is not a replacement at all: it changes only the prompt, and the picture is replaced when you go on to press **Regenerate image**. |
 
 ## Security
 

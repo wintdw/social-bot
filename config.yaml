@@ -121,6 +121,12 @@ publish:
   # same set the pipeline lints a new caption against (the tells shown on
   # /review/{id}). 0 turns both off.
   recent_captions: 12
+  # The same for images: the last N `image_prompt`/`image_style` pairs go to the
+  # rewriter as `recent_images`, so it can see which subjects and compositions it
+  # has already used and pick a different one. This is what keeps a run of posts
+  # from all illustrating the same object — the DNA deliberately does not mandate
+  # "a different metaphor each time" any more. 0 sends none.
+  recent_images: 12
   dir: data/publish           # publish audit log (/publish)
   log_name: published.jsonl   # append-only publish audit
 
@@ -157,23 +163,26 @@ image_gen:
   enabled: true
   provider: pollinations
   base_url: https://gen.pollinations.ai/image
-  style_file: docs/atento-image-style.md  # shared palette/prohibition floor; prepended to every prompt
+  style_file: docs/atento-image-style.md  # shared palette; prepended to every prompt
   # Visual treatments, chosen per post by the rewriter like the masthead (DNA
   # §9.2). Each key names a file under docs/image-styles/ whose text LEADS the
   # prompt, ahead of the shared palette brief (style_file), so it governs the
-  # medium. `default_style` is the fallback
-  # when the rewriter omits a key. Clear `styles` to fall back to the single
-  # style_file look.
+  # medium — and carries that look's own prohibitions (people, lettering, the
+  # clichés to avoid). Nothing outside the treatment file forbids anything, so
+  # add a treatment by writing its file and listing it here.
+  # `default_style` is the fallback when the rewriter omits a key. Clear
+  # `styles` to fall back to the single style_file look.
   styles:
     technical: docs/image-styles/technical.md   # System Design / Architecture, nền tảng
     editorial: docs/image-styles/editorial.md   # nền tảng/nghề/mindset chung (mặc định)
     sketch: docs/image-styles/sketch.md         # essay cá nhân / ý kiến
     bulletin: docs/image-styles/bulletin.md     # thông báo, sự kiện, tin tức
+    diagram: docs/image-styles/diagram.md       # cơ chế: nhiều thành phần trao đổi với nhau
   default_style: editorial
   overwrite: false            # only fill drafts with no image; keep covers
   # Provider-qualified model on the gen.pollinations.ai gateway. gpt-image-1-mini
-  # follows the style brief's "no text / no people" negatives far better than
-  # flux.1-schnell (which draws literal buildings and stray words). List others
+  # follows a treatment brief's instructions far better than flux.1-schnell
+  # (which draws literal buildings and stray words). List others
   # with: curl -H "Authorization: Bearer $KEY" https://gen.pollinations.ai/models
   model: openai/gpt-image-1-mini
   width: 1080                 # portrait 1080x1350 = most feed real estate

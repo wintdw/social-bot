@@ -144,17 +144,26 @@ entirely, leaving approval as the only publish path.**
   serves the older `sana` model (it ignores `model=`) and watermarks every
   image (`x-auth-status: unauthenticated`). Don't "simplify" to the legacy URL.
 - The image model matters more than the prompt. `flux.1-schnell` barely obeys
-  negatives — it renders literal buildings and stray lettering and ignores "no
-  text". **`openai/gpt-image-1-mini` is the default** because it follows the
-  style brief's negatives, and it is cheap. Verify a new model on a real draft
-  before switching.
+  its brief — it renders literal buildings and stray lettering and ignores "no
+  text". **`openai/gpt-image-1-mini` is the default** because it follows a
+  treatment file's instructions, and it is cheap. Verify a new model on a real
+  draft before switching.
 - **Image variety comes from two per-post choices: `image_prompt` (subject) and
   `image_style` (treatment).** The rewriter supplies a concrete English visual
   concept per post (rewrite contract §9.1). Illustrating a raw `title`/excerpt —
   an abstraction, and in Vietnamese — made every image look the same: the model
   cannot picture "Consumer Group", so it fell back to whatever composition the
   style brief suggested, every time. Never build the subject from the title; ask
-  for it. `image_prompt` is also the image's alt text (no separate Vietnamese
+  for it. **The rewriter is sent the treatment briefs themselves**
+  (`image_style_briefs` on `GET /api/drafts` and `/api/rewrite-queue`, printed as
+  the IMAGE STYLE BRIEFS block) and the last few **`recent_images`**
+  (`publish.recent_images`) — the pairs it has already written. That pair is what
+  keeps images from converging: the DNA deliberately no longer mandates "a
+  different metaphor each post", because that decree fights any treatment that
+  is not a metaphor (a `diagram` is a mechanism). Anti-repetition is now a
+  signal the rewriter can check, the way `recent` captions already worked for
+  prose, rather than a rule it must obey blind. `image_prompt` is also the image's
+  alt text (no separate Vietnamese
   `alt_text` exists) and is **editable on `/review/{id}`**; the `/review` form
   saves it via `edit_draft`, and **Regenerate image** submits that compose form
   to `/review/{id}/image`, so the edited `image_prompt` and `image_style` are
@@ -162,16 +171,22 @@ entirely, leaving approval as the only publish path.**
   that silently ignored them). The style picker marks the current image's
   treatment **`(current)`**, so any other option you pick is the next one.
   `image_style` picks a treatment from `image_gen.styles` (`key →
-  docs/image-styles/<key>.md`): `technical` / `editorial` / `sketch` / `bulletin`,
-  one per post by content and tone, exactly like the masthead (DNA §9.2).
-  `draft_pipeline.image_style_text(cfg, key)` leads the prompt with that
-  treatment, then appends the shared `image_gen.style_file` floor (palette and
-  prohibitions only — no medium, finish or composition of its own); an
+  docs/image-styles/<key>.md`): `technical` / `editorial` / `sketch` / `bulletin` /
+  `diagram`, one per post by content and tone, exactly like the masthead (DNA
+  §9.2). `draft_pipeline.image_style_text(cfg, key)` leads the prompt with that
+  treatment and appends the shared `image_gen.style_file` palette — nothing else.
+  **A treatment file owns the rest of its look** — medium, composition and what to
+  avoid, lettering included — because `image_gen.build_prompt` adds no
+  prohibitions of its own; a new look is a new file plus a `styles` key, no code,
+  and no rule written elsewhere can fight it. `diagram` is the only treatment that
+  writes: its boxes and arrows carry short English labels the rewriter supplies as
+  `Labels: "A", "B"` at the end of `image_prompt` (DNA §9.2). Those labels stay
+  English because gpt-image renders Vietnamese diacritics as garbage. An
   unknown/blank key falls back
   to `image_gen.default_style`, and clearing `styles` restores the single
   `style_file` look. It too is **overridable on `/review/{id}`**.
   Two related traps: translating the title to English alone is *worse* (it
-  yields literal cloud-and-arrow flowcharts and people), and neither the floor
+  yields literal cloud-and-arrow flowcharts and people), and neither the palette
   nor the subject line may prescribe a medium (the per-post treatment does).
 - **The rewriter can be triggered from the UI, but the app never runs it.** The
   **Rewrite with Command Code** button on `/review/{id}` only *marks* the draft
@@ -186,6 +201,33 @@ entirely, leaving approval as the only publish path.**
   python-slim with no Node). Only `extracted`/`ai_draft` drafts can be requested:
   an `approved` draft is already queued to post, so a rewrite would have to undo
   the approval.
+- **A request carries its kind: `Draft.rewrite_mode`.** One pending request per
+  draft, one flag plus one kind — so "a caption rewrite and an image rewrite are
+  both pending" cannot exist — and the worker tells them apart from the queue
+  payload. `caption` is the button above (the whole rewrite). `image` is
+  **Regenerate image prompt** on `/review/{id}`
+  (`POST /review/{id}/request-image-prompt`): the caption is fine and the
+  *picture* is not, so the worker runs a much smaller task
+  (`rewrite_worker.build_image_prompt` — treatment briefs, recent images, and the
+  post's own caption; no DNA, no voice menu) and posts **a single
+  `image_prompt`** — the *subject* — back to `POST /api/drafts/{id}/image-prompt`,
+  which stores it via `Draft.apply_image_prompt`. **The prompt is the whole
+  delivery — it does not render.** That method touches *only* the prompt: the
+  caption, the rest of the rewrite contract and the **state** are untouched, so an
+  `approved` draft stays queued — the approval covers the caption, not the picture
+  (`can_request_image_prompt()` is `extracted`/`ai_draft`/`approved`, wider than
+  `can_receive_rewrite()`). The button submits the compose form (like Regenerate
+  image), so the **`image_style` on the page is saved with the request and the
+  agent writes *for* it** — `image_style` is deliberately not read back from the
+  result (`receive_image_prompt` would otherwise let the worker overrule the pick,
+  or reset it to `image_gen.default_style` when the key is omitted). Rendering is
+  the operator's own next click, **Regenerate image** — the *typed* path, which
+  renders exactly the prompt and style in the compose form. Splitting the two is
+  the point: a picture must never land from a prompt nobody has read yet, so the
+  agent writes and the human renders. Never make
+  `/api/drafts/{id}/image-prompt` schedule an image job again, and never take a
+  style from its body. This is the path that fixes the drafts written before the
+  image rules changed. A legacy request with no mode reads as `caption`.
 - Every post is a photo post, so images are generated **after** the rewrite,
   never during scan — at scan time there is no `image_prompt` yet, which is the
   whole problem. `serve` fills a draft's image in the background as its rewrite
@@ -255,6 +297,17 @@ entirely, leaving approval as the only publish path.**
   `POST /publish/run` and `blog publish`. Because a private send deliberately
   leaves the draft in the queue, `publish_scheduled` also skips a draft already
   sent privately that day (otherwise it would re-post every slot).
+- **Approval is reversible until the send goes out.** `Draft.unapprove` /
+  `draft_pipeline.unapprove_draft` / `POST /review/{id}/unapprove` (the
+  **Unapprove** button on `/review/{id}`) return an `approved` draft to
+  `ai_draft`, so `scheduled_queue` no longer lists it and the poster skips it,
+  while it stays on `/review` for another pass. It is a bare state change —
+  never posts, never touches the caption — and it drops the draft's manual
+  `queue_order`, so a later re-approval lands at the end of the queue. It is
+  refused once any destination has a *public* post (a send cannot be undone); a
+  private send still un-approves. This is the escape hatch for a draft approved
+  by mistake or queued too early — the alternative, `reject`, throws the draft
+  away.
 - **The "next up" shown to operators must be the draft that actually posts.**
   `draft_pipeline.scheduled_queue` (posting order) is the one ordering
   the poster drains; `status()` derives `publish.next_draft` from the same rule

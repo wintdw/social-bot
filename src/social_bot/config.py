@@ -115,6 +115,12 @@ DEFAULTS: dict[str, Any] = {
         # same opener/closer/vocabulary across posts (the pipeline lints against
         # the same set). 0 sends none.
         "recent_captions": 12,
+        # The same, for images: the most recent `image_prompt`/`image_style`
+        # pairs, sent as `recent_images` so the rewriter can see what it has
+        # already illustrated and not repeat a subject or a composition. This is
+        # the anti-repetition signal that replaced the DNA's old "every post a
+        # different metaphor" decree. 0 sends none.
+        "recent_images": 12,
         "dir": "data/publish",
         "log_name": "published.jsonl",
     },
@@ -141,16 +147,18 @@ DEFAULTS: dict[str, Any] = {
     # default is the modern gateway (clean flux output, needs image_gen.api_key
     # in credentials.yaml). The legacy `https://image.pollinations.ai/prompt`
     # needs no key but is watermarked and locked to the older `sana` model.
-    # `style_file` is a short brand-look brief prepended to every prompt.
-    # `styles` is a menu of per-post visual treatments (key -> file): the
-    # rewriter picks one per post like the masthead, and the chosen treatment
-    # LEADS the prompt, ahead of the `style_file` floor. `default_style` is the
-    # fallback key.
+    # `style_file` is a short brand-look brief prepended to every prompt — the
+    # palette. Everything else about a look (medium, composition, lettering and
+    # what to avoid) belongs to the per-post treatment file, so the two never
+    # fight each other.
+    # `styles` is a menu of those treatments (key -> file): the rewriter picks
+    # one per post like the masthead, and the chosen treatment LEADS the prompt,
+    # ahead of the `style_file` palette. `default_style` is the fallback key.
     # An empty `styles` disables the menu (the `style_file` look alone).
     # `model` must be one the endpoint serves: the gen.pollinations.ai gateway
     # takes provider-qualified names (e.g. "openai/gpt-image-1-mini"); the
-    # legacy endpoint ignores it entirely. The default follows the negative
-    # instructions in the style brief far better than flux.1-schnell.
+    # legacy endpoint ignores it entirely. The default follows a treatment
+    # brief's instructions far better than flux.1-schnell.
     "image_gen": {
         "enabled": False,
         "provider": "pollinations",
@@ -285,6 +293,8 @@ def validate(cfg: dict) -> None:
         raise ValueError("config: publish.interval_days must be >= 0")
     if int(publish.get("recent_captions", 0)) < 0:
         raise ValueError("config: publish.recent_captions must be >= 0")
+    if int(publish.get("recent_images", 0)) < 0:
+        raise ValueError("config: publish.recent_images must be >= 0")
     post_at = publish.get("post_at", [])
     if not isinstance(post_at, list):
         raise ValueError("config: publish.post_at must be a list of HH:MM")

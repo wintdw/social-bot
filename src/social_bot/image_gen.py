@@ -55,9 +55,13 @@ def build_prompt(title: str, excerpt: str, style: str = "", image_prompt: str = 
     why every auto-built image came out looking the same.
 
     ``style`` is the brand look: the draft's chosen treatment (which governs the
-    medium) followed by the shared ``image_gen.style_file`` floor (palette and
-    prohibitions only). It leads the prompt so the treatment outranks the
-    subject line in the model's reading.
+    medium, the composition *and* what to avoid — lettering included) followed by
+    the shared ``image_gen.style_file`` palette. It leads the prompt so the
+    treatment outranks the subject line in the model's reading.
+
+    This only assembles the three parts. Every prohibition belongs to the
+    treatment the rewriter picked, in ``docs/image-styles/<key>.md``, so a look
+    is never fought by a rule written somewhere else.
     """
     subject = _WS_RE.sub(" ", image_prompt or "").strip()
     if not subject:
@@ -74,10 +78,6 @@ def build_prompt(title: str, excerpt: str, style: str = "", image_prompt: str = 
     # (sketch, still life, poster, schematic), so the subject line must not beg
     # for an illustration of its own.
     parts.append(f"Subject: {subject}")
-    parts.append(
-        "No people, no faces, no hands, no words, no lettering, no numbers, "
-        "no text, no logo, no watermark."
-    )
     return ". ".join(parts)
 
 

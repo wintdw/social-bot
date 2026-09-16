@@ -20,11 +20,13 @@ your task.
   rewriter picks one per post and returns it as `voice`, delivered in
   `GET /api/drafts` `voices`. Refines how a register sounds; the DNA still owns
   structure.
-- **[atento-image-style.md](atento-image-style.md)** — the shared palette/prohibition
-  floor prepended to every generated image prompt (`image_gen.style_file`). The
-  per-post **treatments** it composes with live in
+- **[atento-image-style.md](atento-image-style.md)** — the shared palette
+  prepended to every generated image prompt (`image_gen.style_file`). Everything
+  else about a look (medium, composition, prohibitions — lettering included) is
+  the job of the per-post **treatments** in
   **[image-styles/](image-styles/)** (`image_gen.styles`, chosen by the rewriter
-  like the masthead, DNA §9.2).
+  like the masthead, DNA §9.2). A treatment file is the only place its look is
+  described, so adding one is a file plus a `styles` key.
 
 `AGENTS.md` (repo root) is the short brief; these docs are the detail.
 

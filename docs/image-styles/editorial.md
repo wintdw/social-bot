@@ -8,3 +8,6 @@ sealed envelope. Soft directional light, one clear subject, generous empty
 space, a gentle cast shadow. The objects are a visual metaphor for the idea,
 arranged simply and deliberately. Warm, calm, human: the mood of a thought being
 turned over.
+
+No people, no faces, no hands. No lettering and no numbers anywhere — no title,
+no label, no written word on the objects. Not a photograph, not a 3D render.

@@ -6,3 +6,7 @@ slightly imperfect, playful and candid. A light wash of the palette tones, no
 polish, the visible gesture of the hand. It should read as a note jotted in a
 margin — honest, warm and unguarded, not a finished illustration. Keep it
 simple; the roughness is the point.
+
+No people, no faces, no hands — the hand is felt, never drawn. No words, no
+numbers, no captions: loose marks, not writing. Not a photograph, not a polished
+render.

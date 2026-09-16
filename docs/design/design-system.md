@@ -92,7 +92,8 @@ times, and character counts use **tabular figures** so columns line up.
 | Pagination | `.pager` | `draft_html._pagination_bar` |
 | Stepper | `.stepper`, `.step`, `.is-done`, `.is-now` | `draft_html._stepper` |
 | Facebook preview | `.fb-preview`, `.head`, `.avatar`, `.meta`, `.name`, `.when`, `.body`, `.tags`, `.media` | `draft_html` |
-| Sticky action bar | `.action-bar`, `.spacer`, `.hint` | `draft_html` |
+| Sticky action bar (terminal actions only) | `.action-bar`, `.spacer`, `.hint` | `draft_html` |
+| Compose tool groups | `.toolgroup`, `.toolgroup-label` | `draft_html` |
 | Feed rows | reuse the review row (`.qlist`, `.qrow`, `.qthumb`, …) | `feed_html.render_feed_section` (title from `caption.split_title`) |
 | Table | element `table`, `th`, `td` | `dashboard_html._table` |
 

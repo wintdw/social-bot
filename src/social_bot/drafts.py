@@ -21,10 +21,22 @@ REJECTED = "rejected"
 
 STATES = (EXTRACTED, AI_DRAFT, APPROVED, POSTED, REJECTED)
 
+# What a pending rewriter request asks for (``Draft.rewrite_mode``): the whole
+# rewrite (caption + image prompt), or *only* a fresh image prompt for a post
+# whose caption is already settled — often already approved and queued.
+REWRITE_CAPTION = "caption"
+REWRITE_IMAGE = "image"
+REWRITE_MODES = (REWRITE_CAPTION, REWRITE_IMAGE)
+
 # States a draft can be published from (an explicit human click implies approval).
 _PUBLISHABLE = (AI_DRAFT, APPROVED)
 # States a rewrite may land on (re-running the agent is fine).
 _REWRITABLE = (EXTRACTED, AI_DRAFT)
+# States an *image-prompt* rewrite may land on. Wider than _REWRITABLE: an
+# approved draft's caption is what the human approved, but its picture is not part
+# of that approval, so a queued post can still be re-imaged. Done drafts (posted,
+# rejected) are not — nothing would ever see the new prompt.
+_REIMAGEABLE = (EXTRACTED, AI_DRAFT, APPROVED)
 
 
 def now_iso() -> str:
@@ -99,6 +111,10 @@ class Draft:
     # came back instead of a request that waits forever.
     rewrite_requested_at: str = ""
     rewrite_error: str = ""
+    # What that open request asks for (REWRITE_CAPTION / REWRITE_IMAGE); empty
+    # when nothing is pending. One flag + one kind rather than a flag per kind, so
+    # "a caption rewrite and an image rewrite are both pending" cannot exist.
+    rewrite_mode: str = ""
     # Advisory AI-tell warnings from caption_lint, written at rewrite/edit time
     # and shown on /review/{id}. Never blocks a rewrite or a post; empty when the
     # caption reads clean. Each entry is {"code", "message"}.
@@ -141,6 +157,20 @@ class Draft:
     def can_receive_rewrite(self) -> bool:
         return self.state in _REWRITABLE
 
+    def can_request_image_prompt(self) -> bool:
+        """Whether a prompt-only rewrite may land on this draft (see _REIMAGEABLE)."""
+        return self.state in _REIMAGEABLE
+
+    def rewrite_kind(self) -> str:
+        """What the open rewriter request asks for ("" when nothing is pending).
+
+        A request written before this field existed has no mode and reads as a
+        full rewrite, which is what it was.
+        """
+        if not self.rewrite_requested_at:
+            return ""
+        return self.rewrite_mode if self.rewrite_mode in REWRITE_MODES else REWRITE_CAPTION
+
     def can_publish(self) -> bool:
         return self.state in _PUBLISHABLE
 
@@ -171,14 +201,52 @@ class Draft:
             self.voice = voice
         # A rewrite fulfils any pending rewriter-worker request.
         self.rewrite_requested_at = ""
+        self.rewrite_mode = ""
         self.rewrite_error = ""
         self.state = AI_DRAFT
+        self.touch()
+
+    def apply_image_prompt(self, *, image_prompt: str = "") -> None:
+        """Store a prompt-only rewrite: the image prompt, and nothing else.
+
+        Unlike ``apply_rewrite`` this leaves the caption, the rest of the rewrite
+        fields, the ``image_style`` treatment and — crucially — the *state* alone,
+        so re-imaging an approved draft cannot un-queue the post a human already
+        approved. The treatment is the operator's: it was saved from the compose
+        form when they asked, and the agent writes the prompt to serve it.
+        """
+        if image_prompt:
+            self.image_prompt = image_prompt
+        # Clear this request only. A caption rewrite the operator asked for in the
+        # meantime stays pending (and would overwrite the prompt anyway).
+        if self.rewrite_kind() == REWRITE_IMAGE:
+            self.rewrite_requested_at = ""
+            self.rewrite_mode = ""
+        self.rewrite_error = ""
         self.touch()
 
     def approve(self) -> None:
         if not self.can_publish():
             raise ValueError(f"draft {self.id!r} in state {self.state!r} cannot be approved")
         self.state = APPROVED
+        self.touch()
+
+    def unapprove(self) -> None:
+        """Pull an approved draft back out of the post queue.
+
+        Approval is reversible right up to the send: this returns a queued draft
+        to ``ai_draft`` so the poster no longer sees it, while it stays on
+        /review for further edits, a rewrite, or another approval. The manual
+        queue position is dropped with it, so a later re-approval lands at the
+        end of the queue rather than resurrecting a stale rank. A draft already
+        posted publicly cannot be un-approved — a send cannot be undone.
+        """
+        if self.state != APPROVED:
+            raise ValueError(f"draft {self.id!r} in state {self.state!r} is not approved")
+        if self.posted_destinations():
+            raise ValueError(f"draft {self.id!r} has already been posted; it cannot be un-approved")
+        self.state = AI_DRAFT
+        self.queue_order = 0
         self.touch()
 
     def reject(self) -> None:

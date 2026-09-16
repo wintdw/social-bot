@@ -460,7 +460,11 @@ def render_pages() -> list[tuple[str, str]]:
             render_draft_html(
                 _DETAIL,
                 dna=_DNA,
+                # The rewriter is on in the sample so the Draft tab shows the
+                # whole Compose panel: the image tools *and* the caption rewrite,
+                # both grouped above the terminal-only action bar.
                 image_enabled=True,
+                rewrite_enabled=True,
                 image_status={"status": "ok"},
                 # The sample's picture is a stand-in for a generated one, so the
                 # "Restore source image" control the detail page shows for a post

@@ -19,6 +19,8 @@ from .drafts import (
     AI_DRAFT,
     APPROVED,
     EXTRACTED,
+    REWRITE_CAPTION,
+    REWRITE_IMAGE,
     STATES,
     Draft,
     append_audit,
@@ -219,21 +221,35 @@ def _resolve_image_style(cfg: dict, key) -> str:
     return fallback if fallback in choices else ""
 
 
+def image_style_briefs(cfg: dict) -> dict[str, str]:
+    """Each configured treatment's own brief: ``{key: docs/image-styles/<key>.md}``.
+
+    The brief alone, without the palette: this is what the *rewriter* reads to
+    write an ``image_prompt`` for a style, and the palette is appended at prompt
+    time instead (DNA §9.1). Empty or missing files are left out, so a menu entry
+    with no file never reaches the rewriter as an empty heading.
+    """
+    return {
+        key: text
+        for key, path in image_style_map(cfg).items()
+        if (text := _read_optional_file(path).strip())
+    }
+
+
 def image_style_text(cfg: dict, key: str = "") -> str:
     """The resolved brand-look text for one draft's chosen style.
 
     The treatment named by ``key`` (``image_gen.styles``) **leads**, so it
-    governs the medium, followed by the shared palette/prohibition floor
+    governs the medium — and carries that look's own prohibitions, lettering
+    included. It is followed by the shared palette floor
     (``image_gen.style_file``). An unknown or blank key falls back to
     ``image_gen.default_style``; with no menu configured this is just the floor
     — the pre-styles behaviour.
     """
     floor = _read_optional_file(image_gen_config(cfg).get("style_file")).strip()
-    styles = image_style_map(cfg)
-    if not styles:
+    if not image_style_map(cfg):
         return floor
-    chosen = _resolve_image_style(cfg, key)
-    treatment = _read_optional_file(styles.get(chosen)).strip() if chosen else ""
+    treatment = image_style_briefs(cfg).get(_resolve_image_style(cfg, key), "")
     return "\n\n".join(part for part in (treatment, floor) if part)
 
 
@@ -914,9 +930,16 @@ def recent_caption_limit(cfg: dict) -> int:
     return int(cfg.get("publish", {}).get("recent_captions", 0) or 0)
 
 
-def _recent_written(drafts: list[Draft], exclude_id: str = "") -> list[Draft]:
-    """Drafts that already have a caption, most recently written first."""
-    written = [draft for draft in drafts if draft.caption and draft.id != exclude_id]
+def recent_image_limit(cfg: dict) -> int:
+    """``publish.recent_images`` as an int (0 = don't send any)."""
+    return int(cfg.get("publish", {}).get("recent_images", 0) or 0)
+
+
+def _recent_written(
+    drafts: list[Draft], exclude_id: str = "", field: str = "caption"
+) -> list[Draft]:
+    """Drafts that already have ``field`` set, most recently written first."""
+    written = [draft for draft in drafts if getattr(draft, field) and draft.id != exclude_id]
     return sorted(
         written,
         key=lambda d: parse_when(d.updated_at) or parse_when(d.created_at) or _EPOCH,
@@ -936,6 +959,24 @@ def recent_captions(cfg: dict, *, limit: int | None = None, exclude_id: str = ""
     if cap <= 0:
         return []
     return _recent_written(load_drafts(queue_path(cfg)), exclude_id)[:cap]
+
+
+def recent_images(cfg: dict, *, limit: int | None = None, exclude_id: str = "") -> list[Draft]:
+    """The most recently written image prompts, newest first, for variety.
+
+    The image-side analogue of ``recent_captions``, and the reason the DNA no
+    longer has to *decree* that every post gets a different metaphor. A rewriter
+    only sees the open drafts, so without this it cannot tell that its last four
+    subjects were the same object arranged the same way — which is exactly how a
+    feed converges on one picture. Capped by ``publish.recent_images`` (0 = off);
+    only drafts that actually carry a prompt are sent, since that is the thing to
+    avoid repeating.
+    """
+    cap = recent_image_limit(cfg) if limit is None else int(limit)
+    if cap <= 0:
+        return []
+    drafts = load_drafts(queue_path(cfg))
+    return _recent_written(drafts, exclude_id, field="image_prompt")[:cap]
 
 
 def _recent_texts(drafts: list[Draft], cfg: dict, exclude_id: str = "") -> list[str]:
@@ -973,6 +1014,30 @@ def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
         voice=_resolve_voice(cfg, body.get("voice")),
     )
     draft.lint = lint_caption(draft.caption, recent=_recent_texts(drafts, cfg, draft_id))
+    save_drafts(queue_path(cfg), drafts)
+    return draft
+
+
+def receive_image_prompt(cfg: dict, draft_id: str, body: dict) -> Draft:
+    """Store a prompt-only rewrite (from the rewriter worker) on a draft.
+
+    Only ``image_prompt`` is taken — the *subject* — while the caption, hashtags,
+    cta, commentary, voice and *state* stay exactly as they were, so re-imaging an
+    approved draft cannot un-approve it.
+
+    ``image_style`` is deliberately **not** read from the body. The treatment is
+    the operator's: it was saved from the compose form when the request was made,
+    and the agent writes its prompt to serve it (``build_image_prompt``). Reading
+    a style here would let the worker overrule that pick — and silently, since an
+    omitted key resolves to ``image_gen.default_style`` rather than to "leave it".
+    """
+    drafts = load_drafts(queue_path(cfg))
+    draft = find(drafts, draft_id)
+    if draft is None:
+        raise ValueError(f"no draft {draft_id!r}")
+    if not draft.can_request_image_prompt():
+        raise ValueError(f"draft {draft_id!r} in state {draft.state!r} cannot be re-imaged")
+    draft.apply_image_prompt(image_prompt=str(body.get("image_prompt", "") or ""))
     save_drafts(queue_path(cfg), drafts)
     return draft
 
@@ -1031,6 +1096,34 @@ def request_rewrite(cfg: dict, draft_id: str) -> Draft:
         if not draft.can_receive_rewrite():
             raise ValueError(f"draft {draft.id!r} in state {draft.state!r} cannot be rewritten")
         draft.rewrite_requested_at = now
+        draft.rewrite_mode = REWRITE_CAPTION
+        draft.rewrite_error = ""
+
+    return _save_one(cfg, draft_id, _mutate)
+
+
+def request_image_prompt(cfg: dict, draft_id: str) -> Draft:
+    """Ask the rewriter worker for a *fresh image prompt* on a draft.
+
+    The "Regenerate image prompt" action on /review/{id}: for a post whose
+    caption is already settled — often already approved and queued — the caption
+    is not what's wrong, the picture is. The worker rewrites only
+    ``image_prompt``/``image_style`` (``receive_image_prompt``); rendering the
+    result is a separate, human move ("Regenerate image" on the same page), so
+    the new prompt can be read — and edited — before it costs a picture.
+
+    Wider than ``request_rewrite`` on purpose: an ``approved`` draft may be
+    re-prompted, because the approval covers the caption the human read, not the
+    picture. Like ``request_rewrite`` this only *marks* the draft, never touches
+    the caption or the state, and never posts.
+    """
+    now = now_iso()
+
+    def _mutate(draft: Draft) -> None:
+        if not draft.can_request_image_prompt():
+            raise ValueError(f"draft {draft.id!r} in state {draft.state!r} cannot be re-imaged")
+        draft.rewrite_requested_at = now
+        draft.rewrite_mode = REWRITE_IMAGE
         draft.rewrite_error = ""
 
     return _save_one(cfg, draft_id, _mutate)
@@ -1041,6 +1134,7 @@ def cancel_rewrite(cfg: dict, draft_id: str) -> Draft:
 
     def _mutate(draft: Draft) -> None:
         draft.rewrite_requested_at = ""
+        draft.rewrite_mode = ""
         draft.rewrite_error = ""
 
     return _save_one(cfg, draft_id, _mutate)
@@ -1057,16 +1151,18 @@ def record_rewrite_error(cfg: dict, draft_id: str, error: str) -> Draft:
     def _mutate(draft: Draft) -> None:
         draft.rewrite_error = str(error or "").strip() or "unknown error"
         draft.rewrite_requested_at = ""
+        draft.rewrite_mode = ""
 
     return _save_one(cfg, draft_id, _mutate)
 
 
 def rewrite_queue(cfg: dict) -> list[Draft]:
-    """The drafts a human asked to rewrite, oldest request first (the worker's FIFO).
+    """The drafts a human asked the rewriter for, oldest request first (the worker's FIFO).
 
-    Read by ``GET /api/rewrite-queue`` for the rewriter worker; a draft leaves
-    the queue when its rewrite lands (``receive_rewrite``) or the request is
-    cancelled / fails.
+    Both kinds of request are here — a full rewrite and a prompt-only one — each
+    marked with ``Draft.rewrite_mode`` so the worker knows which it is; a draft
+    leaves the queue when its result lands (``receive_rewrite`` /
+    ``receive_image_prompt``) or the request is cancelled / fails.
     """
     pending = [draft for draft in load_drafts(queue_path(cfg)) if draft.rewrite_requested_at]
     return sorted(pending, key=lambda d: parse_when(d.rewrite_requested_at) or _EPOCH)
@@ -1083,6 +1179,17 @@ def approve_draft(cfg: dict, draft_id: str) -> Draft:
     the human gate: the scheduler itself never approves.
     """
     return _save_one(cfg, draft_id, lambda d: d.approve())
+
+
+def unapprove_draft(cfg: dict, draft_id: str) -> Draft:
+    """Pull a draft back out of the post queue (human action on /review).
+
+    The inverse of ``approve_draft``: the draft leaves the queue the poster
+    drains and returns to ``ai_draft``, so the scheduler skips it but it stays on
+    /review for further edits, a rewrite, or another approval. It never posts,
+    and never touches the caption.
+    """
+    return _save_one(cfg, draft_id, lambda d: d.unapprove())
 
 
 def _split_hashtags(text: str) -> list[str]:

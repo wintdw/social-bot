@@ -379,6 +379,53 @@ def rewrite_view(enabled: bool, drafts: list) -> dict:
     return {"enabled": enabled, "count": len(ids), "requested": ids}
 
 
+def rewriter_context(cfg: dict) -> dict:
+    """The brand context both rewriter APIs serve, so neither duplicates it.
+
+    What a rewriter needs to *write* rather than guess: the DNA, the voice menu,
+    and the image treatment briefs (a prompt has to serve the style it picked,
+    which a bare key name cannot say). Plus what it must not repeat — the recent
+    captions, and the recent `image_prompt`/`image_style` pairs, the image-side
+    analogue of the caption rule.
+    """
+    choices = pipeline.voice_choices(cfg)
+    return {
+        "dna": pipeline.dna_text(cfg),
+        "voices": {key: pipeline.voice_text(cfg, key) for key in choices},
+        "voice_choices": choices,
+        "default_voice": pipeline.default_voice(cfg),
+        "image_style_briefs": pipeline.image_style_briefs(cfg),
+        "recent": [
+            {"id": draft.id, "source": draft.source, "caption": draft.caption}
+            for draft in pipeline.recent_captions(cfg)
+        ],
+        "recent_images": [
+            {
+                "id": draft.id,
+                "image_style": draft.image_style,
+                "image_prompt": draft.image_prompt,
+            }
+            for draft in pipeline.recent_images(cfg)
+        ],
+    }
+
+
+def compose_edits(form) -> dict:
+    """The compose form's own fields, for the review actions that save-then-act.
+
+    Both image buttons submit the compose form (``form="publish-form"``), so each
+    of them is a save followed by its own work — the generation, or the request
+    for a new prompt. They share this one list on purpose: the prompt request has
+    to see the *image_style* the operator picked (that is the treatment the agent
+    writes for), and a field the two disagreed about would be a silent drop.
+    """
+    return {
+        name: str(form.get(name) or "")
+        for name in ("caption", "hashtags", "image_prompt", "image_style", "voice")
+        if name in form
+    }
+
+
 def safe_local_path(value: str, default: str = "/") -> str:
     """A same-site path for a post-action redirect, or ``default``.
 
@@ -814,13 +861,13 @@ def create_app(
         _persist_state()
         print(f"[web] posting {'paused' if paused else 'resumed'}", flush=True)
 
-    def _schedule_image(draft_id: str) -> None:
+    def _schedule_image(draft_id: str, *, overwrite: bool = False) -> None:
         """Queue a background image generation for a just-rewritten draft."""
         if state["shutting_down"]:
             return
         if not pipeline.image_gen_config(cfg).get("enabled"):
             return
-        _spawn(_image_job(draft_id))
+        _spawn(_image_job(draft_id, overwrite=overwrite))
 
     def _state_writable() -> bool:
         """True when the review and publish state dirs are writable."""
@@ -1417,6 +1464,24 @@ def create_app(
             status_code=303,
         )
 
+    @app.post("/review/{draft_id}/unapprove")
+    async def review_unapprove(draft_id: str):
+        """Pull an approved draft out of the post queue — the inverse of Approve & schedule.
+
+        A state change only: the draft returns to ``ai_draft`` so the poster skips
+        it, but it stays on /review. Never posts, and never touches the caption.
+        """
+        try:
+            await asyncio.to_thread(pipeline.unapprove_draft, cfg, draft_id)
+        except ValueError as exc:
+            return _page(render_message_html("Cannot unapprove", str(exc)), 400)
+        text = "Unapproved — back in the review queue and no longer scheduled to post."
+        return RedirectResponse(
+            f"/review/{urllib.parse.quote(draft_id)}"
+            f"?message={urllib.parse.quote(text)}&kind=warning",
+            status_code=303,
+        )
+
     @app.post("/review/{draft_id}/reject")
     async def review_reject(draft_id: str):
         try:
@@ -1445,11 +1510,7 @@ def create_app(
             text, kind = "An image is already being generated for this draft.", "warning"
         else:
             form = await request.form()
-            edits = {
-                name: str(form.get(name) or "")
-                for name in ("caption", "hashtags", "image_prompt", "image_style", "voice")
-                if name in form
-            }
+            edits = compose_edits(form)
             try:
                 if edits:
                     await asyncio.to_thread(pipeline.edit_draft, cfg, draft_id, **edits)
@@ -1518,6 +1579,43 @@ def create_app(
             f"{target}?message={urllib.parse.quote(text)}&kind={kind}", status_code=303
         )
 
+    @app.post("/review/{draft_id}/request-image-prompt")
+    async def review_request_image_prompt(draft_id: str, request: Request):
+        """Mark a draft for a *prompt-only* rewrite by the host-side worker.
+
+        The "Regenerate image prompt" action: the caption is fine but the picture
+        is not, so the worker writes a new ``image_prompt`` — the *subject* — for
+        the treatment the compose form has picked, and stops there, leaving the
+        render to the operator's "Regenerate image". The form is submitted like
+        /review/{id}/image, so the style on the page is saved first: the agent
+        writes *for* that style instead of choosing one of its own (a field-less
+        button would silently drop the operator's pick). Allowed on an approved
+        draft — the approval covers the caption, not the picture — which a caption
+        rewrite must not be. Like every rewriter request this only marks the draft.
+        """
+        target = f"/review/{urllib.parse.quote(draft_id)}"
+        if state["shutting_down"]:
+            text, kind = "Shutting down — try again shortly.", "warning"
+        elif not rewrite_enabled:
+            text, kind = "The rewriter is disabled (rewrite.enabled).", "error"
+        else:
+            form = await request.form()
+            edits = compose_edits(form)
+            try:
+                if edits:
+                    await asyncio.to_thread(pipeline.edit_draft, cfg, draft_id, **edits)
+                await asyncio.to_thread(pipeline.request_image_prompt, cfg, draft_id)
+                text = (
+                    "New image prompt requested for the style you picked — "
+                    "render it with “Regenerate image”."
+                )
+                kind = "success"
+            except ValueError as exc:
+                text, kind = str(exc), "error"
+        return RedirectResponse(
+            f"{target}?message={urllib.parse.quote(text)}&kind={kind}", status_code=303
+        )
+
     @app.post("/review/{draft_id}/cancel-rewrite")
     async def review_cancel_rewrite(draft_id: str):
         """Drop a pending rewriter request (never touches the caption)."""
@@ -1576,39 +1674,26 @@ def create_app(
         ``voices`` carries the configured voice menu (``publish.voices``, files in
         docs/voices/) as ``{key: brief+samples}``, with ``voice_choices`` (the
         ordered keys) and ``default_voice``; ``voice`` still carries the default
-        voice's text for convenience. ``recent`` carries the most recently written
-        captions (``publish.recent_captions``) so the rewriter can avoid repeating
-        an opener/closer/vocabulary across posts (DNA §12).
+        voice's text for convenience. ``image_style_briefs`` is the same idea for
+        the visual treatments (``image_gen.styles`` → docs/image-styles/), so a
+        rewriter writes an ``image_prompt`` that serves the style it picked
+        instead of guessing (DNA §9.2). ``recent`` carries the most recently
+        written captions (``publish.recent_captions``) so the rewriter can avoid
+        repeating an opener/closer/vocabulary across posts (DNA §12), and
+        ``recent_images`` the most recent ``image_prompt``/``image_style`` pairs
+        (``publish.recent_images``) for the same reason on the image side.
         """
         limit = _clamp(limit, 1, API_MAX_LIMIT, API_DEFAULT_LIMIT)
         offset = max(0, offset)
-
-        def _load():
-            choices = pipeline.voice_choices(cfg)
-            return (
-                pipeline.list_drafts(cfg, pipeline.OPEN_STATES),
-                pipeline.dna_text(cfg),
-                choices,
-                {key: pipeline.voice_text(cfg, key) for key in choices},
-                pipeline.default_voice(cfg),
-                pipeline.recent_captions(cfg),
-            )
-
-        drafts, dna, voice_choices, voices, default_voice, recent = await asyncio.to_thread(_load)
+        drafts = await asyncio.to_thread(pipeline.list_drafts, cfg, pipeline.OPEN_STATES)
+        context = await asyncio.to_thread(rewriter_context, cfg)
         total = len(drafts)
         window = drafts[offset : offset + limit]
         consumed = offset + len(window)
         return JSONResponse(
             {
-                "dna": dna,
-                "voices": voices,
-                "voice_choices": voice_choices,
-                "default_voice": default_voice,
-                "voice": voices.get(default_voice, ""),
-                "recent": [
-                    {"id": draft.id, "source": draft.source, "caption": draft.caption}
-                    for draft in recent
-                ],
+                **context,
+                "voice": context["voices"].get(context["default_voice"], ""),
                 "drafts": [d.to_dict() for d in window],
                 "total": total,
                 "offset": offset,
@@ -1658,42 +1743,50 @@ def create_app(
         """The drafts a human asked to rewrite, plus the brand context a worker needs.
 
         Polled by scripts/rewrite_worker.py: the draft's own fields, the DNA brief,
-        the voice menu, the masthead and image-style choices, and the recent
-        captions (so the rewriter does not repeat them). The worker runs the
-        Command Code CLI per draft and POSTs the result back to
+        the voice menu, the masthead and image-style choices, the treatment briefs
+        themselves (``image_style_briefs`` — so the rewriter writes an
+        ``image_prompt`` that serves the style it picked), and the recent captions
+        and image prompts, so it repeats neither a hook nor a subject. The worker
+        runs the Command Code CLI per draft and POSTs the result back to
         /api/drafts/{id}/rewrite; a failure goes to /api/drafts/{id}/rewrite-error.
         """
 
-        def _load():
-            choices = pipeline.voice_choices(cfg)
-            return (
-                pipeline.rewrite_queue(cfg),
-                pipeline.dna_text(cfg),
-                choices,
-                {key: pipeline.voice_text(cfg, key) for key in choices},
-                pipeline.default_voice(cfg),
-                pipeline.recent_captions(cfg),
-            )
-
-        drafts, dna, voice_choices, voices, default_voice, recent = await asyncio.to_thread(_load)
+        drafts = await asyncio.to_thread(pipeline.rewrite_queue, cfg)
+        context = await asyncio.to_thread(rewriter_context, cfg)
         return JSONResponse(
             {
                 "generated_at": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
                 "count": len(drafts),
-                "dna": dna,
-                "voices": voices,
-                "voice_choices": voice_choices,
-                "default_voice": default_voice,
+                **context,
                 "mastheads": pipeline.masthead_config(cfg),
                 "image_styles": pipeline.image_style_choices(cfg),
                 "default_style": pipeline.default_image_style(cfg),
-                "recent": [
-                    {"id": draft.id, "source": draft.source, "caption": draft.caption}
-                    for draft in recent
-                ],
                 "drafts": [draft.to_dict() for draft in drafts],
             }
         )
+
+    @app.post("/api/drafts/{draft_id}/image-prompt")
+    async def api_image_prompt(draft_id: str, request: Request):
+        """Store a prompt-only rewrite (from the worker). Nothing is rendered.
+
+        Only ``image_prompt``/``image_style`` are taken: the caption and the
+        draft's state are untouched, so a draft already queued to post stays
+        queued. Rendering is the operator's own step — "Regenerate image" on
+        /review/{id} — so the new prompt lands on the page to be read (and
+        edited) before it is spent on a picture. Never auto-render here: that
+        would put a new picture behind a prompt nobody has looked at yet.
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
+        if not isinstance(body, dict):
+            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
+        try:
+            draft = await asyncio.to_thread(pipeline.receive_image_prompt, cfg, draft_id, body)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({"draft": draft.to_dict()})
 
     @app.post("/api/drafts/{draft_id}/rewrite-error")
     async def api_rewrite_error(draft_id: str, request: Request):

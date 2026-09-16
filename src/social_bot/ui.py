@@ -459,6 +459,15 @@ details.dna pre, details.voice pre { white-space: pre-wrap; overflow-wrap: anywh
 .action-bar .spacer { margin-left: auto; }
 .action-bar .hint { color: var(--muted); font-size: .8rem; }
 
+/* ---------- compose tool groups ---------- */
+/* The Compose panel's secondary controls, grouped under a small label so the
+   sticky action bar carries only the terminal actions (post / approve / save /
+   reject). A tool that acts on a field sits under it. */
+.toolgroup { display: flex; flex-direction: column; gap: .5rem; padding-top: 1rem;
+             border-top: 1px dashed var(--border); }
+.toolgroup-label { font-size: .7rem; letter-spacing: .1em; text-transform: uppercase;
+                   color: var(--muted); font-weight: 700; }
+
 /* ---------- stepper ---------- */
 .stepper { display: flex; flex-direction: column; }
 .step { display: grid; grid-template-columns: 20px 1fr; gap: .75rem; padding-bottom: .75rem;

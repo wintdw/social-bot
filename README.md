@@ -150,7 +150,7 @@ docker compose logs -f                # follow refresh/scan runs
 |---|---|
 | `GET /` | **Dashboard** — refresh/scan controls, open-draft and published counts, scheduler state, the next post (time + which draft), and the cached feed. |
 | `GET /review` | **Review queue** — open drafts, newest first (with a **Scan sources now** button). Paged (`?page=`, `?per_page=`, default 20). |
-| `GET /review/{id}` | One draft: editable caption + hashtags + English image prompt, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set, a **Rewrite with Command Code** button when `rewrite.enabled` is set, the DNA brief. |
+| `GET /review/{id}` | One draft: editable caption + hashtags + English image prompt, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set (and **Unapprove** on a draft already approved), a **Rewrite with Command Code** button when `rewrite.enabled` is set, and **Regenerate image prompt** (a fresh prompt from the agent, which you then render with **Regenerate image** — also on an approved draft), the DNA brief. |
 | `GET /queue` | **Post queue** — the approved drafts in the order they will post, the one going out next marked, with drag / Top-Up-Down reorder controls and a **Post approved now** button. |
 | `GET /publish` | **Published** — the audit log (public and private sends, with permalinks). |
 | `GET /status` | **Status** — sources, drafts by state, publish settings (min interval, days remaining, next up), and scheduler runs. |
@@ -162,10 +162,12 @@ docker compose logs -f                # follow refresh/scan runs
 | `POST /publish/run` | Post the approved queue now, without waiting for a slot. |
 | `POST /review/{id}/save` | Save the compose edits (caption, hashtags, image prompt); never posts. |
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only; `approve=1` queues the draft for the next slot instead). |
+| `POST /review/{id}/unapprove` | Pull an approved draft back out of the queue (back to `ai_draft`); never posts. |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
 | `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a generated one. |
 | `POST /review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (needs `rewrite.enabled`); never rewrites itself. |
-| `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request. |
+| `POST /review/{id}/request-image-prompt` | Mark the draft for a *prompt-only* rewrite (a fresh image prompt, then a new image); never rewrites itself. Works on an approved draft too. |
+| `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request (either kind). |
 
 All five pages share the same top navigation, so you can move between them
 without editing URLs; `/drafts` redirects to `/review` for old bookmarks.
@@ -211,6 +213,8 @@ enters the image and `destinations.facebook.account_id` edits need no rebuild.
 Beyond the page feed, `serve` hosts a draft review workflow. Nothing is ever
 auto-posted: the AI rewrite is a suggestion, and only a human approval publishes
 — immediately ("Post now") or via the posting schedule ("Approve & schedule").
+An approval stays reversible (**Unapprove** on `/review/{id}`) until the post
+actually goes out, so a draft queued by mistake can be pulled back.
 
 ```
 source feeds ── blog scan ──▶ drafts (extracted)
@@ -259,6 +263,14 @@ Code CLI headlessly on the host, and POSTs the result back to
 `/api/drafts/{id}/rewrite` — the app never runs the agent itself (the container
 has no Node). See [operations](docs/operations.md) for running it as a service.
 
+Same worker, second kind of request: **Regenerate image prompt** on
+`/review/{id}` asks for a new *image prompt* only — the caption is left exactly as
+approved, and the image style on the page is the one the agent writes for — and
+renders nothing: the prompt lands on the page to be read (or edited), and
+**Regenerate image** is the separate move that renders it. The worker
+tells the two apart from the request's own kind (`Draft.rewrite_mode`) and posts a
+prompt-only result to `/api/drafts/{id}/image-prompt`.
+
 State lives under `data/review/`: `queue.json` (the queue) and `seen.json`
 (dedupe); the publish audit is `data/publish/published.jsonl`. Set
 `publish.enabled: false` for a global kill-switch, `publish.interval_days` for a
@@ -287,20 +299,23 @@ not a dry run — it does create a post object, just an unpublished one.
 |---|---|
 | `GET /` | Dashboard: controls + counts + scheduler state + cached feed. |
 | `GET /review` | HTML review list of open drafts (with a **Scan sources now** button). |
-| `GET /review/{id}` | HTML detail with an editable caption, hashtags, image prompt, and image style + Approve/Reject. |
+| `GET /review/{id}` | HTML detail with an editable caption, hashtags, image prompt, and image style + Approve/Reject (and Unapprove on an approved draft). |
 | `GET /publish` | HTML audit log of what has been posted (public and private). |
 | `GET /status` | HTML status page (sources, drafts by state, publish settings, runs). |
 | `POST /scan` | Trigger a source scan now (`{"started": true}`, or `409` if one is running). |
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only). |
+| `POST /review/{id}/unapprove` | Pull an approved draft back out of the queue (back to `ai_draft`); never posts. |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
 | `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a generated one. |
 | `POST /review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (`rewrite.enabled`); never rewrites itself. |
-| `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request. |
-| `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents (`dna`) + the voice menu `publish.voices` (`voices` = `{key: brief+samples}`, with `voice_choices`/`default_voice`) + `recent` captions, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
-| `GET /api/rewrite-queue` | JSON: the drafts a human asked to rewrite + the brand context (DNA, voices, mastheads, image styles, `recent`), polled by the host-side rewriter worker. |
-| `POST /api/drafts/{id}/rewrite-error` | JSON: record the rewriter worker's failure and close the request (shown on `/review/{id}`). |
+| `POST /review/{id}/request-image-prompt` | Mark the draft for a *prompt-only* rewrite; works on an approved draft too. |
+| `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request (either kind). |
+| `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents (`dna`) + the voice menu `publish.voices` (`voices` = `{key: brief+samples}`, with `voice_choices`/`default_voice`) + the image treatment briefs (`image_style_briefs`) + `recent` captions and `recent_images` prompts, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
+| `GET /api/rewrite-queue` | JSON: the drafts a human asked to rewrite + the brand context (DNA, voices, mastheads, image styles **and their briefs**, `recent` captions, `recent_images`), polled by the host-side rewriter worker. Each draft carries `rewrite_mode` (what the request asks for). |
 | `GET /api/status` | JSON: full pipeline snapshot — sources, drafts by state, seen, published, schedules, lifecycle. `publish.next_draft` names the oldest approved draft the poster will send next (`publish.approved` counts them, `publish.interval_remaining` is the days still to wait). |
 | `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `image_prompt`, `image_style`, `voice`). |
+| `POST /api/drafts/{id}/image-prompt` | JSON: store a *prompt-only* rewrite (`image_prompt`, `image_style`) and re-render the image. The caption and the draft's state are untouched. |
+| `POST /api/drafts/{id}/rewrite-error` | JSON: record the rewriter worker's failure and close the request (shown on `/review/{id}`). |
 
 **Destinations** are pluggable: each platform is a package under
 `src/social_bot/destinations/` and is registered in `destinations/registry.py`.

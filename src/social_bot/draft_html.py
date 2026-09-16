@@ -9,7 +9,10 @@ series masthead, the item's own date, and a one-line caption preview. A row is
 titled by the caption's hook — the rule shared with the feed in `caption.py` —
 falling back to the source's own title while the draft is still unwritten. The
 detail page reads as a production sheet — image hero, editable caption, a live
-Facebook-style preview, a pipeline stepper, and one clearly primary action.
+Facebook-style preview, a pipeline stepper, and one clearly primary action. Its
+secondary controls are grouped in the Compose panel under the fields they act on
+(the image tools, then the caption rewrite), so the sticky action bar carries only
+the terminal actions that move the draft: post, approve & schedule, save, reject.
 """
 
 from __future__ import annotations
@@ -20,7 +23,7 @@ import urllib.parse
 
 from .caption import display_title, leading_masthead
 from .destinations import label_for, labels_for
-from .drafts import Draft, parse_when
+from .drafts import REWRITE_IMAGE, Draft, parse_when
 from .ui import BRAND_EYEBROW, badge, fmt_when, layout
 
 # Human labels for the status filter chips (the badge shows the raw state).
@@ -76,10 +79,15 @@ _DETAIL_SCRIPT = """<script>
   form.addEventListener('submit', function (event) {
     if (form.dataset.submitting === '1') { event.preventDefault(); return; }
     var button = event.submitter;
+    // What a submit *does* is read off where it goes, not off a list of button
+    // names: the compose tools (Regenerate image / Write image prompt) and Save
+    // each override the form's action with formaction, so only a submit of the
+    // form's own action publishes — and only that one asks for the posting
+    // confirmation. A submit with no button (Enter in a field) counts as a post.
+    var target = (button && button.getAttribute('formaction')) || form.getAttribute('action');
+    var posts = target === form.getAttribute('action');
     var isApprove = !!button && button.name === 'approve';
-    var isSave = !!button && button.name === 'save';
-    var isRegen = !!button && button.name === 'regenerate';
-    if (!isApprove && !isSave && !isRegen && form.dataset.private !== 'true') {
+    if (posts && !isApprove && form.dataset.private !== 'true') {
       if (!window.confirm('Post this publicly to __DEST__?')) {
         event.preventDefault();
         return;
@@ -89,10 +97,12 @@ _DETAIL_SCRIPT = """<script>
     for (var i = 0; i < buttons.length; i++) {
       if (buttons[i] !== button) buttons[i].disabled = true;
     }
+    if (!button) return;
+    // The button's own name is only a cue for which verb to show.
     if (isApprove) button.textContent = 'Approving\u2026';
-    else if (isSave) button.textContent = 'Saving\u2026';
-    else if (isRegen) button.textContent = 'Generating\u2026';
-    else if (button) button.textContent = 'Posting\u2026';
+    else if (button.name === 'save') button.textContent = 'Saving\u2026';
+    else if (button.name === 'regenerate') button.textContent = 'Generating\u2026';
+    else if (posts) button.textContent = 'Posting\u2026';
   });
   var reject = document.getElementById('reject-form');
   if (reject) reject.addEventListener('submit', function (event) {
@@ -601,16 +611,25 @@ def render_draft_html(
     # A requested rewrite is run by an external worker (scripts/rewrite_worker.py),
     # so the page can only report that the request is open — and, when the worker
     # fails, why nothing came back. The poll script reloads once the request clears.
+    # Two kinds of request share the notice: a full rewrite, and a prompt-only one
+    # ("the caption is fine, the picture is not"), which is also allowed on an
+    # approved draft — hence the wider gate.
     rewrite_note = ""
-    if rewrite_enabled and draft.can_receive_rewrite():
-        if draft.rewrite_requested_at:
+    if rewrite_enabled and draft.can_request_image_prompt():
+        kind = draft.rewrite_kind()
+        if kind:
+            pending = (
+                "Writing a new image prompt — render it with “Regenerate image” when it lands."
+                if kind == REWRITE_IMAGE
+                else "This page refreshes when a rewrite lands."
+            )
+            what = "New image prompt requested" if kind == REWRITE_IMAGE else "Rewriter requested"
             rewrite_note = (
                 '<div class="notice" id="rewrite-job" role="status" '
                 f'data-draft-id="{html.escape(draft.id)}">'
                 '<span class="dot dot-warn" aria-hidden="true"></span>'
-                f" Rewriter requested {html.escape(fmt_when(draft.rewrite_requested_at))} — "
-                "waiting for the Command Code worker. This page refreshes when a rewrite "
-                "lands.</div>"
+                f" {what} {html.escape(fmt_when(draft.rewrite_requested_at))} — waiting for "
+                f"the Command Code worker. {pending}</div>"
             )
         elif draft.rewrite_error:
             rewrite_note = (
@@ -624,9 +643,11 @@ def render_draft_html(
     action = html.escape(f"/review/{draft.id}")
 
     # The visual treatment menu (image_gen.styles): the rewriter picks one per
-    # post like the masthead; an operator can override before regenerating. The
-    # hint under it is the chosen style file's own guidance, so the page says
-    # what each treatment is for instead of keeping a second copy of the docs.
+    # post like the masthead; an operator can override it, and the pick governs
+    # both image tools — Regenerate image renders this treatment, Regenerate
+    # image prompt has the agent write a subject for it. The hint under it is the
+    # chosen style file's own guidance, so the page says what each treatment is
+    # for instead of keeping a second copy of the docs.
     style_field = ""
     if image_styles:
         hints = image_style_hints or {}
@@ -704,11 +725,126 @@ def render_draft_html(
         '<div class="field"><label for="image_prompt">Image prompt · English</label>'
         f'<input type="text" id="image_prompt" name="image_prompt" value="{prompt}">'
         '<div class="field-hint">Subject and composition for the generated image — '
-        "also the image's alt text. Falls back to the source title when blank."
+        "also the image's alt text. Falls back to the source title when blank. "
+        "“Regenerate image prompt” asks Command Code to write a new one for the image "
+        "style picked below; render it with “Regenerate image”."
         "</div></div>"
         f"{style_field}"
         "</form>"
     )
+
+    image_button = ""
+    if image_enabled:
+        label = "Regenerate image" if draft.image else "Generate image"
+        # Submit the compose form to /image (not a form of its own): the image
+        # prompt and style above are saved with the generation, so what the
+        # operator just picked is what the provider is asked for.
+        image_button = (
+            f'<button type="submit" form="publish-form" formaction="{action}/image" '
+            f'name="regenerate" value="1" class="btn btn-quiet">{label}</button>'
+        )
+    # The current image came from image_gen, so the source post's own picture is
+    # still available (stored on the draft, or read back from the source page).
+    # Its own form: restoring the image must not save or post the caption edits.
+    restore_button = ""
+    if image_generated:
+        restore_button = (
+            f'<form id="restore-image-form" method="post" action="{action}/restore-image">'
+            '<button type="submit" class="btn btn-quiet">Restore source image</button>'
+            "</form>"
+        )
+    # "Rewrite with Command Code": marks the draft for the host-side worker, which
+    # rewrites it and posts the result back. Its own form (like Restore image), so
+    # it never carries compose edits — the rewrite replaces the caption anyway.
+    rewrite_button = ""
+    if rewrite_enabled and draft.can_receive_rewrite():
+        if draft.rewrite_kind() == REWRITE_IMAGE:
+            # A prompt-only request is open. A full rewrite supersedes it (its own
+            # new image_prompt included), so the request button stays available.
+            rewrite_button = (
+                f'<form id="rewrite-form" method="post" action="{action}/request-rewrite">'
+                '<button type="submit" class="btn">Rewrite caption instead</button>'
+                "</form>"
+            )
+        elif draft.rewrite_requested_at:
+            rewrite_button = (
+                f'<form id="rewrite-form" method="post" action="{action}/cancel-rewrite">'
+                '<button type="submit" class="btn btn-quiet">Cancel rewrite</button>'
+                "</form>"
+            )
+        else:
+            rewrite_button = (
+                f'<form id="rewrite-form" method="post" action="{action}/request-rewrite">'
+                '<button type="submit" class="btn">Rewrite with Command Code</button>'
+                "</form>"
+            )
+    # "Regenerate image prompt": the other side of Regenerate image — that one
+    # renders exactly the prompt and style typed above, this one asks Command Code
+    # to write a new *subject* for the style picked above, and stops there. The
+    # render stays a separate move, so a prompt can be read — and edited — before
+    # it is spent on a picture. It submits the compose form like Regenerate image
+    # does, because the style on screen is what the agent has to write for: a
+    # field-less form would drop the pick twice over, once here and once at the
+    # worker, which would otherwise choose a treatment of its own.
+    prompt_button = ""
+    if image_enabled and rewrite_enabled and draft.can_request_image_prompt():
+        if draft.rewrite_kind() == REWRITE_IMAGE:
+            # Cancel is not a request — its own field-less form, so dropping the
+            # request never saves (or posts) half-typed compose edits.
+            prompt_button = (
+                f'<form id="prompt-form" method="post" action="{action}/cancel-rewrite">'
+                '<button type="submit" class="btn btn-quiet">Cancel prompt rewrite</button>'
+                "</form>"
+            )
+        else:
+            label = "Regenerate image prompt" if draft.image_prompt else "Write image prompt"
+            prompt_button = (
+                f'<button type="submit" form="publish-form" '
+                f'formaction="{action}/request-image-prompt" class="btn btn-quiet">{label}</button>'
+            )
+    # Timed posting: a human approves here, the serve scheduler posts later.
+    # The button submits the caption form too, so edits are saved with the
+    # approval instead of being silently dropped. Only an ai_draft can approve.
+    approve_button = ""
+    when = f"the next slot ({next_post})" if next_post else "the next slot"
+    if scheduling and draft.state == "ai_draft":
+        approve_button = (
+            '<button type="submit" form="publish-form" name="approve" value="1" '
+            'class="btn">Approve &amp; schedule</button>'
+        )
+
+    # Approval is reversible until the post goes out: a queued draft can be
+    # pulled back to ai_draft, so the poster skips it while it stays on /review
+    # for another pass. Its own form (like Reject): unapproving is a state
+    # change, not a commit of the compose fields.
+    unapprove_button = ""
+    if draft.state == "approved":
+        unapprove_button = (
+            f'<form id="unapprove-form" method="post" action="{action}/unapprove">'
+            '<button type="submit" class="btn btn-quiet">Unapprove</button></form>'
+        )
+
+    # The compose-local tools live under the fields they act on, each group under
+    # its own label, so the sticky action bar below carries only the actions that
+    # move the draft (post / approve / save / reject). They sit outside the
+    # publish form — a <form> cannot nest inside another — so the buttons that do
+    # act on the fields above (both image ones) reach back into it with the form=
+    # attribute, while the tools that only mark or cancel the draft keep a
+    # field-less form of their own and carry nothing.
+    tool_groups = ""
+    image_tools = image_button + prompt_button + restore_button
+    if image_tools:
+        tool_groups += (
+            '<div class="toolgroup" role="group" aria-label="Image tools">'
+            '<span class="toolgroup-label">Image</span>'
+            f'<div class="cmdbar">{image_tools}</div></div>'
+        )
+    if rewrite_button:
+        tool_groups += (
+            '<div class="toolgroup" role="group" aria-label="Rewrite caption">'
+            '<span class="toolgroup-label">Rewrite caption</span>'
+            f'<div class="cmdbar">{rewrite_button}</div></div>'
+        )
 
     masthead = leading_masthead(draft.caption)
     masthead_pill = (
@@ -720,7 +856,8 @@ def render_draft_html(
         '<section class="panel">'
         '<div class="panel-head"><span class="label">Compose</span>'
         f"{masthead_pill}</div>"
-        f'<div class="composer">{_lint_notice(draft)}{image_note}{rewrite_note}{form}</div></section>'
+        f'<div class="composer">{_lint_notice(draft)}{image_note}{rewrite_note}'
+        f"{form}{tool_groups}</div></section>"
     )
 
     preview_media = ""
@@ -750,62 +887,15 @@ def render_draft_html(
         if private
         else f"This publishes to {dest_text}."
     )
-    image_button = ""
-    if image_enabled:
-        label = "Regenerate image" if draft.image else "Generate image"
-        # Submit the compose form to /image (not a form of its own): the image
-        # prompt and style above are saved with the generation, so what the
-        # operator just picked is what the provider is asked for.
-        image_button = (
-            f'<button type="submit" form="publish-form" formaction="{action}/image" '
-            f'name="regenerate" value="1" class="btn btn-quiet">{label}</button>'
-        )
-    # The current image came from image_gen, so the source post's own picture is
-    # still available (stored on the draft, or read back from the source page).
-    # Its own form: restoring the image must not save or post the caption edits.
-    restore_button = ""
-    if image_generated:
-        restore_button = (
-            f'<form id="restore-image-form" method="post" action="{action}/restore-image">'
-            '<button type="submit" class="btn btn-quiet">Restore source image</button>'
-            "</form>"
-        )
-    # "Rewrite with Command Code": marks the draft for the host-side worker, which
-    # rewrites it and posts the result back. Its own form (like Restore image), so
-    # it never carries compose edits — the rewrite replaces the caption anyway.
-    rewrite_button = ""
-    if rewrite_enabled and draft.can_receive_rewrite():
-        if draft.rewrite_requested_at:
-            rewrite_button = (
-                f'<form id="rewrite-form" method="post" action="{action}/cancel-rewrite">'
-                '<button type="submit" class="btn btn-quiet">Cancel rewrite</button>'
-                "</form>"
-            )
-        else:
-            rewrite_button = (
-                f'<form id="rewrite-form" method="post" action="{action}/request-rewrite">'
-                '<button type="submit" class="btn">Rewrite with Command Code</button>'
-                "</form>"
-            )
-    # Timed posting: a human approves here, the serve scheduler posts later.
-    # The button submits the caption form too, so edits are saved with the
-    # approval instead of being silently dropped. Only an ai_draft can approve.
-    approve_button = ""
-    when = f"the next slot ({next_post})" if next_post else "the next slot"
-    if scheduling and draft.state == "ai_draft":
-        approve_button = (
-            '<button type="submit" form="publish-form" name="approve" value="1" '
-            'class="btn">Approve &amp; schedule</button>'
-        )
+    # The bar carries only the terminal actions — post, approve, save, reject.
+    # The compose-local tools (image, rewrite) are grouped up in the Compose
+    # panel, under the fields they act on.
     action_bar = (
         '<div class="action-bar">'
         f'<button type="submit" form="publish-form" class="btn-primary">{primary}</button>'
-        f"{approve_button}"
+        f"{approve_button}{unapprove_button}"
         f'<button type="submit" form="publish-form" formaction="{action}/save" '
         'name="save" value="1" class="btn btn-quiet">Save</button>'
-        f"{image_button}"
-        f"{restore_button}"
-        f"{rewrite_button}"
         f'<span class="hint">{target}</span>'
         '<span class="spacer"></span>'
         f'<form id="reject-form" method="post" action="{action}/reject">'
@@ -815,15 +905,15 @@ def render_draft_html(
 
     schedule_note = ""
     if scheduling and draft.state == "approved":
+        tail = "Use Post now to send it immediately; Unapprove pulls it from the queue."
         if posting_paused:
             schedule_note = (
                 '<p class="field-hint">Approved — posting is paused, so it waits until '
-                "you resume. Use Post now to send it immediately.</p>"
+                f"you resume. {tail}</p>"
             )
         else:
             schedule_note = (
-                f'<p class="field-hint">Approved — waiting for {html.escape(when)}. '
-                "Use Post now to send it immediately.</p>"
+                f'<p class="field-hint">Approved — waiting for {html.escape(when)}. {tail}</p>'
             )
     elif scheduling and draft.state == "ai_draft":
         if posting_paused:
@@ -894,7 +984,10 @@ def render_draft_html(
         f'<div class="panel-body">{_stepper(draft)}</div></section>'
     )
 
-    tail = '<p class="muted">Publishing is human-gated: only the buttons here send anything.</p>'
+    tail = (
+        '<p class="muted">Publishing is human-gated: only the buttons on this page '
+        "send anything.</p>"
+    )
 
     body = (
         header

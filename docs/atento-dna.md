@@ -38,6 +38,13 @@ the default voice's text, for convenience.) This DNA still owns structure — th
 masthead, the opening Formats, hashtags/CTA, and the output contract (§9) do not
 change; if a voice file and this one ever disagree, this file wins on structure.
 
+The same response carries **`image_style_briefs`** — the text of every configured
+visual treatment (`image_gen.styles` → `docs/image-styles/<key>.md`) — and
+**`recent_images`**, the last few `image_prompt`/`image_style` pairs already
+written. Read both before choosing `image_style` and writing `image_prompt` (§9):
+the brief is what your prompt has to serve, and the recent images are what it must
+not repeat.
+
 Blog items (`sources: atento-blog`) are *Atento's own* articles — the caption's
 job is to sell the idea and send readers to the post. Event/recruit items are
 *announcements* — the job is clear logistics + a warm call to action.
@@ -388,9 +395,19 @@ Ví dụ:
 | `hashtags` | array[string] | 2–4 tag, **kèm dấu `#`**, gồm `#Atento` + `#fromfoundationtoexcellence` + 1 topic. |
 | `cta` | string | Câu kêu gọi hành động — **chỉ để người duyệt đọc**, không được đăng; bản tương ứng phải có trong `caption`. |
 | `commentary` | string | 2–4 câu cho người duyệt: register nào, **format/hook** là gì, mức drama, có gì cần xác nhận. |
-| `image_prompt` | string | **Tiếng Anh.** Một ý tưởng thị giác CỤ THỂ cho ảnh của riêng bài này (§9.1). Cũng là alt text của ảnh — không cần bản dịch tiếng Việt. |
-| `image_style` | string | Phong cách vẽ cho ảnh, chọn **một** khóa theo bài như masthead (§9.2): `technical` / `editorial` / `sketch` / `bulletin`. Bỏ trống thì pipeline dùng mặc định. |
+| `image_prompt` | string | **Tiếng Anh.** Một ý tưởng thị giác CỤ THỂ cho ảnh của riêng bài này, viết theo `image_style` đã chọn (§9.1). Cũng là alt text của ảnh — không cần bản dịch tiếng Việt. |
+| `image_style` | string | Phong cách vẽ cho ảnh, chọn **một** khóa theo bài như masthead (§9.2): `technical` / `editorial` / `sketch` / `bulletin` / `diagram`. Bỏ trống thì pipeline dùng mặc định. |
 | `voice` | string | Giọng viết, chọn **một** khóa theo bài (§3): `technical` / `essay` / `announcement` / `funny`. Bỏ trống thì pipeline dùng `publish.default_voice`. |
+
+**Yêu cầu chỉ đổi ảnh** (nút **Regenerate image prompt** trên `/review/{id}`, khi
+caption đã duyệt và chỉ ảnh chưa vừa ý): hợp đồng ở đây chỉ còn **một trường
+`image_prompt`**, gửi về `POST /api/drafts/{id}/image-prompt` — không có `caption`,
+`hashtags`, `cta`, `commentary`, `voice`, và **caption đã duyệt thì không được đụng
+tới**. **`image_style` là do người duyệt chọn** trong form soạn thảo và đã được lưu
+kèm yêu cầu: prompt phải viết **cho đúng style đó**, không tự chọn style khác và cũng
+không trả `image_style` về. Kết quả **không được vẽ ảnh luôn**: prompt hiện ra trên
+trang để người duyệt đọc (và sửa), rồi **Regenerate image** mới là bước vẽ. Quy tắc
+còn lại của §9.1 vẫn nguyên: không lặp lại chủ thể trong `recent_images`.
 
 ### 9.1 `image_prompt` — ảnh phải cụ thể, và phải khác nhau
 
@@ -402,14 +419,21 @@ Ví dụ:
   tiếng Việt còn dễ bị vẽ thành chữ lên ảnh.
 - **Cụ thể và hình dung được**, không phải bản dịch của tiêu đề. Tả một *thứ nhìn
   thấy được*, không tả một *khái niệm*.
-- **Mỗi bài một ẩn dụ thị giác khác nhau.** Đừng dùng lại cùng một khuôn cho
-  nhiều bài — đây là lỗi dễ mắc nhất.
-- **Không** để lộ chữ/số trong ảnh, không người/mặt, không icon cloud-mũi-tên,
-  không sơ đồ kiểu screenshot UI. Palette đã do
-  `docs/atento-image-style.md` lo; **chất liệu và bố cục** do `image_style` quyết
-  (§9.2) — **không nhắc lại** cả hai, chỉ tập trung chủ thể.
+- **Prompt phục vụ `image_style` bạn chọn.** Đọc brief của style đó (gửi kèm trong
+  `image_style_briefs`, và trong khối **IMAGE STYLE BRIEFS**) rồi tả đúng thứ nó
+  vẽ: `editorial` là một tĩnh vật, `technical` là một kết cấu, `diagram` là một cơ
+  chế có nhãn (§9.2). **Không phải bài nào cũng cần một ẩn dụ** — bài về cơ chế thì
+  tả cấu trúc, đừng gò nó thành ẩn dụ.
+- **Không lặp lại ảnh gần đây.** `recent_images` liệt kê `image_prompt` +
+  `image_style` của các bài vừa viết: đừng dùng lại cùng một đồ vật hay bố cục
+  (bài nào cũng "một chồng sách trên nền giấy"). Đây là cách giữ ảnh khác nhau —
+  thay cho quy tắc cũ "mỗi bài một ẩn dụ khác nhau".
+- **Chỉ tả chủ thể.** Palette do `docs/atento-image-style.md` lo; **chất liệu, bố
+  cục và những gì phải tránh** (người/mặt, chữ, các cliché) do file treatment của
+  `image_style` quyết (§9.2) — **không nhắc lại** ở đây, chỉ tập trung vào thứ sẽ
+  được vẽ.
 
-Ví dụ tốt (cụ thể, khác nhau, có ẩn dụ):
+Ví dụ tốt (cụ thể, mỗi bài một chủ thể khác nhau):
 
 | Bài | `image_prompt` |
 |---|---|
@@ -417,6 +441,7 @@ Ví dụ tốt (cụ thể, khác nhau, có ẩn dụ):
 | Kiến thức nền tảng | `a tall building whose visible floors are few but whose foundation extends far underground` |
 | Sau AI | `a hand-drawn sketch beside a finished print, the sketch faintly visible under the print` |
 | Code giỏi chưa chắc làm việc giỏi | `a single sheet of paper with one diagram, passed along a row of empty desks` |
+| Agent nói chuyện với nhau *(diagram)* | `two agents exchanging messages through one shared channel. Labels: "AGENT 1", "SHARED CHANNEL", "AGENT 2"` |
 
 Ví dụ kém (trừu tượng, dễ ra ảnh giống nhau):
 
@@ -441,21 +466,39 @@ Ví dụ:
 
 Cùng một ý tưởng thị giác, vẽ theo các *chất liệu* khác nhau sẽ ra ảnh rất khác
 nhau. Mỗi bài chọn **đúng một** `image_style` theo nội dung và tông — giống như
-chọn masthead (§4.5), chọn theo **bài**, không theo vòng xoay. Palette và các
-điều cấm thì không đổi (đã có ở `docs/atento-image-style.md`).
+chọn masthead (§4.5), chọn theo **bài**, không theo vòng xoay. Palette dùng chung
+(`docs/atento-image-style.md`); mọi thứ còn lại — chất liệu, bố cục, và những gì
+phải tránh — nằm trong file treatment của style đó.
 
 | `image_style` | Dùng khi |
 |---|---|
-| `technical` | Bài System Design / Architecture, foundation — giải thích cấu trúc, cơ chế, trade-off. Nét vẽ kỹ thuật, đo đạc, có lưới và kết cấu. |
-| `editorial` *(mặc định)* | Bài nền tảng / nghề nghiệp / mindset chung — một ý trừu tượng cần ẩn dụ tĩnh. Tĩnh vật editorial, ấm và trầm. |
-| `sketch` | Essay cá nhân / ý kiến (giọng Đạt) — kể chuyện, tự vấn. Nét bút chì nhanh, hơi thô, đời thường. |
-| `bulletin` | Thông báo, sự kiện, cộng đồng, tin tức — cần đọc nhanh. Bố cục poster tối giản, mảng phẳng, rõ trọng tâm. |
+| `technical` | Bài System Design / Architecture, foundation — giải thích cấu trúc, cơ chế, trade-off. Nét vẽ kỹ thuật, đo đạc, có lưới và kết cấu. Không chữ. |
+| `editorial` *(mặc định)* | Bài nền tảng / nghề nghiệp / mindset chung — một ý trừu tượng cần ẩn dụ tĩnh. Tĩnh vật editorial, ấm và trầm. Không chữ. |
+| `sketch` | Essay cá nhân / ý kiến (giọng Đạt) — kể chuyện, tự vấn. Nét bút chì nhanh, hơi thô, đời thường. Không chữ. |
+| `bulletin` | Thông báo, sự kiện, cộng đồng, tin tức — cần đọc nhanh. Bố cục poster tối giản, mảng phẳng, rõ trọng tâm. Không chữ. |
+| `diagram` | Bài về **cơ chế** — nhiều thành phần trao đổi với nhau: request đi qua những đâu, cái gì gọi cái gì, cái gì chia sẻ cái gì. Sơ đồ vẽ tay trong sổ: vài hộp, một vòng tròn ở giữa, mũi tên hai chiều, **nhãn ngắn** (xem dưới). |
 
-- Viết **đúng một** trong bốn khóa trên — không tự chế khóa mới, không dịch.
+- Viết **đúng một** trong năm khóa trên — không tự chế khóa mới, không dịch.
 - Chọn theo **bài viết**, không chọn cho "đa dạng": một bài technical nên là
   `technical` kể cả khi bài trước cũng đã dùng `technical`.
 - Pipeline có mặc định (`default_style`) nếu bạn quên, nhưng **bạn phải tự chọn**.
 - Người duyệt có thể đổi lại trên `/review/{id}` trước khi sinh ảnh.
+
+**`diagram` vẽ cả chữ.** Đây là style duy nhất có nhãn: hộp và mũi tên được viết
+tên, vì tên gọi chính là nội dung của sơ đồ. Nên khi chọn `diagram`, `image_prompt`
+phải có đoạn liệt kê nhãn ngay sau câu tả chủ thể:
+
+    two agents exchanging messages through one shared channel. Labels: "AGENT 1", "SHARED CHANNEL", "AGENT 2"
+
+- 2–5 nhãn, **tiếng Anh**, viết HOA, mỗi nhãn **tối đa 3 từ**. Thuật ngữ kỹ thuật
+  giữ tiếng Anh như trong caption (§4.2). Không tiếng Việt có dấu — model vẽ ra chữ
+  rác.
+- Nhãn là **tên của thành phần**, không phải câu: `"CACHE"`, `"LOAD BALANCER"`,
+  `"QUEUE"` — không phải `"Cache giúp giảm tải database"`.
+- Viết trong ngoặc kép **đúng chữ sẽ hiện trên ảnh**. `image_prompt` cũng là alt
+  text của ảnh, nên đừng để gì ngoài nhãn.
+- Ngoài những nhãn đó **không còn chữ nào**: không tiêu đề, không chú thích, không
+  số. Các style khác không có chữ nào cả.
 
 ---
 
@@ -478,7 +521,8 @@ chọn masthead (§4.5), chọn theo **bài**, không theo vòng xoay. Palette v
 - [ ] Emoji đúng liều theo register.
 - [ ] Đoạn văn: gộp các câu liên quan, ngăn câu bằng **shift-enter** trong cùng một đoạn; **dòng trống** chỉ để tách ý lớn — không mỗi câu một đoạn (§4.1, §4.4).
 - [ ] `commentary` đã điền (nêu rõ format + mức drama).
-- [ ] `image_prompt` đã điền: **tiếng Anh**, cụ thể, và **khác** ẩn dụ với các bài khác (cũng là alt text của ảnh).
+- [ ] `image_prompt` đã điền: **tiếng Anh**, cụ thể, viết theo `image_style` đã chọn, và **khác chủ thể** với `recent_images` (cũng là alt text của ảnh).
+- [ ] Nếu `image_style` là `diagram`: có đoạn `Labels: "…"` với 2–5 nhãn **tiếng Anh, HOA, tối đa 3 từ** (§9.2).
 - [ ] `image_style` đã chọn: **một** khóa hợp bài (§9.2).
 - [ ] `voice` đã chọn: **một** khóa hợp bài (§3) — đã đọc file voice tương ứng.
 

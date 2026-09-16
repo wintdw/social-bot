@@ -137,6 +137,8 @@ Each `_cmd_*` returns the code; `main` never lets an exception traceback.
    a `publish.post_at` slot or hit `POST /publish/run` / `blog publish`. Confirm
    exactly one audit record and the expected state (`posted` publicly; the draft
    stays `approved` after a private send, and a second run the same day skips it).
+   **Unapprove** on the same page pulls a queued draft back out (it returns to
+   `ai_draft`), so one approved by mistake can be recovered before the slot.
 7. Only then a real public approve — and only deliberately.
 
 For the optional rewriter worker: with `rewrite.enabled: true`, **Rewrite with

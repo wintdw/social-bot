@@ -12,7 +12,19 @@ class TestBuildPrompt:
         prompt = image_gen.build_prompt("System design", "A short summary")
         assert "System design" in prompt
         assert "A short summary" in prompt
-        assert "no text" in prompt and "no watermark" in prompt
+
+    def test_adds_no_prohibitions_of_its_own(self):
+        # Every prohibition belongs to the treatment file, so the builder must
+        # not smuggle one in that could fight a look — a diagram is lettered,
+        # and a rule written here would win over the file that asked for it.
+        prompt = image_gen.build_prompt("Title", "Excerpt")
+        for banned in ("no text", "no words", "no lettering", "No people", "no faces"):
+            assert banned not in prompt
+
+    def test_labels_in_the_subject_pass_through(self):
+        subject = 'two agents exchanging messages. Labels: "AGENT 1", "SHARED CHANNEL"'
+        prompt = image_gen.build_prompt("T", "E", image_prompt=subject)
+        assert prompt.endswith(f"Subject: {subject}")
 
     def test_image_prompt_wins_over_title(self):
         # The rewriter's concept is what actually gets illustrated.
@@ -25,11 +37,6 @@ class TestBuildPrompt:
     def test_image_prompt_omits_the_fallback_subject(self):
         prompt = image_gen.build_prompt("T", "E", image_prompt="a lone tree")
         assert "Subject: a lone tree" in prompt
-
-    def test_steers_away_from_people_and_text(self):
-        prompt = image_gen.build_prompt("Title", "Excerpt")
-        assert "No people" in prompt
-        assert "no faces" in prompt
 
     def test_style_leads_the_prompt(self):
         prompt = image_gen.build_prompt("T", "E", style="Deep navy palette.")

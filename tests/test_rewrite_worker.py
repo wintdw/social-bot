@@ -25,8 +25,15 @@ def _payload(drafts=None):
         "default_voice": "technical",
         "mastheads": {"choices": ["[Học cùng Atento]"], "default": "[Học cùng Atento]"},
         "image_styles": ["technical", "editorial"],
+        "image_style_briefs": {
+            "technical": "TREATMENT BRIEF: drafted schematic, no lettering.",
+            "editorial": "TREATMENT BRIEF: quiet still life.",
+        },
         "default_style": "editorial",
         "recent": [{"id": "prev", "source": "x", "caption": "old caption"}],
+        "recent_images": [
+            {"id": "prev", "image_style": "editorial", "image_prompt": "a stack of books"}
+        ],
         "drafts": drafts or [],
     }
 
@@ -59,6 +66,61 @@ class TestBuildPrompt:
         assert "old caption" in prompt  # recent captions to avoid
         assert '"id": "d1"' in prompt
         assert "technical" in prompt  # voice + style choices
+
+    def test_carries_the_treatment_briefs_themselves(self):
+        # A prompt has to serve the style it picks, which a bare key list cannot
+        # tell it how to do.
+        prompt = worker.build_prompt(_payload(), {"id": "d1"})
+        assert "TREATMENT BRIEF: drafted schematic, no lettering." in prompt
+        assert "TREATMENT BRIEF: quiet still life." in prompt
+        assert "IMAGE STYLE BRIEFS" in prompt
+
+    def test_carries_the_recent_images_to_avoid(self):
+        prompt = worker.build_prompt(_payload(), {"id": "d1"})
+        assert "RECENT IMAGES" in prompt
+        assert "[editorial] a stack of books" in prompt
+
+    def test_says_so_when_no_treatment_briefs_are_configured(self):
+        payload = {**_payload(), "image_style_briefs": {}}
+        assert "no treatment briefs configured" in worker.build_prompt(payload, {"id": "d1"})
+
+    def test_empty_recent_images_reads_as_none(self):
+        payload = {**_payload(), "recent_images": []}
+        prompt = worker.build_prompt(payload, {"id": "d1"})
+        assert "RECENT IMAGES (avoid repeating these subjects) ===\n(none)" in prompt
+
+
+class TestBuildImagePrompt:
+    """The prompt-only task: a new image prompt, caption untouched."""
+
+    def test_asks_for_the_prompt_alone_and_leaves_the_style_to_the_operator(self):
+        prompt = worker.build_image_prompt(
+            _payload(), {"id": "d1", "caption": "Một caption", "image_style": "sketch"}
+        )
+        assert '"image_prompt"' in prompt
+        assert "exactly this one key" in prompt
+        # The treatment was picked on /review/{id}: it is context (it rides in the
+        # POST block, which is how the agent knows what to write for), never a key
+        # to send back. The old task asked it to choose one.
+        assert "do NOT pick one" in prompt
+        assert "the image_style you choose" not in prompt
+        assert '"image_style":  exactly one of' not in prompt
+        # The caption is context, not a thing to rewrite.
+        assert "Một caption" in prompt
+        assert "its image is being redone" in prompt
+
+    def test_carries_the_treatment_briefs_and_the_recent_images(self):
+        prompt = worker.build_image_prompt(_payload(), {"id": "d1"})
+        assert "TREATMENT BRIEF: drafted schematic, no lettering." in prompt
+        assert "RECENT IMAGES" in prompt and "[editorial] a stack of books" in prompt
+
+    def test_leaves_the_caption_contract_out(self):
+        # The DNA, the voice menu and the mastheads are about prose: beside the
+        # point here, and their bulk would only dilute the image instruction.
+        prompt = worker.build_image_prompt(_payload(), {"id": "d1"})
+        assert "DNA BRIEF" not in prompt
+        assert "Voice brief" not in prompt
+        assert "[Học cùng Atento]" not in prompt
 
 
 class TestAuthHeader:
@@ -130,6 +192,55 @@ class TestProcessOnce:
             "http://127.0.0.1:8083/api/drafts/d1/rewrite",
             {"caption": "hi"},
         )
+
+    def test_an_image_only_request_posts_to_the_image_prompt_endpoint(self, monkeypatch):
+        calls = []
+        self._patch(
+            monkeypatch,
+            calls,
+            drafts=[{"id": "d1", "rewrite_mode": "image"}],
+            result={"image_prompt": "a labelled diagram", "image_style": "diagram"},
+        )
+        assert worker.process_once(_cfg()) == 1
+        assert calls[-1] == (
+            "POST",
+            "http://127.0.0.1:8083/api/drafts/d1/image-prompt",
+            {"image_prompt": "a labelled diagram", "image_style": "diagram"},
+        )
+
+    def test_an_unknown_mode_is_a_full_rewrite(self, monkeypatch):
+        calls = []
+        self._patch(
+            monkeypatch,
+            calls,
+            drafts=[{"id": "d1", "rewrite_mode": "nonsense"}],
+            result={"caption": "hi"},
+        )
+        assert worker.process_once(_cfg()) == 1
+        assert calls[-1][1].endswith("/api/drafts/d1/rewrite")
+
+    def test_each_draft_uses_its_own_prompt(self, monkeypatch):
+        # Two requests of different kinds in one poll: each gets its own task.
+        prompts = []
+        calls = []
+        self._patch(
+            monkeypatch,
+            calls,
+            drafts=[{"id": "cap"}, {"id": "img", "rewrite_mode": "image"}],
+            result={"caption": "hi"},
+        )
+        original = worker.run_commandcode
+
+        def capture(settings, prompt):
+            prompts.append(prompt)
+            return original(settings, prompt)
+
+        monkeypatch.setattr(worker, "run_commandcode", capture)
+        worker.process_once(_cfg())
+        assert len(prompts) == 2
+        assert "IMAGE STYLE BRIEFS" in prompts[1]
+        assert "DNA BRIEF" in prompts[0] and "DNA BRIEF" not in prompts[1]
+        assert [call[1].rsplit("/", 1)[-1] for call in calls[1:]] == ["rewrite", "image-prompt"]
 
     def test_records_a_failure_and_keeps_going(self, monkeypatch):
         calls = []

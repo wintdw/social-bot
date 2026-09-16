@@ -12,7 +12,16 @@ import pytest
 from social_bot import draft_pipeline as pipeline
 from social_bot.config import DEFAULTS
 from social_bot.destinations import PublisherError, PublishResult
-from social_bot.drafts import AI_DRAFT, APPROVED, EXTRACTED, POSTED, REJECTED, Draft
+from social_bot.drafts import (
+    AI_DRAFT,
+    APPROVED,
+    EXTRACTED,
+    POSTED,
+    REJECTED,
+    REWRITE_CAPTION,
+    REWRITE_IMAGE,
+    Draft,
+)
 from social_bot.image_gen import DEFAULT_BASE_URL
 from social_bot.source_api import SourceError
 
@@ -461,6 +470,53 @@ class TestRecentCaptions:
         cfg = self._seed(tmp_path)
         cfg["publish"]["recent_captions"] = 0
         assert pipeline.recent_captions(cfg) == []
+
+
+class TestRecentImages:
+    """The image-side anti-repetition signal (the caption rule's analogue)."""
+
+    def _seed(self, tmp_path):
+        cfg = _cfg(tmp_path)
+        pipeline.save_drafts(
+            pipeline.queue_path(cfg),
+            [
+                Draft(
+                    id="old",
+                    state=AI_DRAFT,
+                    image_prompt="a tall building",
+                    image_style="editorial",
+                    updated_at="2026-09-01T00:00:00+00:00",
+                ),
+                Draft(
+                    id="new",
+                    state=AI_DRAFT,
+                    image_prompt="a long ledger",
+                    image_style="technical",
+                    updated_at="2026-09-09T00:00:00+00:00",
+                ),
+                Draft(id="none", state=EXTRACTED),
+            ],
+        )
+        return cfg
+
+    def test_prompts_newest_first(self, tmp_path):
+        cfg = self._seed(tmp_path)
+        assert [d.id for d in pipeline.recent_images(cfg)] == ["new", "old"]
+
+    def test_excludes_a_draft_and_respects_the_cap(self, tmp_path):
+        cfg = self._seed(tmp_path)
+        assert [d.id for d in pipeline.recent_images(cfg, exclude_id="new")] == ["old"]
+        assert [d.id for d in pipeline.recent_images(cfg, limit=1)] == ["new"]
+
+    def test_zero_disables_it(self, tmp_path):
+        cfg = self._seed(tmp_path)
+        cfg["publish"]["recent_images"] = 0
+        assert pipeline.recent_images(cfg) == []
+
+    def test_a_draft_without_a_prompt_is_not_sent(self, tmp_path):
+        # A draft still awaiting its rewrite has nothing to avoid repeating.
+        cfg = self._seed(tmp_path)
+        assert [d.id for d in pipeline.recent_images(cfg)] == ["new", "old"]
 
 
 class TestRewriteLint:
@@ -1239,6 +1295,36 @@ class TestApprove:
             pipeline.approve_draft(_cfg(tmp_path), "nope")
 
 
+class TestUnapprove:
+    def test_unapprove_draft_returns_it_to_ai_draft(self, tmp_path):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        pipeline.approve_draft(cfg, "post-one")
+        assert pipeline.scheduled_queue(cfg)  # queued to post
+        assert pipeline.unapprove_draft(cfg, "post-one").state == AI_DRAFT
+        assert pipeline.scheduled_queue(cfg) == []  # the poster no longer sees it
+
+    def test_unapprove_leaves_the_draft_on_the_review_queue(self, tmp_path):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        pipeline.approve_draft(cfg, "post-one")
+        pipeline.unapprove_draft(cfg, "post-one")
+        assert [d.id for d in pipeline.list_drafts(cfg, pipeline.REVIEW_STATES)] == ["post-one"]
+
+    def test_unapprove_never_posts(self, tmp_path):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        pipeline.approve_draft(cfg, "post-one")
+        pipeline.unapprove_draft(cfg, "post-one")
+        assert pipeline.published_path(cfg).exists() is False
+
+    def test_unapprove_unknown_draft_raises(self, tmp_path):
+        with pytest.raises(ValueError):
+            pipeline.unapprove_draft(_cfg(tmp_path), "nope")
+
+    def test_unapprove_a_draft_that_is_not_approved_raises(self, tmp_path):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        with pytest.raises(ValueError):
+            pipeline.unapprove_draft(cfg, "post-one")
+
+
 class TestDna:
     def test_reads_file(self, tmp_path):
         dna = tmp_path / "dna.md"
@@ -1511,6 +1597,24 @@ class TestImageStyle:
         cfg = self._menu_cfg(tmp_path)
         assert pipeline.image_style_choices(cfg) == ["technical", "editorial"]
         assert pipeline.default_image_style(cfg) == "editorial"
+
+    def test_briefs_are_each_treatments_own_text(self, tmp_path):
+        # What the rewriter reads to serve a style: the treatment, not the
+        # palette (that is appended at prompt time instead).
+        cfg = self._menu_cfg(tmp_path)
+        assert pipeline.image_style_briefs(cfg) == {
+            "technical": "Blueprint lines.",
+            "editorial": "Quiet still life.",
+        }
+
+    def test_a_missing_or_empty_brief_is_left_out(self, tmp_path):
+        cfg = self._menu_cfg(tmp_path)
+        (tmp_path / "technical.md").unlink()
+        (tmp_path / "editorial.md").write_text("\n\n", encoding="utf-8")
+        assert pipeline.image_style_briefs(cfg) == {}
+
+    def test_briefs_are_empty_without_a_menu(self, tmp_path):
+        assert pipeline.image_style_briefs(_cfg(tmp_path)) == {}
 
     def test_hints_are_each_files_opening_paragraph(self, tmp_path):
         cfg = self._menu_cfg(tmp_path)
@@ -2086,6 +2190,7 @@ class TestRewriteRequests:
         cfg = _seed_draft(tmp_path)
         draft = pipeline.request_rewrite(cfg, "post-one")
         assert draft.rewrite_requested_at
+        assert draft.rewrite_kind() == REWRITE_CAPTION
         assert draft.rewrite_error == ""
         assert [d.id for d in pipeline.rewrite_queue(cfg)] == ["post-one"]
 
@@ -2142,3 +2247,116 @@ class TestRewriteRequests:
         assert draft.rewrite_requested_at == ""
         assert draft.rewrite_error == ""
         assert pipeline.rewrite_queue(cfg) == []
+
+
+class TestImagePromptRequest:
+    """The "Regenerate image prompt" path: the caption is fine, the picture is not.
+
+    The request only ever stores the *subject* — the style is the operator's pick,
+    saved with the request, and the render is the operator's separate "Regenerate
+    image" move, never this path's job.
+    """
+
+    def _seeded(self, tmp_path, state=APPROVED, image_style="editorial", **kw):
+        """A draft with an image and a caption already settled."""
+        cfg = _set_styles(_cfg(tmp_path))
+        draft = Draft(
+            id="post-one",
+            source="atento-blog",
+            url="https://atento.vn/blog/post-one",
+            destinations=["facebook"],
+            state=state,
+            caption="[Đọc báo cùng Atento]\n\nMột caption đã duyệt.",
+            image="https://img/old.jpg",
+            image_prompt="a hand-carved wooden chair",
+            image_style=image_style,
+            **kw,
+        )
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        return cfg
+
+    def test_request_marks_it_as_a_prompt_only_rewrite(self, tmp_path):
+        cfg = self._seeded(tmp_path)
+        draft = pipeline.request_image_prompt(cfg, "post-one")
+        assert draft.rewrite_requested_at
+        assert draft.rewrite_kind() == REWRITE_IMAGE
+        assert [d.id for d in pipeline.rewrite_queue(cfg)] == ["post-one"]
+
+    def test_an_approved_draft_may_be_re_imaged(self, tmp_path):
+        # The approval covers the caption the human read, not the picture.
+        cfg = self._seeded(tmp_path, state=APPROVED)
+        assert pipeline.request_image_prompt(cfg, "post-one").state == APPROVED
+
+    def test_a_done_draft_may_not(self, tmp_path):
+        for state in (POSTED, REJECTED):
+            cfg = self._seeded(tmp_path, state=state)
+            with pytest.raises(ValueError, match="cannot be re-imaged"):
+                pipeline.request_image_prompt(cfg, "post-one")
+
+    def test_request_rejects_an_unknown_draft(self, tmp_path):
+        with pytest.raises(ValueError, match="no draft"):
+            pipeline.request_image_prompt(self._seeded(tmp_path), "nope")
+
+    def test_the_result_replaces_the_prompt_and_nothing_else(self, tmp_path):
+        cfg = self._seeded(tmp_path)
+        pipeline.request_image_prompt(cfg, "post-one")
+        draft = pipeline.receive_image_prompt(
+            cfg,
+            "post-one",
+            {
+                "image_prompt": "a labelled diagram of a queue draining",
+                # A style, a caption or hashtags in the body are not a prompt-only
+                # rewrite's to take: the treatment is the operator's pick (saved
+                # with the request) and the agent writes a subject to serve it.
+                "image_style": "sketch",
+                "caption": "REPLACED",
+                "hashtags": ["#nope"],
+                "voice": "funny",
+            },
+        )
+        assert draft.image_prompt == "a labelled diagram of a queue draining"
+        assert draft.image_style == "editorial"  # untouched, not the body's "sketch"
+        assert draft.caption == "[Đọc báo cùng Atento]\n\nMột caption đã duyệt."
+        assert draft.hashtags == []
+        assert draft.voice == ""
+        # Approved stays approved: re-imaging must not un-queue the post.
+        assert draft.state == APPROVED
+        assert draft.rewrite_requested_at == ""
+        assert pipeline.rewrite_queue(cfg) == []
+
+    def test_the_agent_cannot_move_the_treatment(self, tmp_path):
+        # Picked on /review/{id} and saved with the request; the worker writes a
+        # subject for that style. A style in the result must not reach the draft —
+        # an unknown key must not quietly reset it to image_gen.default_style.
+        cfg = self._seeded(tmp_path, image_style="sketch")
+        draft = pipeline.receive_image_prompt(
+            cfg, "post-one", {"image_prompt": "x", "image_style": "nope"}
+        )
+        assert draft.image_style == "sketch"
+
+    def test_a_done_draft_cannot_be_re_imaged_after_the_fact(self, tmp_path):
+        cfg = self._seeded(tmp_path, state=POSTED)
+        with pytest.raises(ValueError, match="cannot be re-imaged"):
+            pipeline.receive_image_prompt(cfg, "post-one", {"image_prompt": "x"})
+
+    def test_error_closes_a_prompt_request_too(self, tmp_path):
+        cfg = self._seeded(tmp_path)
+        pipeline.request_image_prompt(cfg, "post-one")
+        draft = pipeline.record_rewrite_error(cfg, "post-one", "boom")
+        assert draft.rewrite_requested_at == ""
+        assert draft.rewrite_kind() == ""
+        assert draft.rewrite_error == "boom"
+        assert pipeline.rewrite_queue(cfg) == []
+
+    def test_cancel_clears_a_prompt_request(self, tmp_path):
+        cfg = self._seeded(tmp_path)
+        pipeline.request_image_prompt(cfg, "post-one")
+        assert pipeline.cancel_rewrite(cfg, "post-one").rewrite_kind() == ""
+        assert pipeline.rewrite_queue(cfg) == []
+
+    def test_a_request_supersedes_the_other_kind(self, tmp_path):
+        # One open request per draft: the operator's latest ask wins, so a
+        # caption rewrite and a prompt rewrite can never both be pending.
+        cfg = self._seeded(tmp_path, state=AI_DRAFT)
+        pipeline.request_image_prompt(cfg, "post-one")
+        assert pipeline.request_rewrite(cfg, "post-one").rewrite_kind() == REWRITE_CAPTION
