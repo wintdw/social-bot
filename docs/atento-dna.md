@@ -422,7 +422,7 @@ còn lại của §9.1 vẫn nguyên: không lặp lại chủ thể trong `rece
 - **Prompt phục vụ `image_style` bạn chọn.** Đọc brief của style đó (gửi kèm trong
   `image_style_briefs`, và trong khối **IMAGE STYLE BRIEFS**) rồi tả đúng thứ nó
   vẽ: `editorial` là một tĩnh vật, `technical` là một kết cấu, `diagram` là một cơ
-  chế có nhãn (§9.2). **Không phải bài nào cũng cần một ẩn dụ** — bài về cơ chế thì
+  chế có tiêu đề và nhãn (§9.2). **Không phải bài nào cũng cần một ẩn dụ** — bài về cơ chế thì
   tả cấu trúc, đừng gò nó thành ẩn dụ.
 - **Không lặp lại ảnh gần đây.** `recent_images` liệt kê `image_prompt` +
   `image_style` của các bài vừa viết: đừng dùng lại cùng một đồ vật hay bố cục
@@ -441,7 +441,7 @@ Ví dụ tốt (cụ thể, mỗi bài một chủ thể khác nhau):
 | Kiến thức nền tảng | `a tall building whose visible floors are few but whose foundation extends far underground` |
 | Sau AI | `a hand-drawn sketch beside a finished print, the sketch faintly visible under the print` |
 | Code giỏi chưa chắc làm việc giỏi | `a single sheet of paper with one diagram, passed along a row of empty desks` |
-| Agent nói chuyện với nhau *(diagram)* | `two agents exchanging messages through one shared channel. Labels: "AGENT 1", "SHARED CHANNEL", "AGENT 2"` |
+| Agent nói chuyện với nhau *(diagram)* | `two agents exchanging messages through one shared channel. Title: "AGENT MESSAGING". Labels: "AGENT 1", "SHARED CHANNEL", "AGENT 2"` |
 
 Ví dụ kém (trừu tượng, dễ ra ảnh giống nhau):
 
@@ -476,7 +476,7 @@ phải tránh — nằm trong file treatment của style đó.
 | `editorial` *(mặc định)* | Bài nền tảng / nghề nghiệp / mindset chung — một ý trừu tượng cần ẩn dụ tĩnh. Tĩnh vật editorial, ấm và trầm. Không chữ. |
 | `sketch` | Essay cá nhân / ý kiến (giọng Đạt) — kể chuyện, tự vấn. Nét bút chì nhanh, hơi thô, đời thường. Không chữ. |
 | `bulletin` | Thông báo, sự kiện, cộng đồng, tin tức — cần đọc nhanh. Bố cục poster tối giản, mảng phẳng, rõ trọng tâm. Không chữ. |
-| `diagram` | Bài về **cơ chế** — nhiều thành phần trao đổi với nhau: request đi qua những đâu, cái gì gọi cái gì, cái gì chia sẻ cái gì. Sơ đồ vẽ tay trong sổ: vài hộp, một vòng tròn ở giữa, mũi tên hai chiều, **nhãn ngắn** (xem dưới). |
+| `diagram` | Bài về **cơ chế** — nhiều thành phần trao đổi với nhau: request đi qua những đâu, cái gì gọi cái gì, cái gì chia sẻ cái gì. Bản vẽ tay màu nước, đóng khung như một trang giải thích: **một dòng tiêu đề**, cơ chế được vẽ ở giữa, các thành phần quanh nó ghi tên, mũi tên liền/nét đứt nối chúng, có thể có một đường bao quanh phần được bảo vệ (xem dưới). |
 
 - Viết **đúng một** trong năm khóa trên — không tự chế khóa mới, không dịch.
 - Chọn theo **bài viết**, không chọn cho "đa dạng": một bài technical nên là
@@ -484,21 +484,23 @@ phải tránh — nằm trong file treatment của style đó.
 - Pipeline có mặc định (`default_style`) nếu bạn quên, nhưng **bạn phải tự chọn**.
 - Người duyệt có thể đổi lại trên `/review/{id}` trước khi sinh ảnh.
 
-**`diagram` vẽ cả chữ.** Đây là style duy nhất có nhãn: hộp và mũi tên được viết
-tên, vì tên gọi chính là nội dung của sơ đồ. Nên khi chọn `diagram`, `image_prompt`
-phải có đoạn liệt kê nhãn ngay sau câu tả chủ thể:
+**`diagram` vẽ cả chữ.** Đây là style duy nhất có chữ: **một dòng tiêu đề** và tên
+gọi các thành phần — chữ chính là nội dung của sơ đồ. Nên khi chọn `diagram`,
+`image_prompt` phải có `Title:` rồi `Labels:`, ngay sau câu tả chủ thể:
 
-    two agents exchanging messages through one shared channel. Labels: "AGENT 1", "SHARED CHANNEL", "AGENT 2"
+    a Windows PC running a local AI agent, files and folders feeding in, a friendly agent robot and an optional cloud. Title: "LOCAL AI AGENT ON WINDOWS". Labels: "FILES", "FOLDER", "PC", "LOCAL AGENT", "CLOUD"
 
-- 2–5 nhãn, **tiếng Anh**, viết HOA, mỗi nhãn **tối đa 3 từ**. Thuật ngữ kỹ thuật
-  giữ tiếng Anh như trong caption (§4.2). Không tiếng Việt có dấu — model vẽ ra chữ
-  rác.
+- `Title`: **một** dòng, **tiếng Anh**, viết HOA, **tối đa 6 từ** — cái tên của
+  chính bức sơ đồ, không phải một câu văn. Không tiếng Việt có dấu.
+- `Labels`: **2–8 nhãn**, **tiếng Anh**, viết HOA, mỗi nhãn **tối đa 3 từ**. Thuật
+  ngữ kỹ thuật giữ tiếng Anh như trong caption (§4.2). Không tiếng Việt có dấu —
+  model vẽ ra chữ rác.
 - Nhãn là **tên của thành phần**, không phải câu: `"CACHE"`, `"LOAD BALANCER"`,
   `"QUEUE"` — không phải `"Cache giúp giảm tải database"`.
 - Viết trong ngoặc kép **đúng chữ sẽ hiện trên ảnh**. `image_prompt` cũng là alt
-  text của ảnh, nên đừng để gì ngoài nhãn.
-- Ngoài những nhãn đó **không còn chữ nào**: không tiêu đề, không chú thích, không
-  số. Các style khác không có chữ nào cả.
+  text của ảnh, nên đừng để gì ngoài tiêu đề và nhãn.
+- Ngoài tiêu đề và những nhãn đó **không còn chữ nào**: không chú thích, không đoạn
+  văn, không số. Các style khác không có chữ nào cả.
 
 ---
 
@@ -522,7 +524,7 @@ phải có đoạn liệt kê nhãn ngay sau câu tả chủ thể:
 - [ ] Đoạn văn: gộp các câu liên quan, ngăn câu bằng **shift-enter** trong cùng một đoạn; **dòng trống** chỉ để tách ý lớn — không mỗi câu một đoạn (§4.1, §4.4).
 - [ ] `commentary` đã điền (nêu rõ format + mức drama).
 - [ ] `image_prompt` đã điền: **tiếng Anh**, cụ thể, viết theo `image_style` đã chọn, và **khác chủ thể** với `recent_images` (cũng là alt text của ảnh).
-- [ ] Nếu `image_style` là `diagram`: có đoạn `Labels: "…"` với 2–5 nhãn **tiếng Anh, HOA, tối đa 3 từ** (§9.2).
+- [ ] Nếu `image_style` là `diagram`: có `Title: "…"` (**tiếng Anh, HOA, tối đa 6 từ**) và đoạn `Labels: "…"` với 2–8 nhãn **tiếng Anh, HOA, tối đa 3 từ** (§9.2).
 - [ ] `image_style` đã chọn: **một** khóa hợp bài (§9.2).
 - [ ] `voice` đã chọn: **một** khóa hợp bài (§3) — đã đọc file voice tương ứng.
 

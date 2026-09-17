@@ -179,9 +179,10 @@ entirely, leaving approval as the only publish path.**
   avoid, lettering included — because `image_gen.build_prompt` adds no
   prohibitions of its own; a new look is a new file plus a `styles` key, no code,
   and no rule written elsewhere can fight it. `diagram` is the only treatment that
-  writes: its boxes and arrows carry short English labels the rewriter supplies as
-  `Labels: "A", "B"` at the end of `image_prompt` (DNA §9.2). Those labels stay
-  English because gpt-image renders Vietnamese diacritics as garbage. An
+  writes: it carries a title and short English labels the rewriter supplies as
+  `Title: "…"` and `Labels: "A", "B"` at the end of `image_prompt` (DNA §9.2).
+  That text stays English because gpt-image renders Vietnamese diacritics as
+  garbage. An
   unknown/blank key falls back
   to `image_gen.default_style`, and clearing `styles` restores the single
   `style_file` look. It too is **overridable on `/review/{id}`**.

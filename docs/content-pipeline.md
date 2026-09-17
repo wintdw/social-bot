@@ -128,8 +128,8 @@ end of the queue.
   stays constant. That is the whole rule: a treatment file carries its own
   prohibitions — people, lettering, the clichés — and nothing outside it forbids
   anything, so no look can be fought by a rule written somewhere else. `diagram`
-  is the one treatment that writes: its boxes and arrows are labelled, which its
-  file states and the DNA §9.2 tells the rewriter how to feed. A valid
+  is the one treatment that writes: it carries a title and labelled parts, which
+  its file states and the DNA §9.2 tells the rewriter how to feed. A valid
   key is kept, an unknown one falls back to the default — and it is
   **overridable on `/review/{id}`** before regenerating, where the select's hint
   is each style file's own opening paragraph (`draft_pipeline.image_style_hints`)
