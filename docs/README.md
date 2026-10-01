@@ -53,6 +53,7 @@ your task.
 | Change the design preview / styleguide | `src/social_bot/styleframe.py`, then `scripts/build_styleframe.py` |
 | Change the Atento brand voice / rewrite brief | `docs/atento-dna.md`, then `publish.dna_file` in `config.yaml` |
 | Add or change a voice (a `voice` brief + samples) | `docs/voices/<key>.md`, then `publish.voices` in `config.yaml` |
+| Change the rewriter's **own-voice** retrieval (the `MY VOICE` block, corpus, index) | `src/social_bot/voice.py`, the `voice` block in `config.yaml`, `tests/test_voice.py`, then [content-pipeline.md](content-pipeline.md) §2c |
 | Change the web routes / JSON API / schedule loops | `src/social_bot/web.py` |
 | Change the page-feed dashboard | `src/social_bot/destinations/facebook/feed.py`, `feed_html.py`, `reader.py` |
 | Change how a caption's row title is derived (the hook under the masthead) | `src/social_bot/caption.py`, `tests/test_caption.py` |
@@ -81,7 +82,10 @@ your task.
    drafts. `publish.post_at: []` disables timed posting entirely.
 5. **No new runtime dependency without cause.** Runtime is PyYAML only;
    HTTP is stdlib `urllib`; XML/HTML use `xml.etree` / `html.parser`.
-   fastapi/uvicorn/python-multipart are the optional `[server]` extra.
+   fastapi/uvicorn/python-multipart are the optional `[server]` extra, and
+   lancedb/pyarrow/fastembed the optional `[voice]` extra (the rewriter's own-voice
+   retrieval, §2c of [content-pipeline.md](content-pipeline.md) — needed where the
+   worker runs, never by the serve container).
 6. **The operator UI is one system.** `ui.py` owns the stylesheet, the nav, and
    the `layout`/`badge`/`notice_html` primitives; page modules return fragments
    only. The tokens, components, and rules are in

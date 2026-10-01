@@ -263,6 +263,16 @@ Code CLI headlessly on the host, and POSTs the result back to
 `/api/drafts/{id}/rewrite` — the app never runs the agent itself (the container
 has no Node). See [operations](docs/operations.md) for running it as a service.
 
+**In your own voice.** On top of the brand DNA and the voice menu, the worker can
+also hand the agent *your* voice: the messages you actually wrote that are closest
+to the draft, plus a learned `profile.md`, as a `MY VOICE` section — style only,
+never a fact. Drop the corpus under `data/voice/` and install the extra
+(`pip install -e ".[voice]"`); see what a topic retrieves with
+`social-bot voice search "System Design là gì" --show`. With no corpus the worker
+writes from the DNA and the voice menu exactly as before — voice is an
+enhancement, never a gate. See
+[content-pipeline §2c](docs/content-pipeline.md).
+
 Same worker, second kind of request: **Regenerate image prompt** on
 `/review/{id}` asks for a new *image prompt* only — the caption is left exactly as
 approved, and the image style on the page is the one the agent writes for — and

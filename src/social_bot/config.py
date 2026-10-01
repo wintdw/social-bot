@@ -189,6 +189,45 @@ DEFAULTS: dict[str, Any] = {
         "poll_seconds": 15.0,  # how often the worker asks for new requests
         "api_base": "http://127.0.0.1:8083",  # this app, as the worker sees it
     },
+    # The operator's own voice (src/social_bot/voice.py). When enabled, the
+    # rewriter worker retrieves the operator's own messages closest to the draft
+    # and hands them — plus the learned profile.md — to the agent as `MY VOICE`,
+    # on top of the DNA (structure) and the voice menu (register). The corpus is
+    # a directory of normalized JSONL (the twin's ingest shape), owned by this
+    # project under data/voice/; nothing imports the twin at runtime.
+    # `backend: vector | keyword | hybrid` (hybrid = BM25 + vector fused).
+    # The vector backends need the optional `[voice]` extra (lancedb, fastembed).
+    # Voice retrieval is an enhancement: a missing corpus or extra never blocks a
+    # rewrite, it just shortens the prompt.
+    "voice": {
+        "enabled": False,
+        "corpus_dir": "data/voice/normalized",  # the operator's messages (JSONL)
+        "index_dir": "data/voice/index",  # `social-bot voice index` writes here
+        "profile_file": "data/voice/profile.md",  # learned voice, folded in
+        "backend": "hybrid",  # vector | keyword | hybrid
+        "top_k": 8,  # how many of the operator's past messages to attach
+        "only_me": True,  # examples come only from the operator
+        # The gate that keeps junk out of the prompt: an example must reach this
+        # cosine similarity AND carry at least this many words. Measured on this
+        # corpus, unrelated chat sits at 0.46-0.50 while a genuine topical match
+        # reaches 0.55+ — so an English article whose topic the chat corpus does
+        # not cover yields no examples at all, and the block is just the profile.
+        # 0 disables the floor; 0 for min_example_words disables the length gate.
+        "min_similarity": 0.55,
+        "min_example_words": 3,
+        "max_examples_chars": 2000,  # cap on the rendered examples (0 = no cap)
+        "include_profile": True,  # attach the learned profile.md too
+        "hybrid_candidates": 60,  # per-ranker pool size when fusing
+        "embedding": {
+            "provider": "local",  # "local" (fastembed) or "openai" (HTTP endpoint)
+            "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+            "base_url": "",  # only for provider: openai
+            "cache_dir": "",
+            "batch_size": 64,
+            "timeout_seconds": 120.0,
+            "api_key": "",  # populated by credentials.yaml, never config.yaml
+        },
+    },
 }
 
 
@@ -343,3 +382,22 @@ def validate(cfg: dict) -> None:
         raise ValueError("config: rewrite.api_base must be an http(s) URL")
     if not str(rewrite.get("command", "")).strip():
         raise ValueError("config: rewrite.command must not be empty")
+
+    voice = cfg.get("voice", {})
+    if str(voice.get("backend", "vector")).lower() not in ("vector", "keyword", "hybrid"):
+        raise ValueError(f"config: unknown voice.backend {voice.get('backend')!r}")
+    if int(voice.get("top_k", 8)) < 1:
+        raise ValueError("config: voice.top_k must be >= 1")
+    if int(voice.get("max_examples_chars", 0)) < 0:
+        raise ValueError("config: voice.max_examples_chars must be >= 0")
+    if not 0.0 <= float(voice.get("min_similarity", 0.0)) <= 1.0:
+        raise ValueError("config: voice.min_similarity must be between 0 and 1")
+    if int(voice.get("min_example_words", 0)) < 0:
+        raise ValueError("config: voice.min_example_words must be >= 0")
+    if int(voice.get("hybrid_candidates", 60)) < 1:
+        raise ValueError("config: voice.hybrid_candidates must be >= 1")
+    embedding = voice.get("embedding") or {}
+    if str(embedding.get("provider", "local")).lower() not in ("local", "openai"):
+        raise ValueError(f"config: unknown voice.embedding.provider {embedding.get('provider')!r}")
+    if float(embedding.get("timeout_seconds", 120)) <= 0:
+        raise ValueError("config: voice.embedding.timeout_seconds must be positive")

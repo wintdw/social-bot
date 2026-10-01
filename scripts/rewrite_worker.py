@@ -27,6 +27,15 @@ Three kinds of request ride that one queue, told apart by the draft's
     caption, the operator's chosen ``image_style`` and the draft's state alone.
     Nothing is rendered: the operator presses "Regenerate image" when it reads right.
 
+**The operator's own voice.** Before a caption task runs, the worker asks
+``social_bot.voice`` for the operator's own messages closest to the draft and
+passes them — with the learned ``profile.md`` — into ``build_prompt`` as
+``MY VOICE``. The corpus is a local directory of JSONL, searched by BM25 and/or a
+vector index (``voice.backend``); the ``vector``/``hybrid`` backends need the
+optional ``[voice]`` extra. It is style, not substance: the agent matches the
+diction and rhythm and never lifts a fact or a line. Retrieval is an enhancement —
+a missing corpus or extra only makes the prompt shorter.
+
 **Why a worker and not the app.** Command Code and its auth live on the host (the
 container image is python-slim with no Node), and keeping the agent outside the
 web process keeps its permission model where a human can see it. Headless runs
@@ -58,6 +67,7 @@ import urllib.request
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
+from social_bot import voice  # noqa: E402
 from social_bot.config import load_config  # noqa: E402
 from social_bot.draft_pipeline import rewrite_config  # noqa: E402
 from social_bot.drafts import REWRITE_CAPTION_VOICE, REWRITE_IMAGE  # noqa: E402
@@ -132,7 +142,31 @@ def _recent_images_block(payload: dict) -> str:
     )
 
 
-def build_prompt(payload: dict, draft: dict, *, voice_locked: bool = False) -> str:
+def _my_voice(cfg: dict, draft: dict) -> str:
+    """The operator's own voice for one draft, or '' — never fails a rewrite.
+
+    ``voice.examples_block`` already swallows retrieval failures and returns ''
+    (voice is an enhancement, like image generation, never a gate). This wrapper
+    only makes the *silent* case visible: when the block is switched on but
+    nothing came back — an empty corpus, a missing ``[voice]`` extra, or no
+    matches — the operator should see why the prompt got shorter.
+    """
+    if not voice.enabled(cfg):
+        return ""
+    block = voice.examples_block(cfg, draft)
+    if not block:
+        print(
+            f"[rewriter] no voice examples for {draft.get('id')} "
+            "(empty corpus, no matches, or retrieval failed)",
+            file=sys.stderr,
+            flush=True,
+        )
+    return block
+
+
+def build_prompt(
+    payload: dict, draft: dict, *, voice_locked: bool = False, my_voice: str = ""
+) -> str:
     """The single self-contained task handed to one headless Command Code run.
 
     Everything rides in the prompt (the DNA, the voice menu, the recent captions,
@@ -145,6 +179,17 @@ def build_prompt(payload: dict, draft: dict, *, voice_locked: bool = False) -> s
     from), but the contract names that one key and a hard rule forbids substituting
     another. Absent a key on the draft there is nothing to hold, so the wording
     falls back to the free choice.
+
+    ``my_voice`` is the operator's *own* voice — the learned ``profile.md`` plus
+    the real messages they wrote that are closest to this draft
+    (``voice.examples_block``). It is style, never substance: the section is added
+    only when there is something to add, and the hard rules say to copy the
+    diction and rhythm, not the facts.
+
+    The division of labour, once all four are in the prompt: the **DNA** owns the
+    structure and the output contract, the **voice menu** owns which register,
+    ``MY VOICE`` owns how the sentences actually sound, and the **draft** owns the
+    facts.
     """
     voices = payload.get("voices") or {}
     voice_block = (
@@ -175,6 +220,18 @@ def build_prompt(payload: dict, draft: dict, *, voice_locked: bool = False) -> s
     mastheads = payload.get("mastheads") or {}
     style_block = _style_block(payload)
     recent_images_block = _recent_images_block(payload)
+    # The operator's own voice, when there is any: omitted entirely otherwise, so a
+    # run without a corpus reads exactly as it did before this existed.
+    my_voice_rule = (
+        "- Match the VOICE of the real messages in MY VOICE below — diction, "
+        "rhythm, teencode level, address terms — but they are style only: never "
+        "reuse their facts, and never copy a line verbatim.\n"
+        if my_voice
+        else ""
+    )
+    my_voice_block = (
+        f"=== MY VOICE (match the voice, not the content) ===\n{my_voice}\n\n" if my_voice else ""
+    )
     return (
         "You are the Atento rewriter. Rewrite exactly ONE draft into a Facebook "
         "Page caption, following the brand brief and the chosen voice below.\n\n"
@@ -202,6 +259,7 @@ def build_prompt(payload: dict, draft: dict, *, voice_locked: bool = False) -> s
         f"{mastheads.get('default') or 'none'}).\n"
         "- Write in ONE voice only; do not mix registers.\n"
         f"{voice_rule}"
+        f"{my_voice_rule}"
         "- Do NOT imitate the recent captions' openers, closers, or vocabulary.\n"
         "- Do NOT reuse a subject or a composition from the recent images — pick "
         "something different for THIS post's idea.\n"
@@ -214,6 +272,7 @@ def build_prompt(payload: dict, draft: dict, *, voice_locked: bool = False) -> s
         f"{payload.get('dna') or '(no DNA configured)'}\n\n"
         "=== VOICE MENU (pick one key) ===\n"
         f"{voice_block}\n\n"
+        f"{my_voice_block}"
         "=== IMAGE STYLE BRIEFS (write the image_prompt to serve the one you pick) ===\n"
         f"{style_block}\n\n"
         "=== DRAFT TO REWRITE ===\n"
@@ -362,15 +421,22 @@ def process_once(cfg: dict, *, draft_id: str = "", dry_run: bool = False) -> int
         # and a different endpoint to post back to.
         image_only = draft.get("rewrite_mode") == REWRITE_IMAGE
         voice_locked = draft.get("rewrite_mode") == REWRITE_CAPTION_VOICE
+        # The operator's own voice rides along with the caption tasks only: an
+        # image prompt is an English visual concept, where their chat register is
+        # beside the point.
+        my_voice = "" if image_only else _my_voice(cfg, draft)
         prompt = (
             build_image_prompt(payload, draft)
             if image_only
-            else build_prompt(payload, draft, voice_locked=voice_locked)
+            else build_prompt(payload, draft, voice_locked=voice_locked, my_voice=my_voice)
         )
         task = f"a new image prompt for {ident}" if image_only else ident
         endpoint = "image-prompt" if image_only else "rewrite"
         if dry_run:
-            print(f"[rewriter] would rewrite {task} ({len(prompt)} chars of prompt)")
+            extra = ""
+            if not image_only:
+                extra = f", {len(my_voice)} chars of voice" if my_voice else ", no voice examples"
+            print(f"[rewriter] would rewrite {task} ({len(prompt)} chars of prompt{extra})")
             continue
         print(f"[rewriter] rewriting {task}…", flush=True)
         try:

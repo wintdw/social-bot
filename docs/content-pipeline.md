@@ -155,7 +155,8 @@ end of the queue.
   (`Draft.rewrite_requested_at`); the app never runs the agent itself.
 - A host-side worker polls `GET /api/rewrite-queue` (the marked drafts plus the
   DNA, the voice menu, the masthead/`image_style` choices, the treatment briefs
-  themselves, `recent` captions and `recent_images`), runs the
+  themselves, `recent` captions and `recent_images`), attaches the operator's own
+  voice itself (§2c — the app neither sends it nor needs to know about it), runs the
   Command Code CLI headlessly per draft (`commandcode -p --output-format json
   --skip-onboarding --max-turns N`, with the whole brief in the prompt so the run
   needs no tools), parses the JSON from the final `result` frame, and POSTs it to
@@ -287,6 +288,63 @@ end of the queue.
   `image.pollinations.ai/prompt` — keyless but watermarked and `sana`-only).
 - A failure is recorded in the summary `errors` and the draft keeps its
   existing image: image generation never blocks the pipeline.
+
+### 2c. The operator's own voice (`voice.py`, optional)
+- The DNA and the voice menu are **brand** voices; `voice.py` adds the operator's
+  **real** one. When `voice.enabled` is on, the rewriter worker retrieves the
+  operator's own messages closest to the draft from a local corpus and hands them
+  to the agent as `=== MY VOICE ===`, together with the learned `profile.md`.
+- The corpus is a directory of normalized JSONL under `voice.corpus_dir`
+  (default `data/voice/normalized`), one record per line
+  (`{id, chat, source, author, is_me, timestamp, text, …}`) — the shape the twin
+  project's ingest writes. It is **migrated into this project**, not imported:
+  nothing here imports or calls the twin at runtime. `voice.profile_file` is the
+  learned profile that `twin profile` produced.
+- Retrieval has three backends (`voice.backend`): `keyword` (pure-Python BM25 over
+  the JSONL — no extra dependency, diacritic-folded so `"sinh vien"` matches
+  `"sinh viên"`), `vector` (the LanceDB index at `voice.index_dir`, built by
+  `social-bot voice index`), and `hybrid` (both, RRF-fused — the default, because
+  this corpus is dominated by very short fragments where each ranker misses what
+  the other finds). Embeddings come from `voice.embedding.provider`: `local`
+  (fastembed) or `openai` (an HTTP `/embeddings` endpoint; its key lives in
+  `credentials.yaml` or `SOCIAL_BOT_VOICE_EMBEDDING_API_KEY`). The model must match
+  the one that built the index, and a **multilingual** one matters: it is what lets
+  an English source excerpt pull Vietnamese lines about the same idea.
+- **The hits are style, not substance.** The prompt says so in as many words:
+  match the diction, rhythm, teencode level and address terms — never reuse a fact,
+  never copy a line verbatim. The division of labour is DNA = structure, voice menu
+  = register, `MY VOICE` = how the sentences sound, draft = the facts. This is the
+  same rule the twin holds (*retrieval feeds voice, not answers*) — do not restate
+  the examples as a source of truth.
+- **It is an enhancement, never a gate.** A missing corpus, a missing `[voice]`
+  extra, a failed embedding call or simply no matches all degrade to *no block at
+  all*: `voice.examples_block` never raises, the worker only warns, and the rewrite
+  proceeds with the voice menu alone. Never let voice retrieval fail a rewrite.
+- `voice.only_me` (default true) keeps examples to the operator's own writing;
+  `voice.top_k` caps how many ride along and `voice.max_examples_chars` caps the
+  rendered block.
+- **Every candidate must clear a relevance gate before it reaches the prompt**
+  (`voice._is_example`): `has_voice` (a bare link teaches no voice),
+  `voice.min_example_words` (default 3 — a shared URL and a two-word ack are not
+  style), and the one that matters, an **absolute cosine floor**
+  `voice.min_similarity` (default 0.55). Measured on this corpus, unrelated chat
+  sits at 0.46–0.50 while a genuine topical match reaches 0.55+, so the floor
+  separates them cleanly. **BM25 cannot make that call** — its scores for junk
+  (8.8–10.6) overlap a good match's (8.9–16.8) — so under `hybrid` only rows the
+  semantic ranker vetted may pass; a lexical-only row is dropped even if BM25
+  ranked it first. The consequence is deliberate: a draft whose topic this corpus
+  does not really cover (an English article, typically) yields **no examples at
+  all**, and the block is the profile alone. That beats handing the model
+  `in CZ we trust` for a piece on long-context recall. Lower `min_similarity` to
+  `0` to disable the floor; `0` for `min_example_words` disables the length gate.
+- The `[voice]` extra (`lancedb`, `pyarrow`, `fastembed`) is needed **wherever the
+  worker runs**, not by the serve container — which is why it is an extra rather
+  than a core dependency.
+- CLI: `social-bot voice index` (rebuild after the corpus changes),
+  `voice search "<topic>" [--show]` (what would be retrieved, and the exact block
+  the worker would attach), `voice status` (paths and corpus counts).
+- Image tasks never get the block: an image prompt is an English visual concept,
+  where a chat register is beside the point.
 
 ### 3. Review queue (human)
 - `/review` lists open drafts (`extracted`/`ai_draft` plus `approved` ones still
@@ -423,6 +481,15 @@ end of the queue.
 | `data/review/seen.json` | `"source:slug"` dedupe ledger. |
 | `data/publish/published.jsonl` | Append-only publish audit (one JSON record per post; `"private": true` marks an unpublished test send). |
 
+The operator's own voice (§2c) keeps its own state, outside the pipeline's
+`review.dir`/`publish.dir`:
+
+| File | Contents |
+|---|---|
+| `data/voice/normalized/*.jsonl` | The operator's own messages — the corpus `voice.py` searches. Migrated from the twin project; nothing here imports the twin. |
+| `data/voice/index/` | The LanceDB vector index (`social-bot voice index`). Only valid for the embedding model that built it. |
+| `data/voice/profile.md` | The learned voice profile, attached to every rewrite as part of `MY VOICE`. |
+
 ## HTTP surface (`web.py`)
 
 | Method | Path | Purpose |
@@ -494,6 +561,14 @@ documents the menu for the rewriter). Each voice file carries its brief **and** 
 growing `Samples` corpus — add real human-written lines to it to sharpen that
 voice. The DNA stays the structural contract (masthead, formats, hashtags/CTA,
 output JSON); a voice file only refines how one register sounds.
+
+**Changing what the agent sounds like.** The rewriter gets four inputs, and each
+owns a different thing: the DNA (`publish.dna_file` — structure), the voice menu
+(`publish.voices` — which register), `voice.py`'s `MY VOICE` block (§2c — the
+operator's own retrieved lines + `profile.md`, i.e. how the sentences sound), and
+the draft (the facts). To change the last of those, edit the corpus under
+`voice.corpus_dir` and re-run `social-bot voice index`; to change how much of it
+rides along, tune `voice.top_k` and `voice.max_examples_chars`.
 
 **Changing the image look.** Edit `docs/atento-image-style.md` (the shared
 palette prepended to every image prompt) and keep

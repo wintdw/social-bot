@@ -38,6 +38,7 @@ src/social_bot/
 ├── draft_html.py     # pure render of the /review queue + a draft detail page
 ├── dashboard_html.py # pure render of / (dashboard), /publish, /status (feed_section passed in)
 ├── web.py            # FastAPI operator UI + JSON API + refresh/scan/posting schedulers
+├── voice.py          # the operator's OWN voice: retrieve their own messages (BM25/vector) as MY VOICE for the rewriter
 ├── destinations/     # ONE PACKAGE PER PLATFORM — the only platform-coupled code
 │   ├── base.py       #   Publisher / AccountReader contracts, PublishResult, DestinationError
 │   ├── registry.py   #   PUBLISHERS / READERS, publisher_for(), reader_for(), describe_all()
@@ -87,7 +88,10 @@ can be *requested* from the UI too: `/review/{id}`'s **Rewrite with Command Code
 button just marks the draft, and a host-side worker
 (`scripts/rewrite_worker.py`, `rewrite.enabled`) polls `GET /api/rewrite-queue`,
 runs the Command Code CLI headlessly, and POSTs the result back — the app never
-runs the agent itself. A human
+runs the agent itself. The worker also attaches the operator's **own** voice
+(`voice.py`): their own messages closest to the draft, plus the learned
+`profile.md`, as `MY VOICE` — style only, never facts, and never a gate (no corpus
+or no `[voice]` extra just means a shorter prompt). A human
 approves on `/review/{id}`, which either posts immediately through a
 `destinations/` publisher adapter or — when `publish.post_at` slots are configured —
 queues the draft as `APPROVED` for the posting scheduler. **The scan and
@@ -203,6 +207,36 @@ entirely, leaving approval as the only publish path.**
   python-slim with no Node). Only `extracted`/`ai_draft` drafts can be requested:
   an `approved` draft is already queued to post, so a rewrite would have to undo
   the approval.
+- **`voice.py` hands the worker the operator's *real* voice, on top of the brand
+  one.** The DNA owns structure, the voice menu (`docs/voices/`) owns the register,
+  and `MY VOICE` owns the diction: `voice.examples_block` retrieves the operator's
+  own messages closest to the draft from `voice.corpus_dir` (normalized JSONL, the
+  twin project's ingest shape, **migrated into `data/voice/` — nothing here imports
+  the twin**) and prefixes the learned `profile.md`. `voice.backend` is `keyword`
+  (pure-Python BM25 over the JSONL, diacritic-folded so `"sinh vien"` matches
+  `"sinh viên"`), `vector` (the LanceDB index at `voice.index_dir`), or `hybrid`
+  (both, RRF-fused — the default, because this corpus is short fragments where
+  neither ranker is reliable alone). Vector/hybrid need the optional `[voice]`
+  extra (`lancedb`/`pyarrow`/`fastembed`), which is why **importing `voice.py` must
+  stay PyYAML-only**: every heavy import sits inside a function. The embedding
+  model must match the one that built the index, and a **multilingual** model is
+  what lets an English source excerpt pull Vietnamese lines about the same idea.
+  Three rules hold it together: the hits are **style, never substance** (copy the
+  diction and rhythm, never a fact, never a line verbatim — the twin's *retrieval
+  feeds voice, not answers*, restated in the prompt's hard rules); retrieval is an
+  **enhancement, never a gate** (`examples_block` never raises, the worker only
+  warns, and the rewrite proceeds on the voice menu alone); and **every candidate
+  must clear the relevance gate** in `voice._is_example` before it reaches the
+  prompt — `has_voice` (a bare link teaches no voice), `min_example_words`
+  (≥ 3 meaningful words), and the one that does the real work, an **absolute
+  cosine floor** `min_similarity` (0.55). Measured on this corpus, unrelated chat
+  sits at 0.46–0.50 and a genuine topical match at 0.55+, while BM25 cannot make
+  that call at all (junk scores 8.8–10.6 overlap a good match's 8.9–16.8) — which
+  is why under `hybrid` only rows the semantic ranker vetted may pass, and why an
+  English article this chat corpus simply does not cover yields **no examples at
+  all** with the block left as the profile alone. That is the honest answer, not a
+  failure: it is what stopped `in CZ we trust` reaching the prompt. `social-bot
+  voice status|index|search` drives and inspects all of it.
 - **A request carries its kind: `Draft.rewrite_mode`.** One pending request per
   draft, one flag plus one kind — so "a caption rewrite and an image rewrite are
   both pending" cannot exist — and the worker tells them apart from the queue
@@ -392,6 +426,13 @@ entirely, leaving approval as the only publish path.**
   `_page_id` and token resolution raise `ValueError` (→ 2) and are caught
   inside each `_cmd_*`, never allowed to traceback.
 
+- **Voice retrieval is style, and never a gate.** `voice.examples_block` must
+  return `""` — not raise — on a missing corpus, a missing `[voice]` extra, a
+  failed embedding call or no matches, and the rewrite must still produce a
+  caption from the DNA and the voice menu alone. Its hits are how the operator
+  *writes*, never what to say: do not re-label them as context, do not tell the
+  agent to answer from them, and never let them supply a fact.
+
 ## UI design system (do not weaken)
 
 The operator UI is one system, and `tests/test_design_system.py` enforces it.
@@ -442,7 +483,12 @@ Graph URL/error-payload handling, feed timestamp parsing, markdown + HTML
 rendering, the refresh cache writer, source parsing (sitemap/RSS/Atom/JSON-LD
 index), the draft model/persistence (incl. per-destination post records and the
 legacy-field migration), the destination registry + publisher adapters, the
-scan/rewrite/publish pipeline (stubbed clients), the scheduled drain
+scan/rewrite/publish pipeline (stubbed clients), the voice retrieval that feeds the
+rewriter (`voice.py`: BM25 folding and ranking, RRF fusion, and the
+`examples_block` render with its only-me and link-only filters — every path is
+pinned under `tmp_path` and the vector ranker is stubbed, so the suite needs
+neither the real corpus nor `lancedb`/`fastembed`, even with the `[voice]` extra
+installed), the scheduled drain
 (`publish_scheduled`, `approve_draft`), image prompt building and
 URL construction (`image_gen.py`, stubbed `urlopen`), the operator pages
 (`ui.py` / `draft_html.py` / `dashboard_html.py`), the design-system contracts

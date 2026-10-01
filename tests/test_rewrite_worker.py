@@ -112,6 +112,26 @@ class TestBuildPrompt:
         assert '"voice":        exactly one of: technical, essay' in prompt
         assert "reviewer's chosen voice" not in prompt
 
+    def test_carries_the_operators_own_voice_when_supplied(self):
+        prompt = worker.build_prompt(_payload(), {"id": "d1"}, my_voice="PROFILE + REAL LINES")
+        assert "=== MY VOICE (match the voice, not the content) ===" in prompt
+        assert "PROFILE + REAL LINES" in prompt
+        assert "Match the VOICE of the real messages in MY VOICE below" in prompt
+
+    def test_my_voice_sits_between_the_menu_and_the_style_briefs(self):
+        prompt = worker.build_prompt(_payload(), {"id": "d1"}, my_voice="X")
+        assert (
+            prompt.index("=== VOICE MENU")
+            < prompt.index("=== MY VOICE")
+            < prompt.index("=== IMAGE STYLE BRIEFS")
+        )
+
+    def test_leaves_my_voice_out_entirely_when_empty(self):
+        # A run with no corpus must read exactly as it did before voice existed.
+        prompt = worker.build_prompt(_payload(), {"id": "d1"})
+        assert "MY VOICE" not in prompt
+        assert "Match the VOICE of the real messages" not in prompt
+
 
 class TestBuildImagePrompt:
     """The prompt-only task: a new image prompt, caption untouched."""
@@ -144,6 +164,26 @@ class TestBuildImagePrompt:
         assert "DNA BRIEF" not in prompt
         assert "Voice brief" not in prompt
         assert "[Học cùng Atento]" not in prompt
+
+
+class TestMyVoice:
+    """The operator's own voice, attached to caption runs and never fatal."""
+
+    def test_empty_when_the_voice_block_is_off(self, monkeypatch, capsys):
+        monkeypatch.setattr(worker.voice, "enabled", lambda cfg: False)
+        assert worker._my_voice({}, {"id": "d1"}) == ""
+        assert capsys.readouterr().err == ""  # switched off is not a warning
+
+    def test_warns_when_enabled_but_nothing_came_back(self, monkeypatch, capsys):
+        monkeypatch.setattr(worker.voice, "enabled", lambda cfg: True)
+        monkeypatch.setattr(worker.voice, "examples_block", lambda cfg, draft: "")
+        assert worker._my_voice({}, {"id": "d1"}) == ""
+        assert "no voice examples for d1" in capsys.readouterr().err
+
+    def test_returns_the_block_when_there_is_one(self, monkeypatch):
+        monkeypatch.setattr(worker.voice, "enabled", lambda cfg: True)
+        monkeypatch.setattr(worker.voice, "examples_block", lambda cfg, draft: "BLOCK")
+        assert worker._my_voice({}, {"id": "d1"}) == "BLOCK"
 
 
 class TestAuthHeader:
@@ -289,6 +329,44 @@ class TestProcessOnce:
         assert "IMAGE STYLE BRIEFS" in prompts[1]
         assert "DNA BRIEF" in prompts[0] and "DNA BRIEF" not in prompts[1]
         assert [call[1].rsplit("/", 1)[-1] for call in calls[1:]] == ["rewrite", "image-prompt"]
+
+    def test_a_caption_rewrite_carries_the_operators_voice(self, monkeypatch):
+        prompts = []
+        calls = []
+        self._patch(monkeypatch, calls, drafts=[{"id": "d1"}], result={"caption": "hi"})
+        monkeypatch.setattr(worker, "_my_voice", lambda cfg, draft: "VOICE-FOR-d1")
+        original = worker.run_commandcode
+
+        def capture(settings, prompt):
+            prompts.append(prompt)
+            return original(settings, prompt)
+
+        monkeypatch.setattr(worker, "run_commandcode", capture)
+        assert worker.process_once(_cfg()) == 1
+        assert "VOICE-FOR-d1" in prompts[0]
+
+    def test_an_image_request_gets_no_voice_block(self, monkeypatch):
+        # An image prompt is an English visual concept; the chat register is beside
+        # the point there, so the block is never even fetched.
+        prompts = []
+        calls = []
+        self._patch(
+            monkeypatch,
+            calls,
+            drafts=[{"id": "d1", "rewrite_mode": "image"}],
+            result={"image_prompt": "a diagram"},
+        )
+        monkeypatch.setattr(worker, "_my_voice", lambda cfg, draft: "SHOULD-NOT-APPEAR")
+        original = worker.run_commandcode
+
+        def capture(settings, prompt):
+            prompts.append(prompt)
+            return original(settings, prompt)
+
+        monkeypatch.setattr(worker, "run_commandcode", capture)
+        worker.process_once(_cfg())
+        assert "SHOULD-NOT-APPEAR" not in prompts[0]
+        assert "MY VOICE" not in prompts[0]
 
     def test_records_a_failure_and_keeps_going(self, monkeypatch):
         calls = []

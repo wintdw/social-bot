@@ -8,6 +8,7 @@ How to run, deploy, and debug social-bot.
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"          # CLI + tests
 .venv/bin/pip install -e ".[server]"       # + fastapi/uvicorn/python-multipart for `serve`
+.venv/bin/pip install -e ".[voice]"        # + lancedb/fastembed for the rewriter's MY VOICE block
 cp credentials.example.yaml credentials.yaml   # put the Page token in it (git-ignored)
 ```
 
@@ -87,6 +88,25 @@ It needs Command Code installed and logged in on the host (`cmd login`), and
 sees it); from another machine point it at the deployed URL — `site.user` /
 `site.password` in `credentials.yaml` are sent as HTTP basic auth.
 
+**The operator's own voice (optional).** With `voice.enabled: true` the worker also
+attaches the operator's own messages closest to each draft, plus the learned
+`profile.md`, as `MY VOICE` (see [content-pipeline.md](content-pipeline.md) §2c).
+That needs the `[voice]` extra wherever the worker runs, and the corpus under
+`data/voice/`:
+
+```sh
+.venv/bin/pip install -e ".[voice]"          # lancedb + fastembed (pulls onnxruntime)
+.venv/bin/social-bot voice status            # corpus + index state
+.venv/bin/social-bot voice index             # rebuild after the corpus changes
+.venv/bin/social-bot voice search "System Design là gì" --show
+```
+
+The index is only valid for the embedding model that built it
+(`voice.embedding.model`), so re-run `voice index` after changing either the
+messages or the model. None of it is required: with no corpus (or no extra) the
+worker warns once per draft and rewrites without the block. The `serve` container
+never needs any of it.
+
 **Keep it running — a request only waits otherwise.** `deploy/social-bot-rewriter.service`
 is a ready `systemd --user` unit (the poll loop, restarts on failure):
 
@@ -163,6 +183,13 @@ above that window so a slow post is not killed mid-flight.
 | `data/review/seen.json` | Dedupe ledger (`source:slug`). |
 | `data/publish/published.jsonl` | Publish audit log. |
 | `data/state.json` | Last refresh/scan run and whether posting is paused (so the dashboard and the pause survive a restart). |
+| `data/voice/normalized/*.jsonl` | The operator's own messages — the corpus the rewriter's `MY VOICE` block is retrieved from (content-pipeline §2c). Private; `data/` is git-ignored. |
+| `data/voice/index/` | The LanceDB vector index over that corpus (`social-bot voice index`). |
+| `data/voice/profile.md` | The learned voice profile, attached to every rewrite. |
+
+Everything under `data/voice/` is used by the **worker on the host** (and by
+`social-bot voice …`), never by the `serve` container: the corpus is not mounted
+into the image and the container has no `[voice]` extra.
 
 Ownership: the container writes as **uid 1000** by default — the same as a
 typical host user — so `./data` needs no chown and the CLI run as your host user

@@ -250,6 +250,14 @@ def test_credentials_file_supplies_image_key(tmp_path):
         {"rewrite": {"max_turns": 0}},
         {"rewrite": {"api_base": "localhost:8083"}},
         {"rewrite": {"command": "   "}},
+        {"voice": {"backend": "elasticsearch"}},
+        {"voice": {"top_k": 0}},
+        {"voice": {"max_examples_chars": -1}},
+        {"voice": {"min_similarity": 1.5}},
+        {"voice": {"min_example_words": -1}},
+        {"voice": {"hybrid_candidates": 0}},
+        {"voice": {"embedding": {"provider": "cohere"}}},
+        {"voice": {"embedding": {"timeout_seconds": 0}}},
     ],
     ids=[
         "empty-sources",
@@ -281,8 +289,27 @@ def test_credentials_file_supplies_image_key(tmp_path):
         "zero-rewrite-max-turns",
         "bad-rewrite-api-base",
         "blank-rewrite-command",
+        "unknown-voice-backend",
+        "zero-voice-top-k",
+        "negative-voice-max-examples",
+        "voice-similarity-above-one",
+        "negative-voice-min-example-words",
+        "zero-voice-hybrid-candidates",
+        "unknown-voice-embedding-provider",
+        "zero-voice-embedding-timeout",
     ],
 )
 def test_validate_rejects_bad_pipeline_config(override):
     with pytest.raises(ValueError):
         validate({**DEFAULTS, **override})
+
+
+def test_defaults_include_the_voice_section(tmp_path):
+    cfg = load_config(tmp_path / "missing.yaml")
+    assert cfg["voice"]["enabled"] is False  # opt-in, like rewrite/image_gen
+    assert cfg["voice"]["backend"] == "hybrid"
+    assert cfg["voice"]["corpus_dir"] == "data/voice/normalized"
+    assert cfg["voice"]["only_me"] is True
+    assert cfg["voice"]["include_profile"] is True
+    assert cfg["voice"]["embedding"]["provider"] == "local"
+    assert cfg["voice"]["embedding"]["api_key"] == ""  # secrets live in credentials.yaml

@@ -205,3 +205,54 @@ rewrite:
   timeout_seconds: 600.0      # kill a run that hangs
   poll_seconds: 15.0          # how often the worker asks for new requests
   api_base: http://127.0.0.1:8083  # where the worker reaches this app
+
+# --- The operator's own voice (src/social_bot/voice.py) -----------------------
+# On top of the DNA (which owns structure) and the voice menu (which owns the
+# register), the rewriter can be handed Dũng's *real* voice: the messages he
+# actually wrote that are closest to the post being drafted, plus the learned
+# profile.md. They are style only — the agent copies the diction and rhythm,
+# never the facts, and never a line verbatim.
+#
+# The corpus is a directory of normalized JSONL (the twin project's ingest shape)
+# migrated into this project under data/voice/ — nothing imports the twin at
+# runtime. Rebuild the index when the messages change (needs the [voice] extra):
+#   social-bot voice index                            # embed the corpus
+# Check what a topic would retrieve:
+#   social-bot voice search "System Design là gì" --show
+#   social-bot voice status                           # corpus + index state
+#
+# Vector/hybrid search needs the optional extra: pip install -e ".[voice]".
+# Voice retrieval is an enhancement, never a gate: with no corpus (or no extra)
+# the rewriter simply runs as before, without the MY VOICE block.
+voice:
+  enabled: true
+  corpus_dir: data/voice/normalized      # the operator's own messages (JSONL)
+  index_dir: data/voice/index            # LanceDB table; `voice index` writes it
+  profile_file: data/voice/profile.md    # the learned voice, folded into the prompt
+  backend: hybrid                        # vector | keyword | hybrid (BM25 + vector)
+  top_k: 20                              # how many past messages to attach (cap, not a target)
+  only_me: true                          # examples come only from Dũng
+  # The gate that keeps junk out of the prompt. An example must reach this cosine
+  # similarity AND have at least `min_example_words` words. Measured on this
+  # corpus: unrelated chat sits at 0.46–0.50, a vaguely-related match 0.55–0.60,
+  # and a clearly on-topic one 0.62+. 0.62 is deliberate — at 0.55 a top_k of 20
+  # fills its slots with weak matches ("để a đi mượn cái thước r đo là đc" for a
+  # post about scaling), and a topic the chat doesn't really cover (an English
+  # article) yields NO examples, leaving the block as profile.md alone. That is
+  # the honest answer — better than handing the model "in CZ we trust".
+  # Set to 0 to disable the floor.
+  min_similarity: 0.62
+  min_example_words: 3                   # 0 disables the length gate
+  max_examples_chars: 2000               # cap on the examples block (0 = no cap)
+  include_profile: true                  # attach profile.md as well as the examples
+  hybrid_candidates: 60                  # per-ranker pool size when fusing
+  embedding:
+    provider: local                      # "local" (fastembed) or "openai" (HTTP)
+    # Must match the model that built the index; a multilingual model is what
+    # lets an English source pull Vietnamese lines about the same idea.
+    model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
+    base_url: ""                         # only for provider: openai
+    batch_size: 64
+    timeout_seconds: 120.0
+    # api_key lives in credentials.yaml (voice.embedding.api_key) or
+    # SOCIAL_BOT_VOICE_EMBEDDING_API_KEY — never here.

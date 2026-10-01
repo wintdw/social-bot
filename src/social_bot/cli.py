@@ -7,7 +7,7 @@ import json
 import pathlib
 import sys
 
-from . import __version__
+from . import __version__, voice
 from .config import load_config, validate
 from .destinations import names as destination_names
 from .destinations import publisher_for
@@ -209,6 +209,33 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         ),
     )
     p_serve.set_defaults(func=_cmd_serve)
+
+    p_voice = sub.add_parser(
+        "voice",
+        help="the operator's own voice: index the corpus and search it",
+    )
+    voice_sub = p_voice.add_subparsers(dest="voice_command", required=True)
+
+    p_vindex = voice_sub.add_parser(
+        "index", help="embed the corpus into the vector index (needs the [voice] extra)"
+    )
+    p_vindex.set_defaults(func=_cmd_voice_index)
+
+    p_vsearch = voice_sub.add_parser(
+        "search", help="show which of the operator's own messages a topic retrieves"
+    )
+    p_vsearch.add_argument("query", help="the topic text to search for")
+    p_vsearch.add_argument(
+        "--k", type=int, default=None, help="how many examples (default: voice.top_k)"
+    )
+    p_vsearch.add_argument(
+        "--show", action="store_true", help="print the MY VOICE block exactly as the worker would"
+    )
+    p_vsearch.set_defaults(func=_cmd_voice_search)
+
+    p_vstatus = voice_sub.add_parser("status", help="show the voice config and corpus state")
+    p_vstatus.add_argument("--json", action="store_true", help="print the status as JSON")
+    p_vstatus.set_defaults(func=_cmd_voice_status)
     return parser.parse_args(argv)
 
 
@@ -489,6 +516,85 @@ def _cmd_blog_move(args: argparse.Namespace) -> int:
         return 2
     position = next((i + 1 for i, draft in enumerate(queue) if draft.id == args.draft), 0)
     print(f"Moved {args.draft} to position {position} of {len(queue)}.")
+    return 0
+
+
+def _cmd_voice_index(args: argparse.Namespace) -> int:
+    """Embed the corpus into the vector index (the keyword backend needs none)."""
+    cfg = _load_config(args)
+    try:
+        count = voice.build_index(cfg)
+    except ImportError as exc:
+        print(f"voice index: the [voice] extra is not installed ({exc})", file=sys.stderr)
+        print('  install it where the worker runs: pip install -e ".[voice]"', file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"voice index: {exc}", file=sys.stderr)
+        return 2
+    except (RuntimeError, OSError) as exc:
+        print(f"voice index: {exc}", file=sys.stderr)
+        return 1
+    if voice.backend(cfg) == "keyword":
+        print(f"keyword backend: {count} record(s) ready (no vector index needed)")
+    else:
+        print(f"Indexed {count} record(s) into {voice.index_dir(cfg)}")
+    return 0
+
+
+def _cmd_voice_search(args: argparse.Namespace) -> int:
+    """Retrieve — and optionally print — what the worker would attach for a topic."""
+    cfg = _load_config(args)
+    if args.show:
+        if not voice.enabled(cfg):
+            print("voice is off, or the corpus is missing (see `voice status`).", file=sys.stderr)
+            return 1
+        print(voice.examples_block(cfg, {"title": args.query}) or "(no examples and no profile)")
+        return 0
+    try:
+        hits = voice.search(cfg, args.query, args.k)
+    except ImportError as exc:
+        print(f"voice search: the [voice] extra is not installed ({exc})", file=sys.stderr)
+        print('  install it where the worker runs: pip install -e ".[voice]"', file=sys.stderr)
+        return 2
+    except (ValueError, RuntimeError, OSError) as exc:
+        print(f"voice search: {exc}", file=sys.stderr)
+        return 1
+    if not hits:
+        print(f"No matches above the gate (min_similarity={voice.min_similarity(cfg)}).")
+        return 0
+    for index, hit in enumerate(hits, start=1):
+        who = "me" if hit.get("is_me") else (hit.get("author") or "other")
+        text = " ".join(str(hit.get("text", "")).split())
+        similarity = hit.get("_similarity")
+        score = f"sim={similarity:.3f}" if isinstance(similarity, (int, float)) else "sim=n/a"
+        # The sim is printed so the gate can be tuned against real results: lower
+        # `voice.min_similarity` to let weaker matches through, raise it for less.
+        print(f"[{index}] {score} · {hit.get('chat', '?')} · {who} · {hit.get('timestamp', '')}")
+        print(f"    {text[:200]}")
+    return 0
+
+
+def _cmd_voice_status(args: argparse.Namespace) -> int:
+    cfg = _load_config(args)
+    snapshot = voice.status(cfg)
+    if args.json:
+        print(json.dumps(snapshot, indent=2, ensure_ascii=False))
+        return 0
+    print(f"enabled:  {snapshot['enabled']}")
+    print(f"backend:  {snapshot['backend']}")
+    print(
+        f"corpus:   {snapshot['corpus_dir']} "
+        f"({snapshot['records']} records, {snapshot['mine']} from you)"
+    )
+    print(f"index:    {snapshot['index_dir']}")
+    print(
+        f"profile:  {snapshot['profile_file']} ({'present' if snapshot['profile'] else 'absent'})"
+    )
+    print(f"top_k:    {snapshot['top_k']} (only_me={snapshot['only_me']})")
+    print(
+        f"gate:     min_similarity={snapshot['min_similarity']} "
+        f"min_example_words={snapshot['min_example_words']}"
+    )
     return 0
 
 

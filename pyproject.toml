@@ -22,6 +22,15 @@ server = [
   "uvicorn>=0.30",
   "python-multipart>=0.0.9",
 ]
+# Voice retrieval (`voice.enabled`, src/social_bot/voice.py): the rewriter worker
+# embeds the draft and searches the operator's own messages. Needed wherever the
+# worker runs, NOT by the serve container — hence an extra, so the image stays
+# python-slim. fastembed pulls onnxruntime.
+voice = [
+  "lancedb>=0.13",
+  "pyarrow>=15",
+  "fastembed>=0.4",
+]
 
 [project.scripts]
 social-bot = "social_bot.cli:main"
