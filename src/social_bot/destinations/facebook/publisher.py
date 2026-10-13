@@ -1,15 +1,19 @@
 """Facebook Page publisher.
 
 Facebook reuses the Graph client in ``api.py``; this module is the *publishing*
-seam that turns an approved draft into a real post.
+seam that turns an approved draft into a real post. A draft with an image is a
+photo post, and the image is **uploaded** (see ``media``) rather than handed to
+Graph as a URL to fetch — the generator no longer serves its URLs anonymously,
+so a URL post 401s from Facebook's side.
 """
 
 from __future__ import annotations
 
 import time
 
+from ... import media
 from ...drafts import Draft
-from ..base import Publisher, PublishResult
+from ..base import Publisher, PublisherError, PublishResult
 from .api import ApiError, api_from_config
 
 # Seconds to wait before commenting on a freshly created post. Facebook's
@@ -65,7 +69,22 @@ class FacebookPublisher(Publisher):
         caption = draft.post_text
         private = self.private()
         if draft.image:
-            resp = self.api.create_photo_post(page_id, caption, draft.image, published=not private)
+            # Upload the bytes; never let Graph fetch the image URL itself. A
+            # local image is read from disk, a remote one (a source cover, or a
+            # legacy generated URL) is downloaded here — with the generator's
+            # key, which is the only reason its URLs still resolve at all.
+            try:
+                image, filename, content_type = media.load(self.cfg, draft.image)
+            except media.MediaError as exc:
+                raise PublisherError(f"facebook: {exc}") from None
+            resp = self.api.create_photo_post(
+                page_id,
+                caption,
+                image,
+                filename=filename,
+                content_type=content_type,
+                published=not private,
+            )
         else:
             resp = self.api.create_post(page_id, caption, draft.url or None, published=not private)
         post_id = str(resp.get("post_id") or resp.get("id") or "")

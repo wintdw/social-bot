@@ -37,9 +37,9 @@ def test_names_labels_and_registry():
 
 def test_enabled_names_follows_publish_routing():
     cfg = _cfg()
-    assert enabled_names(cfg) == ["facebook"]
-    cfg["publish"]["destinations"] = ["facebook", "linkedin"]
     assert enabled_names(cfg) == ["facebook", "linkedin"]
+    cfg["publish"]["destinations"] = ["facebook"]
+    assert enabled_names(cfg) == ["facebook"]
 
 
 def test_only_facebook_has_a_reader():
@@ -83,13 +83,13 @@ def test_publish_result_to_dict():
     }
 
 
-def test_linkedin_validate_config_checks_base_url_and_urn():
+def test_linkedin_validate_config_checks_gateway_url_and_visibility():
     with pytest.raises(ValueError):
-        LinkedInPublisher.validate_config({"base_url": "http://api.linkedin.com"})
+        LinkedInPublisher.validate_config({"base_url": "api.linkedin.com"})
     with pytest.raises(ValueError):
-        LinkedInPublisher.validate_config(
-            {"base_url": "https://api.linkedin.com", "author_urn": "nope"}
-        )
+        LinkedInPublisher.validate_config({"base_url": "http://x", "visibility": "FRIENDS"})
+    with pytest.raises(ValueError):
+        LinkedInPublisher.validate_config({"base_url": "http://x", "timeout_seconds": 0})
     LinkedInPublisher.validate_config(
-        {"base_url": "https://api.linkedin.com", "author_urn": "urn:li:organization:1"}
+        {"base_url": "http://host.docker.internal:8082", "visibility": "CONNECTIONS"}
     )

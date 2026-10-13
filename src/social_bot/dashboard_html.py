@@ -16,6 +16,8 @@ import datetime as dt
 import html
 
 from .caption import display_title, leading_masthead
+from .destinations import label_for
+from .destinations import names as destination_names
 from .drafts import Draft, parse_when
 from .ui import badge, fmt_when, layout
 
@@ -100,6 +102,14 @@ def _next_draft_label(publish: dict) -> str:
     return title or ident
 
 
+def _post_at_label(publish: dict) -> str:
+    """The posting slots per destination ('facebook 20:00-20:30 · linkedin 14:00-14:30')."""
+    schedule = (publish or {}).get("destination_post_at") or {}
+    if schedule:
+        return " · ".join(f"{name} {', '.join(slots)}" for name, slots in schedule.items() if slots)
+    return ", ".join((publish or {}).get("post_at", []) or [])
+
+
 def _next_post_note(publish: dict) -> str:
     """The 'Next post' row's subtitle: when it may fire and which draft."""
     parts: list[str] = []
@@ -138,89 +148,6 @@ def _days_phrase(days: int | None) -> str:
     if days == 0:
         return "expires today"
     return f"in {days} day(s)"
-
-
-# Background image-job states (see web.image_jobs_view) -> the word shown.
-_IMAGE_STATUS_LABEL = {
-    "running": "running",
-    "ok": "done",
-    "unchanged": "no change",
-    "skipped": "skipped",
-    "error": "failed",
-}
-
-
-def _job_times(job: dict) -> str:
-    """A job's timing as one phrase: a range when both ends are known."""
-    started = str(job.get("started_at", "") or "").strip()
-    finished = str(job.get("finished_at", "") or "").strip()
-    if started and finished:
-        return f"{started} → {finished}"
-    if started:
-        return f"started {started}"
-    if finished:
-        return f"finished {finished}"
-    return ""
-
-
-def _image_job_row(job: dict) -> str:
-    """One image job: state badge, the draft it belongs to, and its timing.
-
-    The draft id is the only handle on the post, so it links to its detail page
-    and carries the full id in a title while it ellipsises in a narrow column.
-    """
-    status = str(job.get("status", ""))
-    draft_id = str(job.get("draft_id", ""))
-    name = html.escape(draft_id)
-    parts = [
-        '<div class="job-top">',
-        badge(_IMAGE_STATUS_LABEL.get(status, status or "unknown")),
-        f'<a class="job-name" href="{html.escape(f"/review/{draft_id}")}"'
-        f' title="{name}">{name}</a>',
-        "</div>",
-    ]
-    times = _job_times(job)
-    if times:
-        parts.append(f'<div class="job-meta">{html.escape(times)}</div>')
-    error = str(job.get("error", "") or "").strip()
-    if error:
-        parts.append(f'<div class="job-error">{html.escape(error)}</div>')
-    return f'<div class="job">{"".join(parts)}</div>'
-
-
-def _image_section(images: dict | None, *, limit: int = 10) -> str:
-    """The background image jobs: how the async post-rewrite work is going.
-
-    `images` is web.image_jobs_view()'s payload. Returns "" when it was not
-    supplied (older callers), so the section stays optional.
-    """
-    if images is None:
-        return ""
-    if not images.get("enabled"):
-        return _panel(
-            "Image jobs",
-            '<div class="panel-body"><p class="muted">Disabled — set '
-            "<code>image_gen.enabled</code> to true to generate an image for "
-            "every rewrite.</p></div>",
-        )
-    jobs = list(images.get("jobs") or [])
-    if not jobs:
-        return _panel(
-            "Image jobs",
-            '<div class="panel-body"><p class="muted">No image jobs yet — one runs '
-            "in the background after each rewrite.</p></div>",
-        )
-    rows = "".join(_image_job_row(job) for job in reversed(jobs[-limit:]))  # newest first
-    more = "" if len(jobs) <= limit else f" (showing the latest {limit})"
-    summary = (
-        f"{len(jobs)} job(s) · {images.get('running', 0)} running · "
-        f"{images.get('failed', 0)} failed{more}"
-    )
-    return _panel(
-        "Image jobs",
-        f'<div class="joblist">{rows}</div>',
-        extra=f'<span class="pill">{html.escape(summary)}</span>',
-    )
 
 
 def _token_section(token: dict | None) -> str:
@@ -263,6 +190,85 @@ def _token_section(token: dict | None) -> str:
     if error:
         rows.append(("Error", html.escape(str(error))))
     return _panel("Token", f'<div class="panel-body">{_kv_rows(rows)}</div>')
+
+
+def _linkedin_section(linkedin: dict | None) -> str:
+    """The linkin-bot gateway status, from its ``GET /status`` (see linkedin.status).
+
+    ``None`` renders nothing (older callers); any dict renders a panel, so the
+    page degrades to "unreachable" instead of hiding the destination.
+    """
+    if linkedin is None:
+        return ""
+    base_url = str(linkedin.get("base_url") or "")
+    checked = str(linkedin.get("checked_at") or "")
+    if not linkedin.get("configured", True):
+        rows: list[tuple[str, object]] = [
+            ("Status", badge("unknown")),
+            ("Gateway", html.escape(base_url or "—")),
+            ("Checked", html.escape(checked or "—")),
+        ]
+        error = str(linkedin.get("error") or "")
+        if error:
+            rows.append(("Error", html.escape(error)))
+        return _panel("LinkedIn", f'<div class="panel-body">{_kv_rows(rows)}</div>')
+    if not linkedin.get("ok"):
+        rows = [
+            ("Status", badge("invalid")),
+            ("Gateway", html.escape(base_url or "—")),
+            ("Checked", html.escape(checked or "—")),
+            ("Error", html.escape(str(linkedin.get("error") or "unknown error"))),
+        ]
+        return _panel("LinkedIn", f'<div class="panel-body">{_kv_rows(rows)}</div>')
+
+    connected = linkedin.get("connected")
+    if connected is True:
+        state = badge("valid")
+    elif connected is False:
+        state = badge("invalid")
+    else:
+        state = badge("unknown")
+    summary = str(linkedin.get("oauth_summary") or "—")
+    kill = "on" if linkedin.get("kill_switch") else "off"
+    rows = [
+        ("Status", state),
+        ("OAuth", html.escape(summary)),
+        ("Kill switch", html.escape(kill)),
+        ("Checked", html.escape(checked or "—")),
+    ]
+    blocks = [f"<div>{_kv_rows(rows)}</div>"]
+
+    caps = [c for c in (linkedin.get("caps") or []) if isinstance(c, dict)]
+    if caps:
+
+        def _num(value) -> str:
+            return "—" if value is None or value == "" else str(value)
+
+        cap_rows = [
+            [
+                html.escape(str(cap.get("kind") or "")),
+                html.escape(_num(cap.get("sent_today"))),
+                html.escape(_num(cap.get("day_remaining"))),
+                html.escape(_num(cap.get("week_remaining"))),
+            ]
+            for cap in caps
+        ]
+        blocks.append(_table(["Flow", "Sent today", "Day left", "Week left"], cap_rows))
+
+    schedule = linkedin.get("schedule") or {}
+    next_run = linkedin.get("next_run") or {}
+    flows = sorted(set(list(schedule.keys()) + list(next_run.keys())))
+    if flows:
+        sched_rows = [
+            [
+                html.escape(flow),
+                html.escape(", ".join(schedule.get(flow) or []) or "—"),
+                html.escape(str(next_run.get(flow) or "—")),
+            ]
+            for flow in flows
+        ]
+        blocks.append(_table(["Flow", "Schedule", "Next run"], sched_rows))
+    return _panel("LinkedIn", f'<div class="panel-body">{"".join(blocks)}</div>')
 
 
 def _pipeline(stats: dict, refresh: dict, scan: dict, post: dict | None) -> str:
@@ -326,7 +332,7 @@ def _pipeline(stats: dict, refresh: dict, scan: dict, post: dict | None) -> str:
     )
 
 
-def _attention(stats: dict, images: dict | None, token: dict | None) -> str:
+def _attention(stats: dict, token: dict | None) -> str:
     """What needs a person right now. Says so explicitly when nothing does.
 
     Approved drafts are deliberately absent: they need no decision, and their
@@ -345,17 +351,6 @@ def _attention(stats: dict, images: dict | None, token: dict | None) -> str:
             f'<span class="small">{drafts.get("total", 0)} in the queue · '
             "nothing posts until a human approves it</span></span>"
             '<a class="btn btn-primary btn-sm" href="/review">Open queue</a>'
-            "</div>"
-        )
-    if images is not None and images.get("failed"):
-        rows.append(
-            '<div class="attn-row">'
-            '<span class="attn-ico warn" aria-hidden="true">!</span>'
-            '<span class="attn-text"><strong>'
-            f"{images.get('failed')} image job(s) failed</strong>"
-            '<span class="small">the draft keeps its existing image; '
-            "regenerate from the draft page</span></span>"
-            '<a class="btn btn-quiet btn-sm" href="/status">Inspect</a>'
             "</div>"
         )
     if token is not None and token.get("valid") is False:
@@ -489,12 +484,59 @@ def _queue_move_form(draft: Draft, position: int, total: int) -> str:
     return f'<form method="post" action="{action}">{hidden}{buttons}</form>'
 
 
-def _queue_row(draft: Draft, position: int, total: int) -> str:
-    """One queued draft: what posts, and where it sits in the order.
+def _queue_publish_forms(draft: Draft, private: bool = False) -> str:
+    """One manual-post icon button per destination still pending on this draft.
+
+    Plain forms (no JS needed): each posts this single draft to one platform
+    through ``POST /queue/{id}/publish``. Icon-only (the row already names each
+    destination with its pending pill above), with the platform in ``title`` /
+    ``aria-label`` and in the confirm dialog. A finished destination is never
+    offered again — a send cannot be undone. In private mode a Facebook send
+    stays unpublished (admins only); LinkedIn has no unpublished equivalent
+    and always posts publicly.
+    """
+    # Short brand marks; the full platform name stays in title/aria-label.
+    _ICONS = {"facebook": "f", "linkedin": "in"}
+    done = set(draft.posted_destinations())
+    pending = [name for name in (draft.destinations or ["facebook"]) if name not in done]
+    if not pending:
+        return ""
+    forms: list[str] = []
+    for name in pending:
+        label = label_for(name)
+        icon = _ICONS.get(name, label[:2])
+        if private and name == "facebook":
+            confirm = f"Post this privately to {label} (admins only)?"
+        else:
+            confirm = f"Post this publicly to {label}?"
+        # Labels come from the registry; still keep the JS string single-quote
+        # safe so the inline confirm can never break out of its quotes.
+        confirm = confirm.replace("'", "’")
+        cls = "btn btn-sm"
+        forms.append(
+            f'<form method="post" action="/queue/{html.escape(draft.id)}/publish"'
+            f" onsubmit=\"return confirm('{html.escape(confirm, quote=True)}');\">"
+            f'<input type="hidden" name="next" value="{_QUEUE_NEXT_URL}">'
+            f'<input type="hidden" name="destination" value="{html.escape(name)}">'
+            f'<button type="submit" class="{cls}" title="Post to {html.escape(label)}"'
+            f' aria-label="Post now to {html.escape(label)}">'
+            f'<span aria-hidden="true">{html.escape(icon)}</span></button></form>'
+        )
+    return "".join(forms)
+
+
+def _queue_row(
+    draft: Draft, position: int, total: int, known: list[str] | None = None, private: bool = False
+) -> str:
+    """One queued draft: what posts, where it posts, and where it sits in the order.
 
     A managed row is a div wrapping the row link plus the order controls — a
     control cannot live inside an `<a>` — and carries its draft id so a drag can
-    report the new order.
+    report the new order. The destination pills name the platforms this draft
+    still has to reach (posted ones read as posted); the per-destination Post
+    buttons send this one draft now (a human action, like Post now on
+    /review/{id}). Retargeting lives on /review/{id} — the queue only reorders
+    and posts.
     """
     url = html.escape(f"/review/{draft.id}")
     title = html.escape(display_title(draft.caption, draft.title or draft.id))
@@ -506,12 +548,20 @@ def _queue_row(draft: Draft, position: int, total: int) -> str:
     else:
         thumb = '<span class="qthumb empty" aria-hidden="true"></span>'
 
+    posted = set(draft.posted_destinations())
     meta: list[str] = []
     if position == 1:
         # The row that goes out next — the same draft the poster takes first.
         meta.append('<span class="pill is-next">Next to post</span>')
     if draft.source:
         meta.append(f'<span class="badge badge-source">{html.escape(draft.source)}</span>')
+    for name in draft.destinations or ["facebook"]:
+        state = "posted" if name in posted else "pending"
+        dot = "dot-ok" if name in posted else "dot-warn"
+        meta.append(
+            f'<span class="pill"><span class="dot {dot}" aria-hidden="true"></span>'
+            f"{html.escape(label_for(name))} · {state}</span>"
+        )
     masthead = leading_masthead(draft.caption)
     if masthead:
         meta.append(f'<span class="pill">{html.escape(masthead)}</span>')
@@ -549,6 +599,7 @@ def _queue_row(draft: Draft, position: int, total: int) -> str:
         'title="Drag to reorder">⠿</span>'
         f'<span class="pill">#{position} / {total}</span>'
         f"{_queue_move_form(draft, position, total)}"
+        f"{_queue_publish_forms(draft, private)}"
         "</div>"
         "</div>"
     )
@@ -563,11 +614,12 @@ def _queue_summary(total: int, post: dict | None) -> str:
     return f"{total} approved · next post {post.get('next_post') or '—'}"
 
 
-def _queue_panel(queue: list[Draft]) -> str:
+def _queue_panel(queue: list[Draft], known: list[str] | None = None, private: bool = False) -> str:
     """The post queue: the approved drafts, in the order they will post.
 
     ``queue`` is `draft_pipeline.scheduled_queue`, so row #1 is exactly the draft
-    the poster sends next.
+    the poster sends next. Each row carries its own manual Post buttons alongside
+    the order controls; retargeting lives on /review/{id}.
     """
     total = len(queue)
     if not queue:
@@ -578,7 +630,9 @@ def _queue_panel(queue: list[Draft]) -> str:
             'will post. <a href="/review">Open Review queue</a>.</p></div>',
             anchor=_QUEUE_ANCHOR,
         )
-    rows = "".join(_queue_row(draft, index + 1, total) for index, draft in enumerate(queue))
+    rows = "".join(
+        _queue_row(draft, index + 1, total, known, private) for index, draft in enumerate(queue)
+    )
     # One draft needs no ordering, so the hint and the reset control stay away
     # until there is an order to set.
     foot = ""
@@ -605,13 +659,16 @@ def render_queue_html(
     message: str = "",
     private: bool = False,
     generated_at: dt.datetime | None = None,
+    destinations: list[str] | None = None,
 ) -> str:
     """The post queue page: the approved drafts, in the order they will post.
 
     ``queue`` is `draft_pipeline.scheduled_queue` — the poster's own list — so
-    row #1 is exactly the draft that posts next, and the reorder controls set
-    that order. ``post`` is the poster's runtime, for the header's one-line
-    summary of when the queue goes out.
+    row #1 is exactly the draft that posts next; the reorder controls set
+    that order and each row's Post buttons send that one draft now (one
+    platform per button). ``post`` is the poster's runtime, for the header's
+    one-line summary of when the queue goes out. ``destinations`` is accepted
+    for backward compatibility and ignored: retargeting lives on /review/{id}.
     """
     generated_at = generated_at or dt.datetime.now()
     post_control = ""
@@ -628,7 +685,7 @@ def render_queue_html(
         f'<div class="sub">{html.escape(_queue_summary(len(queue), post))} · generated '
         f"{html.escape(_stamp(generated_at))}</div></div>" + post_control + "</header>"
     )
-    body = header + _queue_panel(queue)
+    body = header + _queue_panel(queue, destinations or destination_names(), private)
     if queue:  # the drag-to-reorder enhancement only means anything with rows
         body += _QUEUE_SCRIPT
     return layout(
@@ -646,7 +703,6 @@ def render_dashboard_html(
     refresh: dict,
     scan: dict,
     post: dict | None = None,
-    images: dict | None = None,
     token: dict | None = None,
     feed_section: str = "",
     feed_label: str = "",
@@ -763,14 +819,8 @@ def render_dashboard_html(
         + "</div>",
     )
 
-    left = '<div class="stack">' + _attention(stats, images, token) + feed_panel + "</div>"
-    right = (
-        '<div class="stack">'
-        + schedule_panel
-        + ledger_panel
-        + _image_section(images, limit=5)
-        + "</div>"
-    )
+    left = '<div class="stack">' + _attention(stats, token) + feed_panel + "</div>"
+    right = '<div class="stack">' + schedule_panel + ledger_panel + "</div>"
     return layout(
         "Social Content Factory — factory",
         header + _pipeline(stats, refresh, scan, post) + f'<div class="cols">{left}{right}</div>',
@@ -848,7 +898,7 @@ def render_status_html(
     scan: dict,
     post: dict | None = None,
     token: dict | None = None,
-    images: dict | None = None,
+    linkedin: dict | None = None,
     private: bool = False,
     generated_at: dt.datetime | None = None,
 ) -> str:
@@ -901,7 +951,7 @@ def render_status_html(
         ["interval remaining (days)", html.escape(str(publish.get("interval_remaining", "")))],
         ["approved waiting", html.escape(str(publish.get("approved", "")))],
         ["next up", html.escape(_next_draft_label(publish) or "—")],
-        ["post at", html.escape(", ".join(publish.get("post_at", []) or []) or "—")],
+        ["post at", html.escape(_post_at_label(publish) or "—")],
         ["post per slot", html.escape(str(publish.get("post_per_slot", "")))],
         ["DNA file set", str(bool(publish.get("dna_file_set")))],
         ["Voices set", str(bool(publish.get("voices_set")))],
@@ -919,8 +969,8 @@ def render_status_html(
         + '<div class="cols">'
         + '<div class="stack">'
         + _token_section(token)
+        + _linkedin_section(linkedin)
         + _panel("Schedules", f'<div class="sched">{schedules}</div>')
-        + _image_section(images)
         + _panel(
             "Sources",
             '<div class="panel-body">'

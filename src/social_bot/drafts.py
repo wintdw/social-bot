@@ -22,23 +22,16 @@ REJECTED = "rejected"
 STATES = (EXTRACTED, AI_DRAFT, APPROVED, POSTED, REJECTED)
 
 # What a pending rewriter request asks for (``Draft.rewrite_mode``): the whole
-# rewrite (caption + image prompt), the same rewrite *in a voice the operator
-# picked* instead of one the agent chooses, or *only* a fresh image prompt for a
-# post whose caption is already settled — often already approved and queued.
+# rewrite (caption), or the same rewrite *in a voice the operator
+# picked* instead of one the agent chooses.
 REWRITE_CAPTION = "caption"
 REWRITE_CAPTION_VOICE = "caption-voice"
-REWRITE_IMAGE = "image"
-REWRITE_MODES = (REWRITE_CAPTION, REWRITE_CAPTION_VOICE, REWRITE_IMAGE)
+REWRITE_MODES = (REWRITE_CAPTION, REWRITE_CAPTION_VOICE)
 
 # States a draft can be published from (an explicit human click implies approval).
 _PUBLISHABLE = (AI_DRAFT, APPROVED)
 # States a rewrite may land on (re-running the agent is fine).
 _REWRITABLE = (EXTRACTED, AI_DRAFT)
-# States an *image-prompt* rewrite may land on. Wider than _REWRITABLE: an
-# approved draft's caption is what the human approved, but its picture is not part
-# of that approval, so a queued post can still be re-imaged. Done drafts (posted,
-# rejected) are not — nothing would ever see the new prompt.
-_REIMAGEABLE = (EXTRACTED, AI_DRAFT, APPROVED)
 
 
 def now_iso() -> str:
@@ -75,11 +68,16 @@ class Draft:
     source: str = ""
     url: str = ""
     title: str = ""
+    # For an original draft generated from an idea seed (`ideas.source_name`), the
+    # system/architecture the idea was drawn from (`ideas.topics_file`); empty for
+    # a scanned source item. It is *not* a URL — an original idea has no source
+    # page to link, only the theme it came from.
+    topic: str = ""
     excerpt: str = ""
     image: str = ""
     # The image the source post itself published, captured at scan time and
-    # never written by image generation — so /review/{id} can always put the
-    # source's own cover back after a generated one replaced it.
+    # never written by code-drawn diagrams — so /review/{id} can always put the
+    # source's own cover back after a diagram replaced it.
     source_image: str = ""
     published: str = ""
     lang: str = ""
@@ -89,16 +87,13 @@ class Draft:
     hashtags: list[str] = field(default_factory=list)
     cta: str = ""
     commentary: str = ""
-    # A concrete English visual concept for the generated image — also the
-    # image's alt text. The rewriter knows the article, so it gives a far better
-    # subject than the raw title/excerpt (which is why every auto-prompt image
-    # looked alike). Optional: image_gen falls back to the title when this is
-    # empty. Editable on /review/{id}.
+    # Legacy AI-image fields, kept so old queue.json files still load.
+    # New code never writes them: images are the source post's own cover or a
+    # code-drawn diagram (see diagram.py). Editable on /review/{id} for now.
     image_prompt: str = ""
-    # The visual treatment for the image (image_gen.styles key), chosen per post
-    # by the rewriter by content and tone — like the masthead (DNA §9.2). Empty
-    # or unknown falls back to image_gen.default_style at generation time.
-    # Overridable on /review/{id}.
+    # The visual treatment for the image, chosen per post by content and tone.
+    # Only "diagram" renders anything (the code-drawn explainer); any other
+    # value means "use the source image".
     image_style: str = ""
     # The voice/register key (publish.voices), chosen per post by the rewriter by
     # content — like the masthead and image_style (DNA §3). Empty or unknown falls
@@ -115,10 +110,8 @@ class Draft:
     # nothing came back instead of a request that waits forever.
     rewrite_requested_at: str = ""
     rewrite_error: str = ""
-    # What that open request asks for (REWRITE_CAPTION / REWRITE_CAPTION_VOICE /
-    # REWRITE_IMAGE); empty when nothing is pending. One flag + one kind rather than
-    # a flag per kind, so "a caption rewrite and an image rewrite are both pending"
-    # cannot exist.
+    # What that open request asks for (REWRITE_CAPTION / REWRITE_CAPTION_VOICE);
+    # empty when nothing is pending.
     rewrite_mode: str = ""
     # Advisory AI-tell warnings from caption_lint, written at rewrite/edit time
     # and shown on /review/{id}. Never blocks a rewrite or a post; empty when the
@@ -161,10 +154,6 @@ class Draft:
 
     def can_receive_rewrite(self) -> bool:
         return self.state in _REWRITABLE
-
-    def can_request_image_prompt(self) -> bool:
-        """Whether a prompt-only rewrite may land on this draft (see _REIMAGEABLE)."""
-        return self.state in _REIMAGEABLE
 
     def rewrite_kind(self) -> str:
         """What the open rewriter request asks for ("" when nothing is pending).
@@ -209,25 +198,6 @@ class Draft:
         self.rewrite_mode = ""
         self.rewrite_error = ""
         self.state = AI_DRAFT
-        self.touch()
-
-    def apply_image_prompt(self, *, image_prompt: str = "") -> None:
-        """Store a prompt-only rewrite: the image prompt, and nothing else.
-
-        Unlike ``apply_rewrite`` this leaves the caption, the rest of the rewrite
-        fields, the ``image_style`` treatment and — crucially — the *state* alone,
-        so re-imaging an approved draft cannot un-queue the post a human already
-        approved. The treatment is the operator's: it was saved from the compose
-        form when they asked, and the agent writes the prompt to serve it.
-        """
-        if image_prompt:
-            self.image_prompt = image_prompt
-        # Clear this request only. A caption rewrite the operator asked for in the
-        # meantime stays pending (and would overwrite the prompt anyway).
-        if self.rewrite_kind() == REWRITE_IMAGE:
-            self.rewrite_requested_at = ""
-            self.rewrite_mode = ""
-        self.rewrite_error = ""
         self.touch()
 
     def approve(self) -> None:

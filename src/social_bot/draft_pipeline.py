@@ -11,17 +11,28 @@ import datetime as dt
 import json
 import pathlib
 
+from . import ideas as idea_seeds
+from . import media
+from .browser_shot import ShotError, html_to_png
 from .caption import display_title
 from .caption_lint import lint_caption
 from .config import ROOT, load_config
-from .destinations import DestinationError, describe_all, publisher_for
+from .destinations import (
+    DestinationError,
+    describe_all,
+    publisher_for,
+)
+from .destinations import (
+    names as destination_names,
+)
+from .diagram import render_for_draft as render_diagram_for_draft
+from .diagram_html import render_for_draft_html as render_diagram_html_for_draft
 from .drafts import (
     AI_DRAFT,
     APPROVED,
     EXTRACTED,
     REWRITE_CAPTION,
     REWRITE_CAPTION_VOICE,
-    REWRITE_IMAGE,
     STATES,
     Draft,
     append_audit,
@@ -30,12 +41,6 @@ from .drafts import (
     now_iso,
     parse_when,
     save_drafts,
-)
-from .image_gen import (
-    DEFAULT_BASE_URL,
-    LEGACY_BASE_URL,
-    ImageGenError,
-    generate_for_draft,
 )
 from .source import Source, parse_blog_posting, parse_source
 from .source_api import SourceClient, SourceError
@@ -173,6 +178,16 @@ def voice_text(cfg: dict, key: str = "") -> str:
     return _read_optional_file(voices.get(chosen)).strip() if chosen else ""
 
 
+def _first_paragraph(text: str) -> str:
+    """A file's opening paragraph collapsed to one line ('' when empty)."""
+    lines: list[str] = []
+    for line in text.strip().splitlines():
+        if not line.strip():
+            break
+        lines.append(line)
+    return " ".join(" ".join(lines).split())
+
+
 def voice_hints(cfg: dict) -> dict[str, str]:
     """Operator guidance per voice: ``{key: the file's opening paragraph}``.
 
@@ -190,102 +205,7 @@ def voice_hints(cfg: dict) -> dict[str, str]:
     return hints
 
 
-def image_style_map(cfg: dict) -> dict[str, str]:
-    """The configured style menu ``image_gen.styles`` as {key: file path}."""
-    raw = image_gen_config(cfg).get("styles")
-    if not isinstance(raw, dict):
-        return {}
-    return {
-        str(key).strip(): str(path).strip()
-        for key, path in raw.items()
-        if str(key).strip() and str(path).strip()
-    }
-
-
-def image_style_choices(cfg: dict) -> list[str]:
-    """The treatment keys a rewriter may pick from (DNA §9.2)."""
-    return list(image_style_map(cfg))
-
-
-def default_image_style(cfg: dict) -> str:
-    """The treatment key the pipeline uses when the rewriter omits one."""
-    return str(image_gen_config(cfg).get("default_style") or "").strip()
-
-
-def _resolve_image_style(cfg: dict, key) -> str:
-    """Keep a valid treatment key; otherwise the default; '' when no menu."""
-    choices = image_style_choices(cfg)
-    key = str(key or "").strip()
-    if key in choices:
-        return key
-    fallback = default_image_style(cfg)
-    return fallback if fallback in choices else ""
-
-
-def image_style_briefs(cfg: dict) -> dict[str, str]:
-    """Each configured treatment's own brief: ``{key: docs/image-styles/<key>.md}``.
-
-    The brief alone, without the palette: this is what the *rewriter* reads to
-    write an ``image_prompt`` for a style, and the palette is appended at prompt
-    time instead (DNA §9.1). Empty or missing files are left out, so a menu entry
-    with no file never reaches the rewriter as an empty heading.
-    """
-    return {
-        key: text
-        for key, path in image_style_map(cfg).items()
-        if (text := _read_optional_file(path).strip())
-    }
-
-
-def image_style_text(cfg: dict, key: str = "") -> str:
-    """The resolved brand-look text for one draft's chosen style.
-
-    The treatment named by ``key`` (``image_gen.styles``) **leads**, so it
-    governs the medium — and carries that look's own prohibitions, lettering
-    included. It is followed by the shared palette floor
-    (``image_gen.style_file``). An unknown or blank key falls back to
-    ``image_gen.default_style``; with no menu configured this is just the floor
-    — the pre-styles behaviour.
-    """
-    floor = _read_optional_file(image_gen_config(cfg).get("style_file")).strip()
-    if not image_style_map(cfg):
-        return floor
-    treatment = image_style_briefs(cfg).get(_resolve_image_style(cfg, key), "")
-    return "\n\n".join(part for part in (treatment, floor) if part)
-
-
-def _first_paragraph(text: str) -> str:
-    """A file's opening paragraph collapsed to one line ('' when empty)."""
-    lines: list[str] = []
-    for line in text.strip().splitlines():
-        if not line.strip():
-            break
-        lines.append(line)
-    return " ".join(" ".join(lines).split())
-
-
-def image_style_hints(cfg: dict) -> dict[str, str]:
-    """Operator guidance per treatment: ``{key: the file's opening paragraph}``.
-
-    The hint is each style file's own "when to use" paragraph, so the review page
-    describes the treatments from ``docs/image-styles/`` rather than keeping a
-    second copy that drifts. A key whose file is missing or empty is omitted.
-    """
-    hints: dict[str, str] = {}
-    for key, path in image_style_map(cfg).items():
-        paragraph = _first_paragraph(_read_optional_file(path))
-        if paragraph:
-            # Drop the "Treatment: " lead-in and the files' markdown emphasis,
-            # which would otherwise show literally as asterisks in the UI.
-            hints[key] = paragraph.removeprefix("Treatment: ").replace("*", "")
-    return hints
-
-
 # -- AI image generation -------------------------------------------------
-
-
-def image_gen_config(cfg: dict) -> dict:
-    return dict(cfg.get("image_gen", {}) or {})
 
 
 def rewrite_config(cfg: dict) -> dict:
@@ -293,65 +213,43 @@ def rewrite_config(cfg: dict) -> dict:
     return dict(cfg.get("rewrite", {}) or {})
 
 
-def _generate_image(
-    cfg: dict,
-    *,
-    title: str,
-    excerpt: str,
-    image_style: str = "",
-    image_prompt: str = "",
-    errors: list[dict],
-    label: str,
-) -> str:
-    """Generate one image URL, or '' (recording the failure and carrying on)."""
-    ig = image_gen_config(cfg)
-    if not ig.get("enabled"):
-        return ""
-    try:
-        return generate_for_draft(
-            title,
-            excerpt,
-            style=image_style_text(cfg, image_style),
-            image_prompt=image_prompt,
-            base_url=str(ig.get("base_url") or "").strip() or DEFAULT_BASE_URL,
-            width=int(ig.get("width", 1080)),
-            height=int(ig.get("height", 1350)),
-            model=str(ig.get("model", "flux")),
-            timeout=float(ig.get("timeout_seconds", 60.0)),
-            api_key=str(ig.get("api_key", "") or ""),
-        )
-    except ImageGenError as exc:
-        errors.append({"source": label, "error": f"image {label}: {exc}"})
-        return ""
+def diagram_dir(cfg: dict) -> pathlib.Path:
+    """Where code-drawn diagrams and generated images are stored.
+
+    Served by the app at ``/images/`` (see ``media``, which owns the folder and
+    the name validation).
+    """
+    return media.images_dir(cfg)
 
 
-def generate_images(
+def render_diagrams(
     cfg: dict | None = None,
     *,
     draft_ids: list[str] | None = None,
     states: tuple[str, ...] | None = OPEN_STATES,
     limit: int | None = None,
-    overwrite: bool | None = None,
+    overwrite: bool = False,
 ) -> dict:
-    """Generate AI images for queued drafts and store them on the drafts.
+    """Render code-drawn diagrams for queued drafts and point them at it.
 
-    Network-bound and opt-in (``image_gen.enabled``). A draft that has the source
-    post's own cover (``source_image``) or an image already is never replaced
-    without ``overwrite``: generation fills the gap, it does not overwrite a
-    post's original picture. Failures are recorded and never raise — image
-    generation is an enhancement.
+    No network, no provider — the renderer (``diagram.py``) draws the draft's
+    mechanism from its own template and the file lands in ``diagram_dir``
+    (inside the bind-mounted review dir, so the container serves it with no
+    rebuild). A batch only picks up drafts with ``image_style == diagram``;
+    a caller naming drafts explicitly renders them regardless of style.
+
+    Graph only accepts raster, so each SVG is also screenshotted to PNG
+    through the host's Chromium (``diagram_html`` + ``browser_shot``) and the
+    draft points at the PNG — exactly the bytes a later publish uploads.
+    A missing or failing browser never blocks the render: the draft keeps
+    pointing at the SVG preview.
+
+    Fills the gap by default and never replaces an existing image without
+    ``overwrite``.
     """
     cfg = cfg or load_config()
-    ig = image_gen_config(cfg)
-    if not ig.get("enabled"):
-        raise ValueError("image generation is disabled (image_gen.enabled is false)")
-    overwrite = bool(ig.get("overwrite", True)) if overwrite is None else overwrite
-
     drafts = load_drafts(queue_path(cfg))
     wanted = set(draft_ids) if draft_ids else None
-    # The state gate scopes a *batch* (which drafts it may touch). A caller who
-    # names a draft has already decided, so it must not silently drop one — an
-    # approved draft is still on /review/{id} with its Regenerate button.
     if wanted is not None:
         states = None
     selected = [
@@ -359,7 +257,76 @@ def generate_images(
         for draft in drafts
         if (wanted is None or draft.id in wanted)
         and (states is None or draft.state in states)
-        and (overwrite or not draft.image and not draft.source_image)
+        and (wanted is not None or draft.image_style == "diagram")
+        and (overwrite or not draft.image)
+    ]
+    if wanted:
+        missing = wanted - {draft.id for draft in drafts}
+        if missing:
+            raise ValueError(f"no draft {sorted(missing)[0]!r}")
+    if limit is not None:
+        selected = selected[:limit]
+
+    rendered: list[str] = []
+    rastered: set[str] = set()
+    out_dir = diagram_dir(cfg)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for draft in selected:
+        svg = render_diagram_for_draft(draft)
+        if not svg:
+            continue
+        (out_dir / f"{draft.id}.svg").write_text(svg, encoding="utf-8")
+        try:
+            page = render_diagram_html_for_draft(draft)
+            if page:
+                html_to_png(page, out_dir / f"{draft.id}.png")
+                rastered.add(draft.id)
+        except ShotError:
+            pass
+        rendered.append(draft.id)
+
+    if rendered:
+        fresh = load_drafts(queue_path(cfg))
+        for draft in fresh:
+            if draft.id in rendered:
+                ext = ".png" if draft.id in rastered else ".svg"
+                draft.image = f"/images/{draft.id}{ext}"
+                draft.touch()
+        save_drafts(queue_path(cfg), fresh)
+    return {
+        "rendered": len(rendered),
+        "candidates": len(selected),
+        "ids": rendered,
+    }
+
+
+def localize_images(
+    cfg: dict | None = None,
+    *,
+    draft_ids: list[str] | None = None,
+    states: tuple[str, ...] | None = REVIEW_STATES,
+    limit: int | None = None,
+) -> dict:
+    """Copy still-remote non-source images into the local store.
+
+    A migration for drafts whose image is a remote URL that is not the source
+    post's own cover (e.g. a legacy AI image): the bytes are kept and the draft
+    just points at ``/images/<id>.<ext>`` instead. A draft showing the source
+    post's own cover keeps that remote URL.
+    """
+    cfg = cfg or load_config()
+    drafts = load_drafts(queue_path(cfg))
+    wanted = set(draft_ids) if draft_ids else None
+    if wanted is not None:
+        states = None
+    selected = [
+        draft
+        for draft in drafts
+        if (wanted is None or draft.id in wanted)
+        and (states is None or draft.state in states)
+        and draft.image
+        and not media.is_local(draft.image)
+        and image_is_generated(cfg, draft)
     ]
     if wanted:
         missing = wanted - {draft.id for draft in drafts}
@@ -369,85 +336,47 @@ def generate_images(
         selected = selected[:limit]
 
     errors: list[dict] = []
-    generated: dict[str, str] = {}
+    localized: dict[str, str] = {}
     for draft in selected:
-        url = _generate_image(
-            cfg,
-            title=draft.title,
-            excerpt=draft.excerpt,
-            image_style=draft.image_style,
-            image_prompt=draft.image_prompt,
-            errors=errors,
-            label=draft.id,
-        )
-        if not url:
-            continue
-        generated[draft.id] = url
+        try:
+            data, _, _ = media.load(cfg, draft.image)
+            localized[draft.id] = media.save(cfg, draft.id, data)
+        except media.MediaError as exc:
+            errors.append({"source": draft.id, "error": f"image {draft.id}: {exc}"})
 
-    if generated:
-        # Re-read before saving: generation is slow, and writing back the queue
-        # loaded above would discard anything that landed meanwhile (serve
-        # fills a draft's image in the background while rewrites are arriving).
+    if localized:
+        # Re-read before saving: the downloads are slow, and writing back the
+        # queue loaded above would discard anything that landed meanwhile.
         fresh = load_drafts(queue_path(cfg))
         for draft in fresh:
-            url = generated.get(draft.id)
+            url = localized.get(draft.id)
             if url:
                 draft.image = url
                 draft.touch()
         save_drafts(queue_path(cfg), fresh)
     return {
-        "generated": len(generated),
+        "localized": len(localized),
         "candidates": len(selected),
-        "ids": list(generated),
+        "ids": list(localized),
         "errors": errors,
     }
 
 
-def generate_missing_image(cfg: dict, draft_id: str) -> dict | None:
-    """Generate one just-rewritten draft's image, only if it has none.
-
-    This is the hook ``serve`` runs right after a rewrite lands — the point
-    where ``image_prompt`` first exists, which is the whole reason to illustrate
-    the rewrite rather than the raw title. A draft that already has an image —
-    the source post's own cover above all — is left alone, so a rewrite (or a
-    re-submitted one) never regenerates and never replaces an original.
-
-    Best-effort: returns ``None`` when generation is off or the draft is gone,
-    and records provider failures in ``errors`` instead of raising — a missing
-    image must never fail the rewrite that triggered it.
-    """
-    if not image_gen_config(cfg).get("enabled"):
-        return None
-    if find(load_drafts(queue_path(cfg)), draft_id) is None:
-        return None
-    return generate_images(cfg, draft_ids=[draft_id], overwrite=False)
-
-
-def generated_image_urls(cfg: dict) -> tuple[str, ...]:
-    """The prefixes image_gen writes, so a stored URL can be told from a source's.
-
-    The configured endpoint first, then the two known Pollinations endpoints (a
-    draft generated before the endpoint was reconfigured still carries one).
-    """
-    configured = str(image_gen_config(cfg).get("base_url") or "").strip()
-    bases = [configured or DEFAULT_BASE_URL, DEFAULT_BASE_URL, LEGACY_BASE_URL]
-    return tuple(f"{base.rstrip('/')}/" for base in bases if base)
-
-
 def image_is_generated(cfg: dict, draft: Draft) -> bool:
-    """True when the draft's current image was made by image_gen, not the source.
+    """True when the draft's current image is not the source post's own cover.
 
-    With ``source_image`` recorded, the answer is exact — the source's own cover
-    is either the current image or it isn't. A draft scanned before that was
-    recorded has no ``source_image``, so the URL itself is the tell (image_gen
-    builds every URL from ``image_gen.base_url``).
+    With ``source_image`` recorded the answer is exact — the source's own cover
+    is either the current image or it isn't. Older drafts have no
+    ``source_image``: any locally stored ``/images/...`` file (a diagram or a
+    previously localized image) counts as generated, while a remote URL does
+    not.
     """
     url = str(draft.image or "").strip()
     if not url:
         return False
     if draft.source_image:
         return url != draft.source_image
-    return any(url.startswith(prefix) for prefix in generated_image_urls(cfg))
+    return media.is_local(url)
 
 
 def restore_source_image(cfg: dict, draft_id: str, *, client: SourceClient | None = None) -> Draft:
@@ -455,9 +384,9 @@ def restore_source_image(cfg: dict, draft_id: str, *, client: SourceClient | Non
 
     The image the source published is kept on the draft (``source_image``), so
     this is usually just a swap. Drafts scanned before it was recorded — and
-    drafts whose source image was generated over — have none, so the source page
-    is fetched once and asked for its own image; that recovered image is stored
-    so the next restore needs no network.
+    drafts whose source image was replaced by a diagram — have none, so the
+    source page is fetched once and asked for its own image; that recovered
+    image is stored so the next restore needs no network.
 
     Raises ``ValueError`` when there is nothing to restore: an unknown draft, a
     draft with no source URL, or a source page that publishes no image.
@@ -814,8 +743,9 @@ def scan_sources(
 
     client = client or SourceClient.from_config(cfg)
     seen = load_seen(cfg)
-    drafts = load_drafts(queue_path(cfg))
-    existing_ids = {d.id for d in drafts}
+    # Only the ids are needed from the queue up front: the queue itself is
+    # re-read just before saving, once the (slow) fetches are done.
+    existing_ids = {draft.id for draft in load_drafts(queue_path(cfg))}
     destinations = list(cfg.get("publish", {}).get("destinations", []))
     excerpt_chars = int(cfg.get("blog", {}).get("excerpt_chars", 240))
     max_scan = int(limit if limit is not None else cfg.get("blog", {}).get("max_scan", 12))
@@ -867,24 +797,215 @@ def scan_sources(
                 created_at=now_iso(),
                 updated_at=now_iso(),
             )
-            drafts.append(draft)
             seen.add(f"{source.name}:{item.id}")
             existing_ids.add(item.id)
             added.append(draft)
 
-    save_drafts(queue_path(cfg), drafts)
-    save_seen(cfg, seen)
+    # Re-read before saving: fetching every source is slow (and the host retries),
+    # so writing back a queue read at the top would silently discard whatever
+    # landed meanwhile — a manual post's record, a rewrite, an edit. Merge the
+    # new drafts into the queue as it is now instead.
+    merged = load_drafts(queue_path(cfg))
+    known = {draft.id for draft in merged}
+    merged.extend(draft for draft in added if draft.id not in known)
+    save_drafts(queue_path(cfg), merged)
+    save_seen(cfg, load_seen(cfg) | seen)
     return {
         "sources": len(raw_sources),
         "added": len(added),
         "skipped_old": skipped_old,
-        "total_drafts": len(drafts),
+        "total_drafts": len(merged),
         "errors": errors,
         "items": [d.to_dict() for d in added],
     }
 
 
 # -- rewrite intake ------------------------------------------------------
+
+
+def ideas_config(cfg: dict) -> dict:
+    """The ``ideas`` block (idea seeds: original posts, not source reposts)."""
+    return dict(cfg.get("ideas", {}) or {})
+
+
+def ideas_enabled(cfg: dict) -> bool:
+    return bool(ideas_config(cfg).get("enabled", False))
+
+
+def ideas_source_name(cfg: dict) -> str:
+    """The ``source`` stamped on drafts the agent generates from an idea seed."""
+    raw = str(ideas_config(cfg).get("source_name") or "").strip()
+    return raw or "atento-original"
+
+
+def ideas_dir(cfg: dict) -> pathlib.Path:
+    return _dir(cfg, "ideas", "data/ideas")
+
+
+def ideas_topics_path(cfg: dict) -> pathlib.Path:
+    """The topics file (``ideas.topics_file``), resolved against the project root."""
+    raw = str(ideas_config(cfg).get("topics_file") or "data/ideas/topics.md")
+    path = pathlib.Path(raw)
+    return path if path.is_absolute() else ROOT / path
+
+
+def ideas_seen_path(cfg: dict) -> pathlib.Path:
+    return ideas_dir(cfg) / str(ideas_config(cfg).get("seen_name", "seen.json"))
+
+
+def ideas_state_path(cfg: dict) -> pathlib.Path:
+    return ideas_dir(cfg) / str(ideas_config(cfg).get("state_name", "state.json"))
+
+
+def load_topics(cfg: dict) -> list[dict]:
+    """The configured idea seeds as ``[{"name", "url"}]`` ('' if the file is absent)."""
+    text = _cached_file(ideas_topics_path(cfg), lambda p: p.read_text(encoding="utf-8")) or ""
+    return idea_seeds.parse_topics(text)
+
+
+def load_ideas_seen(cfg: dict) -> set[str]:
+    """Slugs of ideas already queued, so the agent is never asked to repeat one."""
+    cached = _cached_file(
+        ideas_seen_path(cfg), lambda p: set(json.loads(p.read_text(encoding="utf-8")))
+    )
+    return set(cached) if cached else set()
+
+
+def save_ideas_seen(cfg: dict, seen: set[str]) -> None:
+    _write_json(ideas_seen_path(cfg), sorted(seen))
+
+
+def load_ideas_request(cfg: dict) -> dict:
+    """The pending "generate ideas" request state (``{}`` when none has been made)."""
+    cached = _cached_file(
+        ideas_state_path(cfg), lambda p: json.loads(p.read_text(encoding="utf-8"))
+    )
+    return dict(cached) if isinstance(cached, dict) else {}
+
+
+def request_ideas(cfg: dict, note: str = "") -> dict:
+    """Mark that the operator asked for a fresh batch of idea seeds.
+
+    A human action (the review page's "Generate ideas" button, or ``blog ideas
+    --request``) that only *records* the wish; the host-side worker
+    (``scripts/rewrite_worker.py``) picks it up from ``GET /api/ideas`` and posts
+    the ideas back through ``queue_ideas``. It never generates, rewrites, or
+    posts anything itself.
+    """
+    if not ideas_enabled(cfg):
+        raise ValueError("ideas are disabled (ideas.enabled is false)")
+    if not load_topics(cfg):
+        raise ValueError(f"no idea topics configured: add systems to {ideas_topics_path(cfg)}")
+    payload = {"requested_at": now_iso(), "note": str(note or "").strip(), "error": ""}
+    _write_json(ideas_state_path(cfg), payload)
+    return payload
+
+
+def clear_ideas_request(cfg: dict, *, error: str = "") -> dict:
+    """Close a pending request (a batch landed, or the worker failed)."""
+    payload = {"requested_at": "", "note": "", "error": str(error or "").strip()}
+    _write_json(ideas_state_path(cfg), payload)
+    return payload
+
+
+def _existing_idea_titles(cfg: dict, limit: int = 40) -> list[str]:
+    """Titles of ideas already queued (newest first) — what the agent must not repeat."""
+    source = ideas_source_name(cfg)
+    titles = [
+        draft.title
+        for draft in reversed(load_drafts(queue_path(cfg)))
+        if draft.source == source and draft.title
+    ]
+    return titles[:limit]
+
+
+def idea_brief(cfg: dict) -> dict:
+    """Everything an agent needs to propose original ideas — and nothing to fetch.
+
+    The configured themes (with optional reference-docs URLs), the titles already
+    queued (so it does not repeat one), the DNA (the content pillars and brand
+    rules live there), the most recently written captions (so a new idea does not
+    reopen an old one), and the pending-request state the worker polls.
+    """
+    request = load_ideas_request(cfg)
+    return {
+        "enabled": ideas_enabled(cfg),
+        "source_name": ideas_source_name(cfg),
+        "per_run": max(1, int(ideas_config(cfg).get("per_run", 3))),
+        "requested": bool(request.get("requested_at")),
+        "requested_at": str(request.get("requested_at") or ""),
+        "error": str(request.get("error") or ""),
+        "topics": load_topics(cfg),
+        "existing": _existing_idea_titles(cfg),
+        "dna": dna_text(cfg),
+        "recent": [{"id": d.id, "caption": d.caption} for d in recent_captions(cfg)],
+    }
+
+
+def queue_ideas(cfg: dict, ideas: list[dict]) -> dict:
+    """Queue agent-proposed ideas as ``extracted`` drafts, deduped by title slug.
+
+    Each idea is ``{"title", "topic", "excerpt"}`` — the specific angle, the
+    system it belongs to (``ideas.topics_file``), and a short outline. The draft
+    is an *original* post: ``source`` is ``ideas.source_name``, there is no
+    ``url`` and no source image, and it flows through the normal rewrite + human
+    review like any scanned draft. An idea whose slug already exists (in the
+    queue or the ideas ledger) is skipped, so re-running a batch is safe. Never
+    rewrites, approves, or posts.
+    """
+    if not ideas_enabled(cfg):
+        raise ValueError("ideas are disabled (ideas.enabled is false)")
+    source = ideas_source_name(cfg)
+    seen = load_ideas_seen(cfg)
+    drafts = load_drafts(queue_path(cfg))
+    existing_ids = {draft.id for draft in drafts}
+    destinations = list(cfg.get("publish", {}).get("destinations", []))
+
+    added: list[Draft] = []
+    skipped: list[dict] = []
+    for raw in ideas or []:
+        if not isinstance(raw, dict):
+            continue
+        title = " ".join(str(raw.get("title") or "").split())
+        slug = idea_seeds.slugify(title)
+        if not title or not slug:
+            skipped.append({"title": title, "reason": "no title"})
+            continue
+        if slug in seen or slug in existing_ids:
+            skipped.append({"title": title, "reason": "already queued"})
+            continue
+        excerpt = str(raw.get("excerpt") or raw.get("outline") or raw.get("angle") or "").strip()
+        draft = Draft(
+            id=slug,
+            source=source,
+            url="",
+            title=title,
+            topic=str(raw.get("topic") or "").strip(),
+            excerpt=excerpt,
+            lang="vi",
+            state=EXTRACTED,
+            destinations=list(destinations),
+            created_at=now_iso(),
+            updated_at=now_iso(),
+        )
+        drafts.append(draft)
+        seen.add(slug)
+        existing_ids.add(slug)
+        added.append(draft)
+
+    # Re-read before saving (see scan_sources): merge the new ideas into the queue
+    # as it is now, so a concurrent write is never dropped.
+    merged = load_drafts(queue_path(cfg))
+    known = {draft.id for draft in merged}
+    merged.extend(draft for draft in added if draft.id not in known)
+    save_drafts(queue_path(cfg), merged)
+    save_ideas_seen(cfg, load_ideas_seen(cfg) | seen)
+    return {
+        "added": len(added),
+        "skipped": len(skipped),
+        "drafts": [draft.to_dict() for draft in added],
+        "skipped_ideas": skipped,
+    }
 
 
 def masthead_config(cfg: dict) -> dict:
@@ -931,11 +1052,6 @@ def recent_caption_limit(cfg: dict) -> int:
     return int(cfg.get("publish", {}).get("recent_captions", 0) or 0)
 
 
-def recent_image_limit(cfg: dict) -> int:
-    """``publish.recent_images`` as an int (0 = don't send any)."""
-    return int(cfg.get("publish", {}).get("recent_images", 0) or 0)
-
-
 def _recent_written(
     drafts: list[Draft], exclude_id: str = "", field: str = "caption"
 ) -> list[Draft]:
@@ -962,24 +1078,6 @@ def recent_captions(cfg: dict, *, limit: int | None = None, exclude_id: str = ""
     return _recent_written(load_drafts(queue_path(cfg)), exclude_id)[:cap]
 
 
-def recent_images(cfg: dict, *, limit: int | None = None, exclude_id: str = "") -> list[Draft]:
-    """The most recently written image prompts, newest first, for variety.
-
-    The image-side analogue of ``recent_captions``, and the reason the DNA no
-    longer has to *decree* that every post gets a different metaphor. A rewriter
-    only sees the open drafts, so without this it cannot tell that its last four
-    subjects were the same object arranged the same way — which is exactly how a
-    feed converges on one picture. Capped by ``publish.recent_images`` (0 = off);
-    only drafts that actually carry a prompt are sent, since that is the thing to
-    avoid repeating.
-    """
-    cap = recent_image_limit(cfg) if limit is None else int(limit)
-    if cap <= 0:
-        return []
-    drafts = load_drafts(queue_path(cfg))
-    return _recent_written(drafts, exclude_id, field="image_prompt")[:cap]
-
-
 def _recent_texts(drafts: list[Draft], cfg: dict, exclude_id: str = "") -> list[str]:
     """The recent captions to lint against, as plain text ([] when disabled)."""
     cap = recent_caption_limit(cfg)
@@ -999,9 +1097,8 @@ def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
     A **voice-locked** request ("Rewrite in this voice") keeps the voice the
     operator picked: the register on the draft was saved with the request, and it is
     this side — not the agent — that decides, so a run that ignored the prompt's
-    instruction cannot quietly relabel the post. Same reasoning as
-    ``receive_image_prompt`` refusing an ``image_style`` from the body: the pick is
-    the operator's. Read before ``apply_rewrite``, which clears the request.
+    instruction cannot quietly relabel the post. Read before ``apply_rewrite``,
+    which clears the request.
     """
     choices = masthead_choices(cfg)
     fallback = default_masthead(cfg)
@@ -1021,34 +1118,10 @@ def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
         cta=str(body.get("cta", "") or ""),
         commentary=str(body.get("commentary", "") or ""),
         image_prompt=str(body.get("image_prompt", "") or ""),
-        image_style=_resolve_image_style(cfg, body.get("image_style")),
+        image_style=str(body.get("image_style", "") or "").strip(),
         voice=_resolve_voice(cfg, locked_voice or body.get("voice")),
     )
     draft.lint = lint_caption(draft.caption, recent=_recent_texts(drafts, cfg, draft_id))
-    save_drafts(queue_path(cfg), drafts)
-    return draft
-
-
-def receive_image_prompt(cfg: dict, draft_id: str, body: dict) -> Draft:
-    """Store a prompt-only rewrite (from the rewriter worker) on a draft.
-
-    Only ``image_prompt`` is taken — the *subject* — while the caption, hashtags,
-    cta, commentary, voice and *state* stay exactly as they were, so re-imaging an
-    approved draft cannot un-approve it.
-
-    ``image_style`` is deliberately **not** read from the body. The treatment is
-    the operator's: it was saved from the compose form when the request was made,
-    and the agent writes its prompt to serve it (``build_image_prompt``). Reading
-    a style here would let the worker overrule that pick — and silently, since an
-    omitted key resolves to ``image_gen.default_style`` rather than to "leave it".
-    """
-    drafts = load_drafts(queue_path(cfg))
-    draft = find(drafts, draft_id)
-    if draft is None:
-        raise ValueError(f"no draft {draft_id!r}")
-    if not draft.can_request_image_prompt():
-        raise ValueError(f"draft {draft_id!r} in state {draft.state!r} cannot be re-imaged")
-    draft.apply_image_prompt(image_prompt=str(body.get("image_prompt", "") or ""))
     save_drafts(queue_path(cfg), drafts)
     return draft
 
@@ -1062,8 +1135,15 @@ def edit_draft(
     image_prompt: str | None = None,
     image_style: str | None = None,
     voice: str | None = None,
+    destinations: list[str] | None = None,
 ) -> Draft:
     """Human edits from the review page (caption, hashtags, image prompt, style, voice).
+
+    ``destinations`` replaces the draft's target list — the review page's
+    destination picker, so one draft can go to Facebook, another to LinkedIn,
+    or one to both, instead of every draft inheriting ``publish.destinations``.
+    An empty list is refused: a draft with no target could never be posted, and
+    ``publish_draft`` would silently re-adopt the configured default.
 
     Re-lints the caption so the /review/{id} warnings track what a human just
     wrote too, not only what the rewriter submitted.
@@ -1083,6 +1163,13 @@ def edit_draft(
         draft.image_style = image_style
     if voice is not None:
         draft.voice = voice
+    if destinations is not None:
+        unknown = [name for name in destinations if name not in destination_names()]
+        if unknown:
+            raise ValueError(f"unknown destination(s): {', '.join(unknown)}")
+        if not destinations:
+            raise ValueError("a draft must target at least one destination")
+        draft.destinations = list(dict.fromkeys(destinations))
     draft.touch()
     if draft.caption:
         draft.lint = lint_caption(draft.caption, recent=_recent_texts(drafts, cfg, draft_id))
@@ -1143,33 +1230,6 @@ def request_voice_rewrite(cfg: dict, draft_id: str) -> Draft:
     return _save_one(cfg, draft_id, _mutate)
 
 
-def request_image_prompt(cfg: dict, draft_id: str) -> Draft:
-    """Ask the rewriter worker for a *fresh image prompt* on a draft.
-
-    The "Regenerate image prompt" action on /review/{id}: for a post whose
-    caption is already settled — often already approved and queued — the caption
-    is not what's wrong, the picture is. The worker rewrites only
-    ``image_prompt``/``image_style`` (``receive_image_prompt``); rendering the
-    result is a separate, human move ("Regenerate image" on the same page), so
-    the new prompt can be read — and edited — before it costs a picture.
-
-    Wider than ``request_rewrite`` on purpose: an ``approved`` draft may be
-    re-prompted, because the approval covers the caption the human read, not the
-    picture. Like ``request_rewrite`` this only *marks* the draft, never touches
-    the caption or the state, and never posts.
-    """
-    now = now_iso()
-
-    def _mutate(draft: Draft) -> None:
-        if not draft.can_request_image_prompt():
-            raise ValueError(f"draft {draft.id!r} in state {draft.state!r} cannot be re-imaged")
-        draft.rewrite_requested_at = now
-        draft.rewrite_mode = REWRITE_IMAGE
-        draft.rewrite_error = ""
-
-    return _save_one(cfg, draft_id, _mutate)
-
-
 def cancel_rewrite(cfg: dict, draft_id: str) -> Draft:
     """Drop a pending rewriter request (and any error it left behind)."""
 
@@ -1200,11 +1260,9 @@ def record_rewrite_error(cfg: dict, draft_id: str, error: str) -> Draft:
 def rewrite_queue(cfg: dict) -> list[Draft]:
     """The drafts a human asked the rewriter for, oldest request first (the worker's FIFO).
 
-    Every kind of request is here — a full rewrite, a full rewrite in a voice the
-    operator picked, and a prompt-only one — each marked with ``Draft.rewrite_mode``
-    so the worker knows which it is; a draft leaves the queue when its result lands
-    (``receive_rewrite`` / ``receive_image_prompt``) or the request is cancelled /
-    fails.
+    A full rewrite or a full rewrite in a voice the operator picked, marked
+    with ``Draft.rewrite_mode``; a draft leaves the queue when its result lands
+    (``receive_rewrite``) or the request is cancelled / fails.
     """
     pending = [draft for draft in load_drafts(queue_path(cfg)) if draft.rewrite_requested_at]
     return sorted(pending, key=lambda d: parse_when(d.rewrite_requested_at) or _EPOCH)
@@ -1290,6 +1348,62 @@ def apply_masthead(
     }
 
 
+def backfill_destinations(
+    cfg: dict | None = None,
+    *,
+    draft_ids: list[str] | None = None,
+    states: tuple[str, ...] | None = None,
+    limit: int | None = None,
+) -> dict:
+    """Union queued drafts onto the configured ``publish.destinations``.
+
+    A one-shot migration for drafts queued when the default was facebook-only:
+    every draft missing a configured destination gains it, so an old
+    ``["facebook"]`` draft becomes ``["facebook", "linkedin"]``. Never removes —
+    a draft deliberately narrowed to one platform keeps that choice plus the
+    missing defaults, and drafts already covering the set are untouched.
+    Idempotent, and never touches the caption, the image, or the state.
+    """
+    cfg = cfg or load_config()
+    configured = list(dict.fromkeys(cfg.get("publish", {}).get("destinations", []) or []))
+    unknown = [name for name in configured if name not in destination_names()]
+    if unknown:
+        raise ValueError(f"unknown destination(s): {', '.join(unknown)}")
+    if not configured:
+        raise ValueError("no destinations: set publish.destinations in config.yaml")
+    drafts = load_drafts(queue_path(cfg))
+    wanted = set(draft_ids) if draft_ids else None
+    if wanted:
+        missing = wanted - {draft.id for draft in drafts}
+        if missing:
+            raise ValueError(f"no draft {sorted(missing)[0]!r}")
+
+    updated: list[Draft] = []
+    for draft in drafts:
+        if wanted is not None and draft.id not in wanted:
+            continue
+        if states is not None and draft.state not in states:
+            continue
+        if limit is not None and len(updated) >= limit:
+            break
+        merged = list(dict.fromkeys([*draft.destinations, *configured]))
+        if not draft.destinations:
+            merged = list(configured)
+        if merged == list(draft.destinations):
+            continue
+        draft.destinations = merged
+        draft.touch()
+        updated.append(draft)
+
+    if updated:
+        save_drafts(queue_path(cfg), drafts)
+    return {
+        "destinations": configured,
+        "updated": len(updated),
+        "ids": [draft.id for draft in updated],
+    }
+
+
 # -- publishing ----------------------------------------------------------
 
 
@@ -1317,14 +1431,40 @@ def interval_days(cfg: dict) -> int:
     return int(cfg.get("publish", {}).get("interval_days", 0) or 0)
 
 
-def _last_public_post_date(cfg: dict) -> dt.date | None:
-    """The local date of the most recent public post, or None if there is none.
+def post_schedule(cfg: dict, default: list[str] | None = None) -> dict[str, list[str]]:
+    """Each destination's posting slots: its own override, else the shared slots.
 
-    Private (unpublished) sends are ignored, so they never pace the interval.
+    ``default`` replaces ``publish.post_at`` as the shared slots (the serve CLI's
+    ``--publish-at``); overrides in ``publish.destination_post_at`` still win.
+    """
+    publish = cfg.get("publish", {})
+    shared = list(publish.get("post_at") or []) if default is None else list(default)
+    overrides = publish.get("destination_post_at") or {}
+    names = list(publish.get("destinations", []))
+    names += [name for name in overrides if name not in names]
+    return {
+        name: list(overrides[name] or []) if name in overrides else list(shared) for name in names
+    }
+
+
+def _last_public_post_date(cfg: dict, destination: str | None = None) -> dt.date | None:
+    """The local date of the most recent *pacing* post, or None if there is none.
+
+    Only the sends ``publish.interval_days`` exists to pace are counted — the
+    ones the scheduler made. Two kinds are skipped:
+    - private (unpublished) sends, so they never pace the interval;
+    - manual sends (``"manual": true``, an operator's Post now / a /queue
+      platform button): the interval paces the machine, so a hand-made send must
+      never hold the scheduler back afterwards.
+    With ``destination`` set, only that destination's posts count, so each
+    platform paces its own schedule.
     """
     latest: dt.date | None = None
     for record in list_published(cfg):
-        if record.get("private"):
+        if record.get("private") or record.get("manual"):
+            continue
+        recorded = record.get("destination")
+        if destination is not None and recorded and recorded != destination:
             continue
         posted = str(record.get("posted_at", ""))[:10]
         try:
@@ -1336,15 +1476,16 @@ def _last_public_post_date(cfg: dict) -> dt.date | None:
     return latest
 
 
-def interval_remaining(cfg: dict) -> int:
+def interval_remaining(cfg: dict, destination: str | None = None) -> int:
     """Days still to wait before interval_days allows another public post.
 
     0 means posting is allowed now (no interval, or enough days have passed).
+    With ``destination`` set, it counts only that destination's posts.
     """
     minimum = interval_days(cfg)
     if minimum <= 0:
         return 0
-    last = _last_public_post_date(cfg)
+    last = _last_public_post_date(cfg, destination)
     if last is None:
         return 0
     elapsed = (dt.datetime.now().astimezone().date() - last).days
@@ -1395,9 +1536,12 @@ def status(cfg: dict | None = None) -> dict:
             "destinations": list(cfg.get("publish", {}).get("destinations", [])),
             "destination_state": destination_state(cfg),
             "post_at": list(cfg.get("publish", {}).get("post_at", []) or []),
+            "destination_post_at": post_schedule(cfg),
             "post_per_slot": int(cfg.get("publish", {}).get("post_per_slot", 1)),
             "interval_days": interval_days(cfg),
-            "interval_remaining": interval_remaining(cfg),
+            "interval_remaining": max(
+                [interval_remaining(cfg, name) for name in post_schedule(cfg)] or [0]
+            ),
             "approved": by_state.get(APPROVED, 0),
             # What the poster will actually send next (the oldest approved). None
             # when nothing is approved, so the UI can say so instead of guessing.
@@ -1416,16 +1560,15 @@ def status(cfg: dict | None = None) -> dict:
             "voice_choices": voice_choices(cfg),
             "default_voice": default_voice(cfg),
         },
-        "image_gen": {
-            "enabled": bool(image_gen_config(cfg).get("enabled")),
-            "provider": str(image_gen_config(cfg).get("provider", "")),
-            "base_url": str(image_gen_config(cfg).get("base_url", "")),
-            "overwrite": bool(image_gen_config(cfg).get("overwrite", True)),
-            "key_set": bool(str(image_gen_config(cfg).get("api_key") or "").strip()),
-            "style_file_set": bool(image_style_text(cfg).strip()),
-            "styles_set": bool(image_style_choices(cfg)),
-            "style_choices": image_style_choices(cfg),
-            "default_style": default_image_style(cfg),
+        "ideas": {
+            # Idea seeds (original posts): how many systems are configured, and
+            # whether a batch has been asked for but not yet delivered.
+            "enabled": ideas_enabled(cfg),
+            "source": ideas_source_name(cfg),
+            "topics": len(load_topics(cfg)),
+            "requested": bool(load_ideas_request(cfg).get("requested_at")),
+        },
+        "images": {
             "with_image": sum(1 for draft in drafts if draft.image),
         },
     }
@@ -1439,8 +1582,9 @@ def publish_draft(
     destination: str | None = None,
     token: str | None = None,
     skip_private_today: bool = False,
+    manual: bool = False,
 ) -> dict:
-    """Publish an approved/AI-drafted item to its destinations.
+    """Publish an approved/rewritten item to its destinations.
 
     Human-gated by construction: callers only reach here from an explicit
     approval action. ``dry_run`` prints the request and mutates nothing.
@@ -1448,6 +1592,15 @@ def publish_draft(
     A destination sending in private mode (``publish.private``) makes a real
     unpublished post: it is recorded in the audit log but leaves the draft in
     the queue, so the same draft can still be posted publicly later.
+
+    ``manual`` marks an operator-initiated send (a draft's **Post now** on
+    /review/{id}, or a platform button on /queue). Such a send sits outside
+    ``publish.interval_days`` altogether: it is audited with ``"manual": true``,
+    skips the interval gate, and does not pace it either — a person can always
+    send by hand, and their one-off send never holds the scheduler back. The
+    unattended drain (``publish_scheduled``, so also `blog publish` and **Post
+    approved now**) leaves it false: that path is what the interval exists to
+    pace.
     """
     cfg = cfg or load_config()
     if not cfg.get("publish", {}).get("enabled", True):
@@ -1460,7 +1613,7 @@ def publish_draft(
     if not draft.can_publish():
         raise ValueError(
             f"draft {draft_id!r} is in state {draft.state!r}; "
-            "run the AI rewrite (or approve it) before publishing"
+            "run the rewrite (or approve it) before publishing"
         )
 
     if not draft.destinations:
@@ -1472,14 +1625,17 @@ def publish_draft(
     # so a re-run (or a retry after a partial failure) only fills the gaps.
     already = set(draft.posted_destinations())
     targets = [name for name in targets if name not in already]
-    if not dry_run:
-        remaining = interval_remaining(cfg)
-        if remaining > 0:
-            raise ValueError(
-                f"publish interval not reached (last public post "
-                f"{_last_public_post_date(cfg)}, minimum {interval_days(cfg)} day(s), "
-                f"{remaining} to go); not posting"
-            )
+    # The interval only gates the unattended drain; a manual send always goes out
+    # (and is excluded from the pacing afterwards, see _last_public_post_date).
+    if not dry_run and not manual:
+        for name in targets:
+            remaining = interval_remaining(cfg, name)
+            if remaining > 0:
+                raise ValueError(
+                    f"publish interval not reached for {name} (last public post "
+                    f"{_last_public_post_date(cfg, name)}, minimum {interval_days(cfg)} "
+                    f"day(s), {remaining} to go); not posting"
+                )
 
     results: list[dict] = []
     for name in targets:
@@ -1504,7 +1660,7 @@ def publish_draft(
             permalink=result.permalink,
             private=result.private,
         )
-        append_audit(published_path(cfg), _audit_record(draft, name))
+        append_audit(published_path(cfg), _audit_record(draft, name, manual=manual))
         save_drafts(queue_path(cfg), drafts)  # persist after each destination
         results.append(result.to_dict())
 
@@ -1516,8 +1672,12 @@ def publish_draft(
     }
 
 
-def _audit_record(draft: Draft, destination: str) -> dict:
-    """The publish-log record for one destination, built from the draft's record."""
+def _audit_record(draft: Draft, destination: str, *, manual: bool = False) -> dict:
+    """The publish-log record for one destination, built from the draft's record.
+
+    ``"manual": true`` marks an operator-initiated send, which
+    ``_last_public_post_date`` leaves out of the ``publish.interval_days`` count.
+    """
     record = draft.posts.get(destination, {})
     audit = {
         "id": draft.id,
@@ -1530,6 +1690,8 @@ def _audit_record(draft: Draft, destination: str) -> dict:
     }
     if record.get("private"):
         audit["private"] = True
+    if manual:
+        audit["manual"] = True
     return audit
 
 
@@ -1564,7 +1726,9 @@ def publish_scheduled(
     ``approved`` (a person clicked Approve on /review/{id}); it never approves.
     Each draft goes through the ordinary ``publish_draft`` path, so the
     ``publish.enabled`` kill-switch, the interval gate and the per-destination
-    adapters all apply unchanged.
+    adapters all apply unchanged. These are *not* ``manual`` sends: the drain is
+    the machine the interval paces, so its sends both obey the gate and count
+    toward the gap (a draft's own **Post now** button does neither).
 
     ``limit`` overrides ``publish.post_per_slot`` for a manual run. A
     ``ValueError`` (the interval gate, most likely) stops the batch; a publisher
@@ -1577,6 +1741,10 @@ def publish_scheduled(
     per_slot = int(cfg.get("publish", {}).get("post_per_slot", 1))
     batch = int(limit) if limit is not None else max(per_slot, 1)
     queued = scheduled_queue(cfg)  # oldest first
+    if destination is not None:
+        # A per-destination slot only sends to its own platform; a draft still
+        # waiting on another platform stays queued for that platform's slot.
+        queued = [draft for draft in queued if destination in draft.pending_destinations()]
 
     posted: list[dict] = []
     skipped: list[dict] = []

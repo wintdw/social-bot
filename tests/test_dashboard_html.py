@@ -174,101 +174,14 @@ class TestDashboard:
         assert "Atento Education" in out
 
 
-IMAGES = {
-    "enabled": True,
-    "running": 1,
-    "failed": 1,
-    "jobs": [
-        {
-            "draft_id": "post-one",
-            "status": "running",
-            "error": "",
-            "started_at": "2026-09-11 08:00:00",
-            "finished_at": None,
-        },
-        {
-            "draft_id": "post-two",
-            "status": "error",
-            "error": "HTTP 520 <upstream>",
-            "started_at": "2026-09-11 08:00:00",
-            "finished_at": "2026-09-11 08:00:30",
-        },
-    ],
-}
+class TestNoImageJobsSection:
+    """No background image jobs exist anymore: images are local files."""
 
+    def test_dashboard_has_no_image_jobs_panel(self):
+        out = _dash()
+        assert "Image jobs" not in out
 
-class TestImageSection:
-    def test_dashboard_shows_image_jobs(self):
-        out = _dash(images=IMAGES)
-        assert "Image jobs" in out
-        assert "post-two" in out
-        assert "badge-failed" in out and "badge-running" in out
-
-    def test_status_shows_image_jobs(self):
-        out = render_status_html(
-            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
-        )
-        assert "2 job(s) · 1 running · 1 failed" in out
-        assert "post-one" in out
-
-    def test_newest_job_first(self):
-        out = render_status_html(
-            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
-        )
-        assert out.index("post-two") < out.index("post-one")
-
-    def test_error_text_is_escaped(self):
-        out = render_status_html(
-            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
-        )
-        assert "<upstream>" not in out
-        assert "&lt;upstream&gt;" in out
-
-    def test_jobs_are_rows_not_a_wrapping_table(self):
-        # The panel is a narrow column: a five-column table wrapped the draft
-        # id, the status badge, and the timestamps into unreadable pieces.
-        out = render_status_html(
-            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
-        )
-        assert 'class="joblist"' in out
-        assert 'class="job"' in out
-        assert "<th>Started</th>" not in out
-
-    def test_each_row_links_its_draft_to_the_detail_page(self):
-        out = render_status_html(
-            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
-        )
-        assert 'href="/review/post-two"' in out
-        assert 'title="post-two"' in out
-
-    def test_timing_reads_as_a_range_once_finished(self):
-        out = render_status_html(
-            STATS, refresh=REFRESH, scan=SCAN, images=IMAGES, generated_at=GENERATED
-        )
-        assert "2026-09-11 08:00:00 → 2026-09-11 08:00:30" in out
-        assert "started 2026-09-11 08:00:00" in out  # post-one has not finished
-
-    def test_no_jobs_yet(self):
-        out = render_status_html(
-            STATS,
-            refresh=REFRESH,
-            scan=SCAN,
-            images={"enabled": True, "running": 0, "failed": 0, "jobs": []},
-            generated_at=GENERATED,
-        )
-        assert "No image jobs yet" in out
-
-    def test_disabled(self):
-        out = render_status_html(
-            STATS,
-            refresh=REFRESH,
-            scan=SCAN,
-            images={"enabled": False, "running": 0, "failed": 0, "jobs": []},
-            generated_at=GENERATED,
-        )
-        assert "Disabled" in out
-
-    def test_absent_images_renders_no_section(self):
+    def test_status_has_no_image_jobs_panel(self):
         out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
         assert "Image jobs" not in out
 
@@ -278,6 +191,7 @@ class TestPostQueue:
 
     @staticmethod
     def _queued(draft_id, **kw):
+        kw.setdefault("destinations", ["facebook"])
         return Draft(
             id=draft_id,
             state="approved",
@@ -285,7 +199,6 @@ class TestPostQueue:
             excerpt=f"Excerpt for {draft_id}.",
             source="bytebytego",
             published="2026-09-09T15:30:00+00:00",
-            destinations=["facebook"],
             **kw,
         )
 
@@ -405,6 +318,76 @@ class TestPostQueue:
         assert "<script>alert(1)</script>" not in out
         assert "&lt;script&gt;alert(1)&lt;/script&gt;" in out
         assert "&lt;b&gt;boom&lt;/b&gt;" in out
+
+    def test_rows_name_each_destination_with_its_send_state(self):
+        draft = self._queued("a", destinations=["facebook", "linkedin"])
+        out = self._out([draft])
+        assert "Facebook · pending" in out
+        assert "LinkedIn · pending" in out
+        assert "dot-warn" in out
+
+    def test_a_posted_destination_reads_as_posted(self):
+        draft = self._queued(
+            "a",
+            destinations=["facebook", "linkedin"],
+            posts={"facebook": {"post_id": "1_2", "permalink": "u", "posted_at": "now"}},
+        )
+        out = self._out([draft])
+        assert "Facebook · posted" in out
+        assert "LinkedIn · pending" in out
+
+    def test_rows_carry_a_manual_post_button_per_pending_destination(self):
+        out = self._out([self._queued("a", destinations=["facebook", "linkedin"])])
+        assert 'action="/queue/a/publish"' in out
+        assert 'name="destination" value="facebook"' in out
+        assert 'name="destination" value="linkedin"' in out
+        # Icon-only buttons: the platform rides in title/aria-label, the face
+        # shows just the brand mark.
+        assert 'title="Post to Facebook"' in out
+        assert 'title="Post to LinkedIn"' in out
+        assert '<span aria-hidden="true">f</span>' in out
+        assert '<span aria-hidden="true">in</span>' in out
+        assert "Post to Facebook</button>" not in out
+
+    def test_a_posted_destination_is_not_offered_again(self):
+        draft = self._queued(
+            "a",
+            destinations=["facebook", "linkedin"],
+            posts={"facebook": {"post_id": "1_2", "permalink": "u", "posted_at": "now"}},
+        )
+        out = self._out([draft])
+        start = out.index('data-draft-id="a"')
+        row = out[start : out.index("</div></div>", start)]
+        # the facebook post button is gone, the linkedin one stays
+        publish_forms = [seg for seg in row.split("<form") if "/publish" in seg]
+        assert len(publish_forms) == 1
+        assert 'value="linkedin"' in publish_forms[0]
+        assert 'value="facebook"' not in publish_forms[0]
+
+    def test_private_mode_confirms_a_private_facebook_send(self):
+        out = self._out([self._queued("a", destinations=["facebook"])], private=True)
+        assert "Post this privately to Facebook" in out
+
+    def test_public_mode_confirms_a_public_send(self):
+        out = self._out([self._queued("a", destinations=["facebook", "linkedin"])])
+        assert "Post this publicly to LinkedIn?" in out
+
+    def test_rows_carry_no_destination_retarget_form(self):
+        # Retargeting lives on /review/{id}; the queue only reorders and posts.
+        out = self._out([self._queued("a", destinations=["facebook"])])
+        assert 'action="/queue/a/destinations"' not in out
+        assert ">Save</button>" not in out
+
+    def test_no_destination_checkboxes_even_with_two_destinations(self):
+        out = self._out([self._queued("a", destinations=["facebook", "linkedin"])])
+        assert 'name="destinations"' not in out
+        assert 'action="/queue/a/destinations"' not in out
+
+    def test_linkedin_row_has_no_image_note(self):
+        # An image rides along to LinkedIn too — no "stays on Facebook" pill.
+        draft = self._queued("a", destinations=["facebook", "linkedin"], image="https://img/x.jpg")
+        out = self._out([draft])
+        assert "Facebook only" not in out
 
 
 class TestPublish:

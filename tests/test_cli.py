@@ -52,12 +52,26 @@ class TestPostExecution:
         assert lines[0] == "dry-run: would POST to /123/photos"
         assert json.loads("\n".join(lines[1:])) == {"url": PHOTO, "caption": "hi"}
 
-    def test_photo_post_sends_caption_and_prints_permalink(self, stub_config, monkeypatch, capsys):
+    def test_photo_post_downloads_then_uploads_the_bytes(self, stub_config, monkeypatch, capsys):
         calls = {}
+        monkeypatch.setattr(
+            cli.media,
+            "load",
+            lambda cfg, url, **kw: (b"\xff\xd8\xffjpeg", "photo.jpg", "image/jpeg"),
+        )
 
         class FakeApi:
-            def create_photo_post(self, page_id, caption, url, published=True):
-                calls.update(page_id=page_id, caption=caption, url=url, published=published)
+            def create_photo_post(
+                self, page_id, caption, data, *, filename="", content_type="", published=True
+            ):
+                calls.update(
+                    page_id=page_id,
+                    caption=caption,
+                    data=data,
+                    filename=filename,
+                    content_type=content_type,
+                    published=published,
+                )
                 return {"id": "999", "post_id": "123_456"}
 
         monkeypatch.setattr(cli, "api_from_config", lambda cfg, token: FakeApi())
@@ -66,7 +80,9 @@ class TestPostExecution:
         assert calls == {
             "page_id": "123",
             "caption": "",
-            "url": PHOTO,
+            "data": b"\xff\xd8\xffjpeg",
+            "filename": "photo.jpg",
+            "content_type": "image/jpeg",
             "published": True,
         }
         assert "https://www.facebook.com/123_456" in capsys.readouterr().out
@@ -106,9 +122,14 @@ class TestPostPrivateMode:
 
     def test_private_post_sends_published_false(self, private_config, monkeypatch, capsys):
         calls = {}
+        monkeypatch.setattr(
+            cli.media, "load", lambda cfg, url, **kw: (b"jpeg", "photo.jpg", "image/jpeg")
+        )
 
         class FakeApi:
-            def create_photo_post(self, page_id, caption, url, published=True):
+            def create_photo_post(
+                self, page_id, caption, data, *, filename="", content_type="", published=True
+            ):
                 calls["published"] = published
                 return {"post_id": "123_456"}
 
@@ -129,72 +150,37 @@ class TestBlogScanArgs:
         assert args.func is cli._cmd_blog_scan
 
 
-class TestBlogImageArgs:
+class TestBlogLocalizeArgs:
     def test_flags_parse(self):
-        args = cli._parse_args(
-            ["blog", "image", "--draft", "a", "--draft", "b", "--limit", "2", "--overwrite"]
-        )
-        assert args.draft == ["a", "b"]
+        args = cli._parse_args(["blog", "localize-images", "--draft", "a", "--limit", "2"])
+        assert args.draft == ["a"]
         assert args.limit == 2
-        assert args.overwrite is True
-        assert args.func is cli._cmd_blog_image
+        assert args.func is cli._cmd_blog_localize
 
     def test_defaults(self):
-        args = cli._parse_args(["blog", "image"])
+        args = cli._parse_args(["blog", "localize-images"])
         assert args.draft is None
         assert args.limit is None
-        assert args.overwrite is False
+        assert args.json is False
 
 
-class TestBlogImageCommand:
-    def _stub(self, monkeypatch, result):
+class TestBlogLocalizeCommand:
+    def test_reports_what_moved(self, monkeypatch, capsys):
         monkeypatch.setattr(cli, "_load_config", lambda args: {})
-        monkeypatch.setattr(cli, "generate_images", lambda cfg, **kw: result)
-
-    def test_reports_generated(self, monkeypatch, capsys):
-        self._stub(
-            monkeypatch,
-            {"generated": 1, "candidates": 1, "ids": ["post-one"], "errors": []},
+        monkeypatch.setattr(
+            cli,
+            "localize_images",
+            lambda cfg, **kw: {
+                "localized": 1,
+                "candidates": 2,
+                "ids": ["post-one"],
+                "errors": [],
+            },
         )
-        assert cli._cmd_blog_image(cli._parse_args(["blog", "image"])) == 0
+        assert cli._cmd_blog_localize(cli._parse_args(["blog", "localize-images"])) == 0
         out = capsys.readouterr().out
-        assert "Generated 1 image(s)" in out and "post-one" in out
-
-    def test_default_defers_to_config(self, monkeypatch):
-        captured = {}
-        monkeypatch.setattr(cli, "_load_config", lambda args: {})
-        monkeypatch.setattr(
-            cli,
-            "generate_images",
-            lambda cfg, **kw: (
-                captured.update(kw) or {"generated": 0, "candidates": 0, "ids": [], "errors": []}
-            ),
-        )
-        cli._cmd_blog_image(cli._parse_args(["blog", "image"]))
-        assert captured["overwrite"] is None
-
-    def test_overwrite_flag_forces_replacement(self, monkeypatch):
-        captured = {}
-        monkeypatch.setattr(cli, "_load_config", lambda args: {})
-        monkeypatch.setattr(
-            cli,
-            "generate_images",
-            lambda cfg, **kw: (
-                captured.update(kw) or {"generated": 0, "candidates": 0, "ids": [], "errors": []}
-            ),
-        )
-        cli._cmd_blog_image(cli._parse_args(["blog", "image", "--overwrite"]))
-        assert captured["overwrite"] is True
-
-    def test_disabled_returns_usage_error(self, monkeypatch, capsys):
-        monkeypatch.setattr(cli, "_load_config", lambda args: {})
-
-        def boom(cfg, **kw):
-            raise ValueError("image generation is disabled")
-
-        monkeypatch.setattr(cli, "generate_images", boom)
-        assert cli._cmd_blog_image(cli._parse_args(["blog", "image"])) == 2
-        assert "image generation is disabled" in capsys.readouterr().err
+        assert "Moved 1 image(s)" in out
+        assert "post-one" in out
 
 
 class TestBlogMastheadArgs:
@@ -254,6 +240,60 @@ class TestBlogMastheadCommand:
         monkeypatch.setattr(cli, "apply_masthead", boom)
         assert cli._cmd_blog_masthead(cli._parse_args(["blog", "masthead"])) == 2
         assert "no default masthead" in capsys.readouterr().err
+
+
+class TestBlogBackfillDestinationsArgs:
+    def test_flags_parse(self):
+        args = cli._parse_args(["blog", "backfill-destinations", "--draft", "a", "--limit", "2"])
+        assert args.draft == ["a"]
+        assert args.limit == 2
+        assert args.func is cli._cmd_blog_backfill_destinations
+
+    def test_defaults(self):
+        args = cli._parse_args(["blog", "backfill-destinations"])
+        assert args.draft is None
+        assert args.limit is None
+
+
+class TestBlogBackfillDestinationsCommand:
+    def _stub(self, monkeypatch, result):
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(cli, "backfill_destinations", lambda cfg, **kw: result)
+
+    def test_reports_backfilled(self, monkeypatch, capsys):
+        self._stub(
+            monkeypatch,
+            {"updated": 2, "ids": ["a", "b"], "destinations": ["facebook", "linkedin"]},
+        )
+        assert (
+            cli._cmd_blog_backfill_destinations(cli._parse_args(["blog", "backfill-destinations"]))
+            == 0
+        )
+        out = capsys.readouterr().out
+        assert "Backfilled 2 draft(s)" in out and "facebook" in out and "linkedin" in out
+
+    def test_json_mode(self, monkeypatch, capsys):
+        self._stub(monkeypatch, {"updated": 0, "ids": [], "destinations": ["facebook"]})
+        assert (
+            cli._cmd_blog_backfill_destinations(
+                cli._parse_args(["blog", "backfill-destinations", "--json"])
+            )
+            == 0
+        )
+        assert json.loads(capsys.readouterr().out)["updated"] == 0
+
+    def test_unconfigured_returns_usage_error(self, monkeypatch, capsys):
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+
+        def boom(cfg, **kw):
+            raise ValueError("unknown destination(s): mastodon")
+
+        monkeypatch.setattr(cli, "backfill_destinations", boom)
+        assert (
+            cli._cmd_blog_backfill_destinations(cli._parse_args(["blog", "backfill-destinations"]))
+            == 2
+        )
+        assert "unknown destination" in capsys.readouterr().err
 
 
 class TestBlogScanCommand:

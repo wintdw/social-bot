@@ -103,9 +103,11 @@ Everything platform-specific lives in one package; the core never changes.
    `config.yaml`; `config.validate` accepts any registered name automatically.
 4. Test the field mapping in `tests/test_publishers.py` with a fake transport;
    registry/config behaviour in `tests/test_destinations.py`.
-5. `linkedin/publisher.py` is a stub — a real one needs OAuth
-   (`w_member_social` for a profile, `w_organization_social` + partner approval
-   for a company page) and `POST https://api.linkedin.com/rest/posts`.
+5. `linkedin/publisher.py` shows the delegate shape: it holds no token and calls
+   linkin-bot's `POST /post` gateway (text + optional image as base64) instead of
+   the platform API. A destination that talks to the platform directly needs its
+   own OAuth (LinkedIn: `w_member_social` for a profile, partner approval for a
+   company page, and `POST https://api.linkedin.com/rest/posts`).
 
 ## Recipe: add a route
 

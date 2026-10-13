@@ -12,7 +12,7 @@ def test_defaults_when_config_missing(tmp_path):
     cfg = load_config(tmp_path / "does-not-exist.yaml")
     assert cfg["destinations"]["facebook"]["api_version"] == "v26.0"
     assert cfg["destinations"]["facebook"]["base_url"] == "https://graph.facebook.com"
-    assert cfg["destinations"]["linkedin"]["base_url"] == "https://api.linkedin.com"
+    assert cfg["destinations"]["linkedin"]["base_url"] == "http://host.docker.internal:8082"
     assert cfg["feed"]["limit"] == 10
 
 
@@ -174,7 +174,7 @@ def test_defaults_include_pipeline_sections(tmp_path):
     cfg = load_config(tmp_path / "missing.yaml")
     assert cfg["sources"][0]["name"] == "atento-blog"
     assert cfg["sources"][0]["type"] == "index"
-    assert cfg["publish"]["destinations"] == ["facebook"]
+    assert cfg["publish"]["destinations"] == ["facebook", "linkedin"]
     assert cfg["publish"]["post_at"] == []  # timed posting is off by default
     assert cfg["publish"]["post_per_slot"] == 1
     assert cfg["publish"]["interval_days"] == 0  # no minimum gap by default
@@ -187,15 +187,12 @@ def test_defaults_include_pipeline_sections(tmp_path):
     assert cfg["publish"]["default_voice"] == ""
 
 
-def test_image_gen_disabled_by_default(tmp_path):
+def test_defaults_include_the_ideas_section(tmp_path):
     cfg = load_config(tmp_path / "missing.yaml")
-    assert cfg["image_gen"]["enabled"] is False
-    assert cfg["image_gen"]["overwrite"] is False
-    assert cfg["image_gen"]["base_url"] == "https://gen.pollinations.ai/image"
-    assert cfg["image_gen"]["model"] == "openai/gpt-image-1-mini"
-    assert cfg["image_gen"]["width"] == 1080 and cfg["image_gen"]["height"] == 1350
-    assert cfg["image_gen"]["styles"] == {}  # no per-post menu by default
-    assert cfg["image_gen"]["default_style"] == ""
+    assert cfg["ideas"]["enabled"] is False  # opt-in, like rewrite/voice
+    assert cfg["ideas"]["topics_file"] == "data/ideas/topics.md"
+    assert cfg["ideas"]["source_name"] == "atento-original"
+    assert cfg["ideas"]["per_run"] >= 1
 
 
 def test_rewrite_worker_disabled_by_default(tmp_path):
@@ -205,17 +202,6 @@ def test_rewrite_worker_disabled_by_default(tmp_path):
     assert cfg["rewrite"]["model"] == ""
     assert cfg["rewrite"]["max_turns"] >= 1
     assert cfg["rewrite"]["api_base"].startswith("http://")
-
-
-def test_credentials_file_supplies_image_key(tmp_path):
-    conf = tmp_path / "config.yaml"
-    conf.write_text(yaml.safe_dump({"image_gen": {"enabled": True}}), encoding="utf-8")
-    (tmp_path / "credentials.yaml").write_text(
-        yaml.safe_dump({"image_gen": {"api_key": "sk_secret"}}), encoding="utf-8"
-    )
-    cfg = load_config(conf)
-    assert cfg["image_gen"]["api_key"] == "sk_secret"
-    assert cfg["image_gen"]["enabled"] is True
 
 
 @pytest.mark.parametrize(
@@ -241,10 +227,9 @@ def test_credentials_file_supplies_image_key(tmp_path):
         {"blog": {"timeout_seconds": 0}},
         {"blog": {"max_scan": 0}},
         {"blog": {**DEFAULTS["blog"], "max_age_days": -1}},
-        {"image_gen": {"provider": "midjourney"}},
-        {"image_gen": {"timeout_seconds": 0}},
-        {"image_gen": {"width": 0}},
-        {"image_gen": {"base_url": "http://gen.pollinations.ai/image"}},
+        {"ideas": {"per_run": 0}},
+        {"ideas": {"topics_file": "   "}},
+        {"ideas": {"source_name": "  "}},
         {"rewrite": {"timeout_seconds": 0}},
         {"rewrite": {"poll_seconds": 0}},
         {"rewrite": {"max_turns": 0}},
@@ -280,10 +265,9 @@ def test_credentials_file_supplies_image_key(tmp_path):
         "bad-blog-timeout",
         "zero-max-scan",
         "negative-max-age-days",
-        "unknown-image-provider",
-        "zero-image-timeout",
-        "zero-image-width",
-        "http-image-base-url",
+        "zero-ideas-per-run",
+        "blank-ideas-topics-file",
+        "blank-ideas-source-name",
         "zero-rewrite-timeout",
         "zero-rewrite-poll",
         "zero-rewrite-max-turns",
@@ -306,7 +290,7 @@ def test_validate_rejects_bad_pipeline_config(override):
 
 def test_defaults_include_the_voice_section(tmp_path):
     cfg = load_config(tmp_path / "missing.yaml")
-    assert cfg["voice"]["enabled"] is False  # opt-in, like rewrite/image_gen
+    assert cfg["voice"]["enabled"] is False  # opt-in, like rewrite
     assert cfg["voice"]["backend"] == "hybrid"
     assert cfg["voice"]["corpus_dir"] == "data/voice/normalized"
     assert cfg["voice"]["only_me"] is True

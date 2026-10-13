@@ -96,3 +96,16 @@ def validate_destinations(cfg: dict) -> None:
         if not isinstance(block, dict):
             raise ValueError(f"config: destinations.{name} must be a mapping")
         cls.validate_config(block)
+
+
+def linkedin_status(cfg: dict) -> dict:
+    """The linkin-bot gateway status for the operator UI (never raises).
+
+    The one seam for the LinkedIn side-channel: the core calls this, never the
+    ``linkedin`` package directly, so no platform import leaks outside
+    ``destinations/``. Unconfigured or unreachable gateway is an ``ok: False``
+    view, never an exception.
+    """
+    from .linkedin.status import get_status
+
+    return get_status(cfg)

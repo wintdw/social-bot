@@ -23,7 +23,8 @@ import urllib.parse
 
 from .caption import display_title, leading_masthead
 from .destinations import label_for, labels_for
-from .drafts import REWRITE_CAPTION_VOICE, REWRITE_IMAGE, Draft, parse_when
+from .destinations import names as destination_names
+from .drafts import REWRITE_CAPTION_VOICE, Draft, parse_when
 from .ui import BRAND_EYEBROW, badge, fmt_when, layout
 
 # Human labels for the status filter chips (the badge shows the raw state).
@@ -59,8 +60,6 @@ _DETAIL_SCRIPT = """<script>
   if (!form) return;
   var caption = document.getElementById('caption');
   var tags = document.getElementById('hashtags');
-  var body = document.getElementById('preview-body');
-  var tagLine = document.getElementById('preview-tags');
   var count = document.getElementById('caption-count');
   var buttons = document.querySelectorAll('button[form="publish-form"]');
   function normTags() {
@@ -69,8 +68,10 @@ _DETAIL_SCRIPT = """<script>
   function sync() {
     var text = caption.value;
     var tagText = normTags();
-    body.textContent = text;
-    tagLine.textContent = tagText;
+    var body = document.getElementById('preview-body');
+    var tagLine = document.getElementById('preview-tags');
+    if (body) body.textContent = text;
+    if (tagLine) tagLine.textContent = tagText;
     count.textContent = String(text.length + (tagText ? 2 + tagText.length : 0));
   }
   caption.addEventListener('input', sync);
@@ -80,7 +81,7 @@ _DETAIL_SCRIPT = """<script>
     if (form.dataset.submitting === '1') { event.preventDefault(); return; }
     var button = event.submitter;
     // What a submit *does* is read off where it goes, not off a list of button
-    // names: the compose tools (Regenerate image / Write image prompt / Rewrite in
+    // names: the compose tool (Rewrite in
     // this voice) and Save each override the form's action with formaction, so only
     // a submit of the form's own action publishes — and only that one asks for the
     // posting confirmation. A submit with no button (Enter in a field) counts as a post.
@@ -88,7 +89,10 @@ _DETAIL_SCRIPT = """<script>
     var posts = target === form.getAttribute('action');
     var isApprove = !!button && button.name === 'approve';
     if (posts && !isApprove && form.dataset.private !== 'true') {
-      if (!window.confirm('Post this publicly to __DEST__?')) {
+      // The button names the platform it sends to, so the confirmation matches
+      // which one is about to go out rather than the draft's whole target list.
+      var dest = (button && button.dataset && button.dataset.dest) || '__DEST__';
+      if (!window.confirm('Post this publicly to ' + dest + '?')) {
         event.preventDefault();
         return;
       }
@@ -101,7 +105,7 @@ _DETAIL_SCRIPT = """<script>
     // The button's own name is only a cue for which verb to show.
     if (isApprove) button.textContent = 'Approving\u2026';
     else if (button.name === 'save') button.textContent = 'Saving\u2026';
-    else if (button.name === 'regenerate') button.textContent = 'Generating\u2026';
+    else if (button.name === 'diagram') button.textContent = 'Rendering\u2026';
     else if (posts) button.textContent = 'Posting\u2026';
   });
   var reject = document.getElementById('reject-form');
@@ -122,36 +126,7 @@ _DETAIL_SCRIPT = """<script>
       if (text) hint.textContent = text;
     });
   }
-  wireHint('image_style', 'image_style_hint');
   wireHint('voice', 'voice_hint');
-  // A background job is in flight: poll until it finishes, then reload so the
-  // result shows. Never reload over unsaved edits — if the operator has typed,
-  // say it is ready and let them reload.
-  var dirty = false;
-  form.addEventListener('input', function () { dirty = true; });
-  var job = document.getElementById('image-job');
-  if (job) {
-    var tries = 0;
-    var check = function () {
-      if (++tries > 120) return;
-      fetch('/api/status').then(function (r) { return r.json(); }).then(function (data) {
-        var jobs = (data && data.images && data.images.jobs) || [];
-        var mine = null;
-        for (var i = 0; i < jobs.length; i++) {
-          if (jobs[i].draft_id === job.getAttribute('data-draft-id')) mine = jobs[i];
-        }
-        if (mine && mine.status === 'running') { window.setTimeout(check, 3000); return; }
-        if (dirty) {
-          job.className = 'notice notice-ok';
-          job.textContent = 'Image ready \u2014 reload to see it.';
-          return;
-        }
-        // Drop the ?message= query so the "generating" flash does not linger.
-        window.location.href = window.location.pathname;
-      }).catch(function () { window.setTimeout(check, 5000); });
-    };
-    window.setTimeout(check, 3000);
-  }
   // The rewriter runs on an external worker, so its request stays open until a
   // rewrite lands (or the worker reports a failure); reload when it clears.
   var rewrite = document.getElementById('rewrite-job');
@@ -403,6 +378,8 @@ def render_drafts_html(
     page: dict | None = None,
     q: str = "",
     sort: str = "",
+    ideas_enabled: bool = False,
+    ideas_request: dict | None = None,
 ) -> str:
     """Render the draft queue as a standalone HTML list page.
 
@@ -425,11 +402,27 @@ def render_drafts_html(
     per_page = int((page or {}).get("per_page") or 0)
     filtered = total != matched or bool(q)
     count_text = f"{matched} of {total} open draft(s)" if filtered else f"{matched} open draft(s)"
+    # Idea seeds: a batch of *original* post ideas is proposed by the host-side
+    # worker (like a rewrite). While one is pending the button gives way to a
+    # status pill, so it is not asked for twice.
+    ideas_tools = ""
+    if ideas_enabled:
+        if (ideas_request or {}).get("requested_at"):
+            ideas_tools = (
+                '<span class="pill" title="The Command Code worker is composing a batch">'
+                '<span class="dot dot-warn" aria-hidden="true"></span>ideas requested</span>'
+            )
+        else:
+            ideas_tools = (
+                '<form method="post" action="/review/request-ideas">'
+                '<button type="submit" class="btn">Generate ideas</button></form>'
+            )
     header = (
         "<header><div><h1>Review queue</h1>"
         f'<div class="sub">{count_text} · generated '
         f"{html.escape(generated_at.astimezone().strftime('%Y-%m-%d %H:%M %Z'))}</div></div>"
         '<div class="cmdbar">'
+        f"{ideas_tools}"
         '<form method="post" action="/scan">'
         '<button type="submit" class="btn-primary">Scan sources now</button></form>'
         "</div></header>"
@@ -530,13 +523,8 @@ def render_draft_html(
     message: str = "",
     message_kind: str = "info",
     private: bool = False,
-    image_enabled: bool = False,
     rewrite_enabled: bool = False,
-    image_status: dict | None = None,
     image_generated: bool = False,
-    image_styles: list[str] | None = None,
-    default_image_style: str = "",
-    image_style_hints: dict[str, str] | None = None,
     voices: list[str] | None = None,
     default_voice: str = "",
     voice_hints: dict[str, str] | None = None,
@@ -570,60 +558,35 @@ def render_draft_html(
 
     media = ""
     if draft.image:
-        alt = html.escape(draft.image_prompt or draft.title or "Post image")
+        alt = html.escape(draft.title or "Post image")
         media = (
             '<figure class="hero">'
             f'<img src="{html.escape(draft.image)}" alt="{alt}" loading="lazy">'
             "</figure>"
         )
 
-    # The image is generated in the background (after a rewrite, or from the
-    # Regenerate button), so report the job's own state — "no image" alone can't
-    # tell "still coming" from "failed" from "never started". Running and failed
-    # are shown even when an image already exists: a regeneration can fail and
-    # leave the previous image in place, and the operator needs to see that.
+    # Images are the source post's own cover or a code-drawn diagram —
+    # nothing is generated in the background anymore.
     image_note = ""
-    status = (image_status or {}).get("status")
-    if status == "running":
+    if not draft.image:
         image_note = (
-            '<div class="notice" id="image-job" role="status" '
-            f'data-draft-id="{html.escape(draft.id)}">'
-            '<span class="dot dot-warn" aria-hidden="true"></span>'
-            " Generating the image in the background — this page refreshes when "
-            "it is ready.</div>"
+            '<p class="muted">No image yet — the post will publish without one. '
+            "Use “Render diagram” below for a code-drawn explainer.</p>"
         )
-    elif status == "error":
-        detail = html.escape(str((image_status or {}).get("error") or "unknown error"))
-        image_note = f'<div class="notice notice-error">Image generation failed: {detail}</div>'
-    elif not draft.image:
-        hint = (
-            " Use “Generate image” below."
-            if image_enabled
-            else " Run `blog image --missing-only`, or the scheduled rewrite will fill it."
-        )
-        image_note = f'<p class="muted">No image yet — every post is a photo post.{hint}</p>'
     elif image_generated:
         image_note = (
-            '<p class="muted">A generated image, not the source post’s own — '
+            '<p class="muted">A code-drawn diagram, not the source post’s own — '
             "“Restore source image” below puts the original back.</p>"
         )
 
     # A requested rewrite is run by an external worker (scripts/rewrite_worker.py),
     # so the page can only report that the request is open — and, when the worker
     # fails, why nothing came back. The poll script reloads once the request clears.
-    # Two kinds of request share the notice: a full rewrite, and a prompt-only one
-    # ("the caption is fine, the picture is not"), which is also allowed on an
-    # approved draft — hence the wider gate.
     rewrite_note = ""
-    if rewrite_enabled and draft.can_request_image_prompt():
+    if rewrite_enabled and draft.can_receive_rewrite():
         kind = draft.rewrite_kind()
         if kind:
-            if kind == REWRITE_IMAGE:
-                what = "New image prompt requested"
-                pending = (
-                    "Writing a new image prompt — render it with “Regenerate image” when it lands."
-                )
-            elif kind == REWRITE_CAPTION_VOICE:
+            if kind == REWRITE_CAPTION_VOICE:
                 # Say *which* of the two caption buttons is running: the difference
                 # between them is the one thing the operator wants to see here.
                 what = html.escape(f"Rewriter requested in voice “{draft.voice}”")
@@ -646,43 +609,7 @@ def render_draft_html(
 
     caption = html.escape(draft.caption or "")
     tags = html.escape(" ".join(draft.hashtags))
-    prompt = html.escape(draft.image_prompt or "")
     action = html.escape(f"/review/{draft.id}")
-
-    # The visual treatment menu (image_gen.styles): the rewriter picks one per
-    # post like the masthead; an operator can override it, and the pick governs
-    # both image tools — Regenerate image renders this treatment, Regenerate
-    # image prompt has the agent write a subject for it. The hint under it is the
-    # chosen style file's own guidance, so the page says what each treatment is
-    # for instead of keeping a second copy of the docs.
-    style_field = ""
-    if image_styles:
-        hints = image_style_hints or {}
-        chosen = (
-            draft.image_style if draft.image_style in image_styles else (default_image_style or "")
-        )
-        # The applied treatment is marked in the list (and is the default
-        # selection), so it stays identifiable once a different treatment is
-        # picked. Hidden while a regeneration is running: the stored style is
-        # already the new one, but the image still shows the previous treatment.
-        applied = chosen if (draft.image and status != "running") else ""
-        options = "".join(
-            f'<option value="{html.escape(key)}"{" selected" if key == chosen else ""}'
-            f' data-hint="{html.escape(hints.get(key, ""))}">{html.escape(key)}'
-            f"{' (current)' if key == applied else ''}</option>"
-            for key in image_styles
-        )
-        hint = hints.get(chosen) or (
-            "Visual treatment for the generated image, chosen per post by the "
-            "rewriter. Override it before regenerating."
-        )
-        style_field = (
-            '<div class="field"><label for="image_style">Image style</label>'
-            '<select id="image_style" name="image_style" '
-            f'aria-describedby="image_style_hint">{options}</select>'
-            f'<div class="field-hint" id="image_style_hint">{html.escape(hint)}</div>'
-            "</div>"
-        )
 
     # The voice menu (publish.voices): the rewriter picks one register per post
     # like the masthead; an operator can override it here. The hint under it is
@@ -696,7 +623,7 @@ def render_draft_html(
         rewrite_enabled
         and voices
         and draft.can_receive_rewrite()
-        and not (draft.rewrite_requested_at and draft.rewrite_kind() != REWRITE_IMAGE)
+        and not draft.rewrite_requested_at
     )
     voice_field = ""
     if voices:
@@ -728,6 +655,47 @@ def render_draft_html(
             "</div>"
         )
 
+    # Where this post goes. One checkbox chip per known destination, submitted
+    # with whichever button is pressed, so the picker saves alongside the
+    # caption — and the action bar then carries one Post button per pending
+    # platform, so Facebook and LinkedIn are separate sends rather than one
+    # glued action. The chips reuse the shared `.chip` style (the tick is the
+    # accent fill); each option also names its send state (posted/pending), so
+    # the operator sees what is left to send without scrolling to the action
+    # bar.
+    known = destination_names()
+    selected = [name for name in draft.destinations if name in known]
+    posted = set(draft.posted_destinations())
+    dest_picker = ""
+    if len(known) > 1:
+
+        def _dest_box(name: str) -> str:
+            state = ""
+            if name in posted:
+                state = '<span class="count">· posted</span>'
+            elif name in selected:
+                state = '<span class="count">· pending</span>'
+            checked = " checked" if name in selected else ""
+            return (
+                '<label class="chip">'
+                f'<input type="checkbox" name="destinations" value="{html.escape(name)}"{checked}>'
+                f"{html.escape(label_for(name))}"
+                f"{state}</label>"
+            )
+
+        boxes = "".join(_dest_box(name) for name in known)
+        hints = [
+            "Every ticked platform posts separately, with its own button below.",
+        ]
+        if "linkedin" in selected and private:
+            hints.append("Private mode does not apply to LinkedIn — it still posts publicly.")
+        dest_picker = (
+            '<div class="field"><span class="field-label">Destinations</span>'
+            f'<div class="cmdbar">{boxes}</div>'
+            '<input type="hidden" name="destinations_field" value="1">'
+            f'<div class="field-hint">{" ".join(hints)}</div></div>'
+        )
+
     form = (
         f'<form id="publish-form" class="form-block" method="post" action="{action}/publish"'
         f' data-private="{"true" if private else "false"}">'
@@ -740,29 +708,19 @@ def render_draft_html(
         f'<input type="text" id="hashtags" name="hashtags" value="{tags}">'
         '<div class="field-hint">Appended to the caption when posted. '
         "Space or comma separated.</div></div>"
+        f"{dest_picker}"
         f"{voice_field}"
-        '<div class="field"><label for="image_prompt">Image prompt · English</label>'
-        f'<input type="text" id="image_prompt" name="image_prompt" value="{prompt}">'
-        '<div class="field-hint">Subject and composition for the generated image — '
-        "also the image's alt text. Falls back to the source title when blank. "
-        "“Regenerate image prompt” asks Command Code to write a new one for the image "
-        "style picked below; render it with “Regenerate image”."
-        "</div></div>"
-        f"{style_field}"
         "</form>"
     )
 
-    image_button = ""
-    if image_enabled:
-        label = "Regenerate image" if draft.image else "Generate image"
-        # Submit the compose form to /image (not a form of its own): the image
-        # prompt and style above are saved with the generation, so what the
-        # operator just picked is what the provider is asked for.
-        image_button = (
-            f'<button type="submit" form="publish-form" formaction="{action}/image" '
-            f'name="regenerate" value="1" class="btn btn-quiet">{label}</button>'
-        )
-    # The current image came from image_gen, so the source post's own picture is
+    # The diagram is drawn from code (diagram.py + diagram_html.py): its own
+    # form, so rendering never saves or posts the caption edits.
+    image_button = (
+        f'<form id="diagram-form" method="post" action="{action}/diagram">'
+        '<button type="submit" name="diagram" value="1" class="btn btn-quiet">'
+        "Render diagram</button></form>"
+    )
+    # The current image is a diagram, so the source post's own picture is
     # still available (stored on the draft, or read back from the source page).
     # Its own form: restoring the image must not save or post the caption edits.
     restore_button = ""
@@ -777,15 +735,7 @@ def render_draft_html(
     # it never carries compose edits — the rewrite replaces the caption anyway.
     rewrite_button = ""
     if rewrite_enabled and draft.can_receive_rewrite():
-        if draft.rewrite_kind() == REWRITE_IMAGE:
-            # A prompt-only request is open. A full rewrite supersedes it (its own
-            # new image_prompt included), so the request button stays available.
-            rewrite_button = (
-                f'<form id="rewrite-form" method="post" action="{action}/request-rewrite">'
-                '<button type="submit" class="btn">Rewrite caption instead</button>'
-                "</form>"
-            )
-        elif draft.rewrite_requested_at:
+        if draft.rewrite_requested_at:
             rewrite_button = (
                 f'<form id="rewrite-form" method="post" action="{action}/cancel-rewrite">'
                 '<button type="submit" class="btn btn-quiet">Cancel rewrite</button>'
@@ -811,30 +761,6 @@ def render_draft_html(
             f'formaction="{action}/request-voice-rewrite" class="btn">'
             "Rewrite in this voice</button>"
         )
-    # "Regenerate image prompt": the other side of Regenerate image — that one
-    # renders exactly the prompt and style typed above, this one asks Command Code
-    # to write a new *subject* for the style picked above, and stops there. The
-    # render stays a separate move, so a prompt can be read — and edited — before
-    # it is spent on a picture. It submits the compose form like Regenerate image
-    # does, because the style on screen is what the agent has to write for: a
-    # field-less form would drop the pick twice over, once here and once at the
-    # worker, which would otherwise choose a treatment of its own.
-    prompt_button = ""
-    if image_enabled and rewrite_enabled and draft.can_request_image_prompt():
-        if draft.rewrite_kind() == REWRITE_IMAGE:
-            # Cancel is not a request — its own field-less form, so dropping the
-            # request never saves (or posts) half-typed compose edits.
-            prompt_button = (
-                f'<form id="prompt-form" method="post" action="{action}/cancel-rewrite">'
-                '<button type="submit" class="btn btn-quiet">Cancel prompt rewrite</button>'
-                "</form>"
-            )
-        else:
-            label = "Regenerate image prompt" if draft.image_prompt else "Write image prompt"
-            prompt_button = (
-                f'<button type="submit" form="publish-form" '
-                f'formaction="{action}/request-image-prompt" class="btn btn-quiet">{label}</button>'
-            )
     # Timed posting: a human approves here, the serve scheduler posts later.
     # The button submits the caption form too, so edits are saved with the
     # approval instead of being silently dropped. Only an ai_draft can approve.
@@ -859,13 +785,11 @@ def render_draft_html(
 
     # The compose-local tools live under the fields they act on, each group under
     # its own label, so the sticky action bar below carries only the actions that
-    # move the draft (post / approve / save / reject). They sit outside the
-    # publish form — a <form> cannot nest inside another — so the buttons that do
-    # act on the fields above (both image ones) reach back into it with the form=
-    # attribute, while the tools that only mark or cancel the draft keep a
-    # field-less form of their own and carry nothing.
+    # move the draft (post / approve / save / reject). The voice rewrite reaches
+    # back into the publish form with form= (its pick lives there); the rest keep
+    # a field-less form of their own and carry nothing.
     tool_groups = ""
-    image_tools = image_button + prompt_button + restore_button
+    image_tools = image_button + restore_button
     if image_tools:
         tool_groups += (
             '<div class="toolgroup" role="group" aria-label="Image tools">'
@@ -898,6 +822,8 @@ def render_draft_html(
         preview_media = (
             f'<img class="media" src="{html.escape(draft.image)}" alt="" loading="lazy">'
         )
+    # One preview: exactly what posts. Both destinations receive the same text
+    # and (when there is one) the same image, so no per-platform preview.
     preview = (
         '<section class="panel">'
         '<div class="panel-head"><span class="label">Preview</span>'
@@ -914,18 +840,39 @@ def render_draft_html(
         "“See more”.</p></div></section>"
     )
 
-    primary = "Publish privately" if private else "Post publicly"
-    target = (
-        "Private mode: posted unpublished, visible to page admins only."
-        if private
-        else f"This publishes to {dest_text}."
-    )
+    # One button per platform still to receive this draft. A single send (the
+    # only target, or the last gap left) keeps the plain Post publicly label;
+    # with two pending the operator picks the platform, so each is its own send.
+    done = set(draft.posted_destinations())
+    pending = [name for name in (draft.destinations or known[:1]) if name not in done]
+    several = len(pending) > 1
+    post_buttons = ""
+    for index, name in enumerate(pending):
+        label = label_for(name)
+        text = (
+            f"Post to {label}" if several else ("Publish privately" if private else "Post publicly")
+        )
+        post_buttons += (
+            f'<button type="submit" form="publish-form" '
+            f'class="{"btn-primary" if index == 0 else "btn"}" '
+            f'name="destination" value="{html.escape(name)}" '
+            f'data-dest="{html.escape(label)}">{html.escape(text)}</button>'
+        )
+    if not post_buttons:
+        post_buttons = '<span class="hint">Already posted to every destination.</span>'
+    pending_text = ", ".join(labels_for(pending))
+    if private:
+        target = "Private mode: posted unpublished, visible to page admins only."
+    elif several:
+        target = f"This publishes to {pending_text} — one platform per button."
+    else:
+        target = f"This publishes to {pending_text or dest_text}."
     # The bar carries only the terminal actions — post, approve, save, reject.
     # The compose-local tools (image, rewrite) are grouped up in the Compose
     # panel, under the fields they act on.
     action_bar = (
         '<div class="action-bar">'
-        f'<button type="submit" form="publish-form" class="btn-primary">{primary}</button>'
+        f"{post_buttons}"
         f"{approve_button}{unapprove_button}"
         f'<button type="submit" form="publish-form" formaction="{action}/save" '
         'name="save" value="1" class="btn btn-quiet">Save</button>'
@@ -978,6 +925,10 @@ def render_draft_html(
         rail_parts.append(f"<p>{html.escape(draft.title)}</p>")
     if draft.url:
         rail_parts.append(f'<p><a href="{html.escape(draft.url)}">{html.escape(draft.url)}</a></p>')
+    if draft.topic:
+        # An original draft has no source page — only the system/theme the idea
+        # was drawn from, so provenance reads "Original idea · <topic>".
+        rail_parts.append(f'<p class="muted">Original idea · {html.escape(draft.topic)}</p>')
     if draft.published:
         rail_parts.append(
             f'<p class="muted">Published {html.escape(fmt_when(draft.published))}</p>'

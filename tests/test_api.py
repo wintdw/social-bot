@@ -85,43 +85,74 @@ class TestManagedPagesFallback:
 
 
 class TestCreatePhotoPost:
-    def test_photo_post_targets_photos_with_url_and_caption(self, monkeypatch):
+    def test_photo_post_uploads_the_bytes_as_a_multipart_source(self, monkeypatch):
         api = GraphApi(token="tok", api_version="v26.0")
         captured = {}
 
-        def fake_post(path, params=None):
-            captured["path"] = path
-            captured["params"] = params
+        def fake_post_file(path, fields, *, field, filename, data, content_type):
+            captured.update(
+                path=path,
+                fields=fields,
+                field=field,
+                filename=filename,
+                data=data,
+                content_type=content_type,
+            )
             return {"id": "999", "post_id": "1148652808337860_999"}
 
-        monkeypatch.setattr(api, "post", fake_post)
-        resp = api.create_photo_post("1148652808337860", "hello", "https://example.com/a.jpg")
+        monkeypatch.setattr(api, "post_file", fake_post_file)
+        resp = api.create_photo_post(
+            "1148652808337860",
+            "hello",
+            b"\xff\xd8\xffjpeg",
+            filename="p.jpg",
+            content_type="image/jpeg",
+        )
         assert captured["path"] == "1148652808337860/photos"
-        assert captured["params"] == {
-            "url": "https://example.com/a.jpg",
-            "caption": "hello",
-        }
+        assert captured["fields"] == {"caption": "hello"}
+        assert captured["field"] == "source"
+        assert captured["filename"] == "p.jpg"
+        assert captured["data"] == b"\xff\xd8\xffjpeg"
+        assert captured["content_type"] == "image/jpeg"
         assert resp["post_id"] == "1148652808337860_999"
 
     def test_photo_post_omits_empty_caption(self, monkeypatch):
         api = GraphApi(token="tok", api_version="v26.0")
         captured = {}
-        monkeypatch.setattr(api, "post", lambda path, params=None: captured.update(params))
-        api.create_photo_post("1148652808337860", "", "https://example.com/a.jpg")
-        assert captured == {"url": "https://example.com/a.jpg"}
+        monkeypatch.setattr(
+            api, "post_file", lambda path, fields, **kw: captured.update(fields) or {}
+        )
+        api.create_photo_post("1148652808337860", "", b"jpeg")
+        assert captured == {}
 
     def test_photo_post_private_sets_published_false(self, monkeypatch):
         api = GraphApi(token="tok", api_version="v26.0")
         captured = {}
-        monkeypatch.setattr(api, "post", lambda path, params=None: captured.update(params) or {})
-        api.create_photo_post(
-            "1148652808337860", "hello", "https://example.com/a.jpg", published=False
+        monkeypatch.setattr(
+            api, "post_file", lambda path, fields, **kw: captured.update(fields) or {}
         )
-        assert captured == {
-            "url": "https://example.com/a.jpg",
-            "caption": "hello",
-            "published": "false",
-        }
+        api.create_photo_post("1148652808337860", "hello", b"jpeg", published=False)
+        assert captured == {"caption": "hello", "published": "false"}
+
+
+class TestMultipartBody:
+    def test_carries_the_fields_then_the_file_part(self):
+        from social_bot.destinations.facebook.api import _multipart_body
+
+        body = _multipart_body(
+            "B",
+            {"caption": "hi", "access_token": "tok"},
+            field="source",
+            filename="p.jpg",
+            data=b"JPEGDATA",
+            content_type="image/jpeg",
+        )
+        assert b'name="caption"\r\n\r\nhi\r\n' in body
+        assert b'name="access_token"\r\n\r\ntok\r\n' in body
+        assert b'name="source"; filename="p.jpg"' in body
+        assert b"Content-Type: image/jpeg" in body
+        assert b"JPEGDATA" in body
+        assert body.endswith(b"--B--\r\n")
 
 
 class TestCreatePost:

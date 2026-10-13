@@ -24,7 +24,7 @@ resolution: `config.yaml` at the project root (or `--config`), with a
 .venv/bin/social-bot whoami                       # token + manageable pages
 .venv/bin/social-bot feed --limit 5
 .venv/bin/social-bot blog scan                    # queue new drafts (no token needed)
-.venv/bin/social-bot blog image --limit 1         # generate AI images for drafts (needs image_gen.api_key)
+.venv/bin/social-bot blog diagram --limit 1       # render code-drawn diagrams for drafts
 .venv/bin/social-bot blog publish --dry-run       # post the approved queue (needs a token)
 .venv/bin/social-bot serve --port 8083            # dashboard + review UI + schedulers
 .venv/bin/social-bot post --dry-run --message "…" # then drop --dry-run to post
@@ -68,12 +68,9 @@ gate every send.
 
 The **Rewrite with Command Code** button on `/review/{id}` does not run an AI
 itself — it marks the draft. A host-side worker does the rewrite with the Command
-Code CLI and posts the result back (nothing here approves or posts). The same
-worker also serves **Regenerate image prompt**, which asks only for a fresh image
-prompt for the style you picked (the caption is left as approved) and renders
-nothing — the prompt lands on the page for you to read (or edit), and **Regenerate
-image** is what renders it. The request's own kind (`Draft.rewrite_mode`) tells the
-two apart.
+Code CLI and posts the result back (nothing here approves or posts). The
+request's own kind (`Draft.rewrite_mode`) tells a plain rewrite from one locked
+to the voice you picked.
 
 ```sh
 .venv/bin/python scripts/rewrite_worker.py             # poll forever
@@ -87,6 +84,13 @@ It needs Command Code installed and logged in on the host (`cmd login`), and
 `rewrite.api_base` defaults to `http://127.0.0.1:8083` (this app as the worker
 sees it); from another machine point it at the deployed URL — `site.user` /
 `site.password` in `credentials.yaml` are sent as HTTP basic auth.
+
+**Original post ideas (optional).** The same worker also fulfils **Generate
+ideas** on `/review` (and `blog ideas --request`): a batch of *original* post
+angles drawn from the systems in `ideas.topics_file`
+([content-pipeline.md](content-pipeline.md) §2d). It needs `ideas.enabled: true`;
+each proposed idea lands as an `extracted` draft on `/review`, and nothing posts
+without a human approval. List the systems with `blog topics`.
 
 **The operator's own voice (optional).** With `voice.enabled: true` the worker also
 attaches the operator's own messages closest to each draft, plus the learned
@@ -171,7 +175,7 @@ load-balancer/healthcheck at `/live` for restarts and `/ready` for routing.
 On `SIGTERM` (e.g. `docker compose down`, a redeploy), `serve` marks itself
 not-ready, stops accepting new publishes/scans/refreshes (503), waits up to 30s
 for an in-flight publish to finish, then cancels the refresh/scan/posting/token
-loops and any background image jobs. Keep uvicorn's `--timeout-graceful-shutdown`
+loops. Keep uvicorn's `--timeout-graceful-shutdown`
 above that window so a slow post is not killed mid-flight.
 
 ## Data layout
@@ -206,18 +210,13 @@ same id.
 | `/api/status` 404 | Old image — rebuild (`docker compose up -d --build`). |
 | OAuth error on post | The Page token expired — check `/status` (validity + expiry), mint a fresh one, update `credentials.yaml`, `whoami` to verify. |
 | Approved but nothing shows on the Page | First, the posting schedule: an `approved` draft waits for the next `publish.post_at` slot. Drain it now with **Post approved now** / `POST /publish/run` / `blog publish`, or check `publish.private: true` — a private post is unpublished (page admins only) and stays in the queue. Set `private: false` to post publicly. |
-| Approved drafts never post on schedule | The poster is **paused** (dashboard **Pause posting** / `POST /publish/pause`; the **Post schedule** row reads `paused` and **Next post** shows `—`), `publish.post_at` is empty (timed posting off), `publish.enabled: false`, or `publish.interval_days` hasn't elapsed (a `2` means it skips until two days after the last public post). The dashboard **Next post** card and the `/status` **Post schedule** line both name the draft (`publish.next_draft`; `publish.interval_remaining` counts the days still to wait), and the **Next post** card's time is the first slot that can actually send — so `in 1 day(s)` means today's wake will be skipped, not that it posts later today. |
+| Approved drafts never post on schedule | The poster is **paused** (dashboard **Pause posting** / `POST /publish/pause`; the **Post schedule** row reads `paused` and **Next post** shows `—`), `publish.post_at` is empty (timed posting off), `publish.enabled: false`, or `publish.interval_days` hasn't elapsed (a `2` means it skips until two days after the last *scheduled* public post — a manual **Post now** / `/queue` send is never counted, so it can't hold the queue back). The dashboard **Next post** card and the `/status` **Post schedule** line both name the draft (`publish.next_draft`; `publish.interval_remaining` counts the days still to wait), and the **Next post** card's time is the first slot that can actually send — so `in 1 day(s)` means today's wake will be skipped, not that it posts later today. |
 | Draft approved by mistake, or queued too early | **Unapprove** on `/review/{id}` (`POST /review/{id}/unapprove`) returns it to `ai_draft`: it leaves the post queue (the poster skips it) but stays on `/review` for another pass, with no caption change. It is refused once a destination has a *public* post (a send cannot be undone); a private test send still un-approves. `reject` is the other exit but throws the draft away. |
 | Hashtags missing from a post | Ensure the image includes the `Draft.post_text` fix (rebuild). Hashtags are appended to the caption at publish time. |
 | Draft stuck `extracted` | No rewrite yet — the external agent must `POST /api/drafts/{id}/rewrite`, or the rewriter worker (next row) must pick up a requested rewrite. |
 | **Rewrite with Command Code** does nothing | The host-side worker isn't running (or `rewrite.enabled` is off). The button only *marks* the draft; start `scripts/rewrite_worker.py`. `GET /api/status` → `rewrite.requested` lists what is waiting, and `/review/{id}` shows any worker error (a request never runs itself; a stuck one can be cancelled). |
-| **Regenerate image prompt** does nothing | Same worker, same rules — it is a second kind of request on the same queue (`Draft.rewrite_mode: image`). One request per draft: asking for either cancels the other kind. |
-| The new prompt landed but the picture did not change | By design: the prompt-only request never renders (a picture must not land from a prompt nobody has read). Press **Regenerate image** on `/review/{id}` to render it. |
-| **Image style** changed but nothing used it | The picker governs both image buttons: **Regenerate image** renders that treatment, **Regenerate image prompt** has the agent write a subject for it. Both submit the compose form, so the pick is saved with the action — no separate **Save** needed. |
-| Every image looks the same | The prompt, not the treatment, is usually the cause. Check `recent_images` in the worker's payload (`GET /api/rewrite-queue`) — the agent is told not to repeat those subjects, so a stale or empty list lets it loop. **Regenerate image prompt** on `/review/{id}` replaces one draft's prompt without touching its approved caption or the style you picked; render it with **Regenerate image**. |
-| Draft has no image after a rewrite | `serve` generates it in the background; a restart (or a provider 5xx) can leave it empty. Check the **Image jobs** section on `/status` (or the dashboard, or `GET /api/status` → `images`), then run `social-bot blog image` or the **Generate image** button on `/review/{id}`. |
-| Image generation fails (`HTTP 401`) | `image_gen.api_key` missing/invalid. The default `gen.pollinations.ai/image` endpoint requires a key (see `credentials.example.yaml`). |
-| A generated image took a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. Generation never replaces a cover on its own — only the **Regenerate image** button / `--overwrite` does, deliberately. **Regenerate image prompt** is not a replacement at all: it changes only the prompt, and the picture is replaced when you go on to press **Regenerate image**. |
+| Draft has no image | Expected unless the source post published a cover: use the source cover as-is, or press **Render diagram** on `/review/{id}` (or `social-bot blog diagram --overwrite`) for a code-drawn explainer. |
+| A diagram took a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. Only **Render diagram** / `blog diagram --overwrite` replaces a cover, deliberately. |
 
 ## Security
 
@@ -234,7 +233,10 @@ or a shared-secret middleware you add in `web.py`).
   approved now** / `blog publish`). It never approves or rewrites anything.
   `publish.post_at: []` disables timed posting.
 - `publish.enabled: false` disables publishing; `publish.interval_days`
-  enforces a minimum gap between public posts (`1` = at most one per day).
+  enforces a minimum gap between *scheduled* public posts (`1` = at most one per
+  day). A manual send — a draft's **Post now**, a `/queue` platform button — is
+  both exempt from the gate and left out of the count, so a person can always
+  post and their post never holds the poster back.
 - The rewriter worker only *rewrites* (`POST /api/drafts/{id}/rewrite`); it never
   approves or posts to the Page. `rewrite.enabled` only controls whether the
   button appears; the human gate is unchanged.
@@ -246,4 +248,9 @@ or a shared-secret middleware you add in `web.py`).
   It is a real Graph write, not a dry run — but it never goes public, it leaves
   the draft in the queue, and it doesn't count toward `interval_days`. This is
   the safe way to exercise the publish path end to end.
+- A **manual** send (a draft's **Post now**, a `/queue` platform button) is the
+  other kind outside `interval_days`: audited as `"manual": true`, never refused
+  by the gate and never counted toward it. Unlike a private send it does consume
+  the destination. The drain paths (`Post approved now` / `blog publish`) stay
+  paced — they are the machine the interval exists for.
 - Keep `--dry-run` working on every publish path.

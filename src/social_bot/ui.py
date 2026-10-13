@@ -309,6 +309,16 @@ form { display: inline; }
                font-weight: 600; }
 .chip .count { font-size: .72rem; opacity: .75; font-variant-numeric: tabular-nums; }
 .chip-active .count { opacity: .88; }
+/* A chip that is a checkbox (e.g. the destination picker): the pill IS the
+   control, so the native box is visually hidden but stays focusable — :has()
+   still reads its checked state without a separate "active" class. */
+label.chip { cursor: pointer; position: relative; }
+label.chip input[type=checkbox] { position: absolute; opacity: 0; width: 1px;
+        height: 1px; margin: 0; }
+label.chip:has(input:checked) { background: var(--accent); border-color: var(--accent);
+        color: var(--accent-fg); font-weight: 600; }
+label.chip:has(input:focus-visible) { outline: 2px solid var(--accent);
+        outline-offset: 2px; }
 .search-form { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem;
                margin-bottom: 1rem; }
 .field-inline { display: inline-flex; align-items: center; gap: .5rem; }
@@ -318,6 +328,13 @@ form { display: inline; }
 .field label, .field-label { display: block; font-size: .7rem; font-weight: 700;
         letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
         margin-bottom: .4rem; }
+/* A checkbox chip living inside a `.field` (the destination picker): the rule
+   above styles plain field labels, and without this the chip flattens into one
+   — a full-width block with the text stuck at the top instead of centred in
+   the pill — so the chip's own presentation is re-asserted here. */
+.field label.chip { display: inline-flex; align-items: center; font-size: .82rem;
+        font-weight: 600; letter-spacing: normal; text-transform: none;
+        color: var(--ink-2); margin-bottom: 0; }
 textarea, input[type=text], input[type=search], select {
         font: inherit; width: 100%; padding: .55rem .6rem; color: var(--fg);
         border-radius: var(--radius); border: 1px solid var(--border);
@@ -425,7 +442,9 @@ a.permalink { font-size: .82rem; }
         align-items: start; }
 .hero { border-radius: var(--radius-lg); overflow: hidden; border: 1px solid var(--border);
         background: var(--surface-2); margin-bottom: 1.5rem; }
-.hero img { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover; }
+/* Full image, never cropped: every post image is portrait 1080x1350, and the
+   operator must see exactly what will post — a 16:9 cover cut the title off. */
+.hero img { display: block; width: 100%; height: auto; }
 .composer { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
 .masthead { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
 .rail-block { padding: 1rem; border-bottom: 1px solid var(--border); }
@@ -450,7 +469,7 @@ details.dna pre, details.voice pre { white-space: pre-wrap; overflow-wrap: anywh
 .post-preview .body { padding: 0 1rem .5rem; white-space: pre-wrap; overflow-wrap: anywhere; }
 .post-preview .tags { padding: .5rem 1rem .75rem; color: var(--accent); overflow-wrap: anywhere;
               border-top: 1px solid var(--border); font-size: .85rem; font-weight: 600; }
-.post-preview .media { width: 100%; aspect-ratio: 16 / 9; object-fit: cover; display: block;
+.post-preview .media { width: 100%; height: auto; display: block;
               border-top: 1px solid var(--border); }
 .action-bar { position: sticky; bottom: 0; z-index: 5; display: flex; flex-wrap: wrap;
               gap: .5rem; align-items: center; margin-top: 1.5rem; padding: .8rem .2rem;

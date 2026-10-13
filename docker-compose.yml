@@ -23,6 +23,10 @@ services:
     image: social-bot:latest
     container_name: social-bot
     restart: unless-stopped
+    # Reach the host from inside the container — linkin-bot (the LinkedIn
+    # gateway, POST /post) publishes its port on the host at host:8082.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     environment:
       - TZ=Asia/Ho_Chi_Minh        # schedule hours + feed timestamps are container-local
       # The token comes from credentials.yaml (mounted below); this overrides

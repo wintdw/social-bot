@@ -7,7 +7,7 @@ result back — which clears the request. A failure is posted to
 ``POST /api/drafts/{id}/rewrite-error`` so the draft page can show it, instead of
 the request waiting forever.
 
-Three kinds of request ride that one queue, told apart by the draft's
+Two kinds of request ride that one queue, told apart by the draft's
 ``rewrite_mode``:
 
 ``caption``
@@ -18,14 +18,17 @@ Three kinds of request ride that one queue, told apart by the draft's
     "Rewrite in this voice" — the same whole rewrite, except the register is the
     one the operator picked (``build_prompt(..., voice_locked=True)``: the contract
     names that key and forbids another). Posted back to the same endpoint, where
-    ``receive_rewrite`` re-asserts the pick rather than taking the run's word for it
-    — the operator's call, like the ``image_style`` in the kind below.
-``image``
-    "Regenerate image prompt" — the caption is already settled, only a fresh
-    ``image_prompt`` is wanted (``build_image_prompt``, a much smaller task), posted
-    back to ``POST /api/drafts/{id}/image-prompt``, which stores it and leaves the
-    caption, the operator's chosen ``image_style`` and the draft's state alone.
-    Nothing is rendered: the operator presses "Regenerate image" when it reads right.
+    ``receive_rewrite`` re-asserts the pick rather than taking the run's word for it.
+
+**Idea seeds (original posts).** The same worker also fulfils a request for
+*original* post ideas ("Generate ideas" on /review, or ``blog ideas --request``).
+That is a different input from the source feeds: ``GET /api/ideas`` carries the
+theme systems (``ideas.topics_file`` — Elasticsearch, ClickHouse, …), the titles
+already queued, the DNA and the recent captions, and a ``requested`` flag the
+worker polls. When set, ``build_ideas_prompt`` asks for a batch of angles drawn
+from those systems' own architecture, and the result is posted to
+``POST /api/ideas`` — each idea lands as an ``extracted`` draft awaiting the
+normal rewrite and a human approval. No article is fetched or reposted.
 
 **The operator's own voice.** Before a caption task runs, the worker asks
 ``social_bot.voice`` for the operator's own messages closest to the draft and
@@ -70,7 +73,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from social_bot import voice  # noqa: E402
 from social_bot.config import load_config  # noqa: E402
 from social_bot.draft_pipeline import rewrite_config  # noqa: E402
-from social_bot.drafts import REWRITE_CAPTION_VOICE, REWRITE_IMAGE  # noqa: E402
+from social_bot.drafts import REWRITE_CAPTION_VOICE  # noqa: E402
 
 
 class WorkerError(Exception):
@@ -114,32 +117,6 @@ def _request_json(cfg: dict, method: str, url: str, payload: dict | None = None)
 
 def _bullet_list(values) -> str:
     return ", ".join(str(value) for value in (values or [])) or "(none configured)"
-
-
-def _style_block(payload: dict) -> str:
-    """Every configured treatment's own brief, as prompt headings.
-
-    The briefs, not just their key names: a prompt has to *serve* the style it
-    picks, and a name alone cannot say what that style draws.
-    """
-    briefs = payload.get("image_style_briefs") or {}
-    return (
-        "\n\n".join(f"### image_style: {key}\n{text}" for key, text in briefs.items() if text)
-        or "(no treatment briefs configured — follow the DNA §9.2 table)"
-    )
-
-
-def _recent_images_block(payload: dict) -> str:
-    """The image prompts already written, newest first — what not to repeat."""
-    recent = payload.get("recent_images") or []
-    return (
-        "\n".join(
-            f"- [{item.get('image_style') or 'default'}] {item.get('image_prompt')}"
-            for item in recent
-            if item.get("image_prompt")
-        )
-        or "(none)"
-    )
 
 
 def _my_voice(cfg: dict, draft: dict) -> str:
@@ -218,8 +195,6 @@ def build_prompt(
         or "(none)"
     )
     mastheads = payload.get("mastheads") or {}
-    style_block = _style_block(payload)
-    recent_images_block = _recent_images_block(payload)
     # The operator's own voice, when there is any: omitted entirely otherwise, so a
     # run without a corpus reads exactly as it did before this existed.
     my_voice_rule = (
@@ -246,79 +221,108 @@ def build_prompt(
         "in the caption.\n"
         '  "commentary":   2-4 sentences for the reviewer: voice, format/hook, '
         "drama level, anything to confirm.\n"
-        '  "image_prompt": English; ONE concrete visual concept for this post, '
-        "written to serve the image_style you chose — read that style's brief "
-        "below (it says what the style draws, and `diagram` says how to name its "
-        "labels). Also the image's alt text.\n"
-        '  "image_style":  exactly one of: '
-        f"{_bullet_list(payload.get('image_styles'))}\n"
         f"{voice_contract}\n\n"
         "Hard rules:\n"
         f"- Pick exactly ONE masthead, verbatim, as line 1 — from: "
         f"{_bullet_list(mastheads.get('choices'))} (default "
         f"{mastheads.get('default') or 'none'}).\n"
         "- Write in ONE voice only; do not mix registers.\n"
+        "- Name the product the post is about (MongoDB, Kafka, ClickHouse…) "
+        "plainly and early, once, when the draft centres on one — a reader must "
+        "not have to guess it from feature names (writeConcern, ISR…).\n"
         f"{voice_rule}"
         f"{my_voice_rule}"
         "- Do NOT imitate the recent captions' openers, closers, or vocabulary.\n"
-        "- Do NOT reuse a subject or a composition from the recent images — pick "
-        "something different for THIS post's idea.\n"
         "- No hype, no invented facts, no engagement bait, no domain in the caption.\n\n"
         "=== RECENT CAPTIONS (avoid repeating) ===\n"
         f"{recent_block}\n\n"
-        "=== RECENT IMAGES (avoid repeating these subjects) ===\n"
-        f"{recent_images_block}\n\n"
         "=== BRAND BRIEF (Atento DNA) ===\n"
         f"{payload.get('dna') or '(no DNA configured)'}\n\n"
         "=== VOICE MENU (pick one key) ===\n"
         f"{voice_block}\n\n"
         f"{my_voice_block}"
-        "=== IMAGE STYLE BRIEFS (write the image_prompt to serve the one you pick) ===\n"
-        f"{style_block}\n\n"
         "=== DRAFT TO REWRITE ===\n"
         f"{json.dumps(draft, ensure_ascii=False, indent=2)}\n"
+        "=== IMAGE ===\n"
+        "Do not write an image prompt. The post uses the source article's own cover "
+        "image, or a code-drawn diagram the operator renders with `blog diagram`; "
+        "for a few posts — and only when a drawn figure really explains the idea — "
+        "the operator may draw an illustration with the `anatomy` skill instead. "
+        "You never choose and never describe the image.\n"
     )
 
 
-def build_image_prompt(payload: dict, draft: dict) -> str:
-    """The task for a *prompt-only* rewrite: a fresh image prompt, caption untouched.
+def build_ideas_prompt(payload: dict) -> str:
+    """The task for one headless run that proposes *original* post ideas.
 
-    Much smaller than ``build_prompt``: the caption is not being rewritten, so the
-    DNA, the voice menu and the masthead choices are all beside the point. What
-    matters is what the picture must be — the treatment briefs, the subjects
-    already used, and this post's own caption — which is exactly the pair the
-    caption rewrite was missing when it illustrated three posts the same way.
-
-    The treatment is **not** the agent's to pick here, unlike ``build_prompt``: the
-    operator chose it on /review/{id} and it is the post's own ``image_style``, so
-    the task is to write a subject that serves *that* brief. The result carries no
-    ``image_style`` at all — ``receive_image_prompt`` would ignore one — and asking
-    for it only invited the agent to overrule the pick.
+    ``payload`` is ``GET /api/ideas``: the theme systems (``topics``, each an
+    architecture to draw from), the titles already queued (``existing``) so nothing
+    repeats, the DNA (which owns the content pillars) and the recent captions.
+    There is nothing to fetch — the systems are well known, and the run draws on
+    its own knowledge of each one's architecture and official documentation. Each
+    idea is asked to be **approachable** (a reader who knows the basics can follow
+    it), go deep in **one** spot, and start from a **real, familiar problem** — not
+    a surface "what is X" and not an internals tour.
     """
+    per_run = max(1, int(payload.get("per_run") or 3))
+    topics = payload.get("topics") or []
+    topics_block = (
+        "\n".join(
+            f"- {topic.get('name')}" + (f"  (docs: {topic.get('url')})" if topic.get("url") else "")
+            for topic in topics
+            if topic.get("name")
+        )
+        or "(no themes configured)"
+    )
+    existing_block = "\n".join(f"- {title}" for title in payload.get("existing") or []) or "(none)"
+    recent = payload.get("recent") or []
+    recent_block = (
+        "\n\n".join(
+            f"--- recent caption ({item.get('id')}) ---\n{item.get('caption', '')}"
+            for item in recent
+            if item.get("caption")
+        )
+        or "(none)"
+    )
     return (
-        "You are the Atento image rewriter. Write a NEW image prompt for exactly ONE "
-        "post. Its caption is already written and approved: do not rewrite it, quote "
-        "it, or comment on it.\n\n"
-        "The image style is already chosen for this post — it is the `image_style` "
-        "field in the post below — so do NOT pick one. Write the prompt for that "
-        "style, serving its brief (it says what the style draws, and `diagram` says "
-        "how to name its labels).\n\n"
-        "Reply with ONLY a single JSON object — no prose, no markdown fence — with "
-        "exactly this one key:\n"
-        '  "image_prompt": English; ONE concrete visual concept for this post, '
-        "written to serve the post's image_style. Also the image's alt text.\n\n"
+        "You are the Atento idea generator. Propose original Facebook Page post "
+        f"ideas for the Atento Education page — exactly {per_run} of them.\n\n"
+        "These are ORIGINAL posts, not summaries of an article: each idea takes "
+        "ONE system below, digs into a single aspect of it, and explains that "
+        "aspect through a real problem readers have met. Use your own knowledge "
+        "of each system's architecture and official documentation; do not invent "
+        "facts, version numbers, or benchmarks.\n\n"
+        "Reply with ONLY a single JSON object — no prose, no markdown fence — "
+        "with exactly these keys:\n"
+        f'  "ideas": an array of exactly {per_run} objects, each '
+        '{"topic": "one theme below, verbatim", "title": "the post\'s hook/angle", '
+        '"excerpt": "1-3 sentences: the familiar problem it starts from, the single '
+        'aspect it explains, and what the reader takes away"}.\n\n'
         "Hard rules:\n"
-        "- Depict THIS post's idea as something you can see, not a paraphrase of the "
-        "caption.\n"
-        "- Serve the post's image_style brief; do not restate or contradict it, and "
-        "do not send an image_style of your own.\n"
-        "- Do NOT reuse a subject or a composition from the recent images below.\n\n"
-        "=== RECENT IMAGES (avoid repeating these subjects) ===\n"
-        f"{_recent_images_block(payload)}\n\n"
-        "=== IMAGE STYLE BRIEFS (write the image_prompt to serve the post's own) ===\n"
-        f"{_style_block(payload)}\n\n"
-        "=== POST (its image is being redone) ===\n"
-        f"{json.dumps(draft, ensure_ascii=False, indent=2)}\n"
+        "- One system per idea, and `topic` must be one of the themes below, "
+        "verbatim.\n"
+        "- Aim at a wide audience: a reader who knows the basics must be able to "
+        "follow the post without a deep infrastructure dive.\n"
+        "- Go deep in ONE spot only — a single mechanism, trade-off, or failure "
+        "mode, not a survey of several. Skip the textbook 'X là gì'.\n"
+        "- Anchor each idea in a real, familiar problem — a production incident, "
+        "a bill that spiked, a slow query, a migration gone wrong, a page that "
+        "felt broken — so the reader recognises their own situation before the "
+        "mechanism is named.\n"
+        "- `title` is the hook that would be the post's opening line: concrete, "
+        "specific, and naming the system (MongoDB, Kafka, …) so a reader knows "
+        "what it is about; no hype, no clickbait, no 'Bạn có biết…'.\n"
+        "- Do NOT repeat any title already queued, and do not imitate the recent "
+        "captions' openers, closers, or vocabulary.\n"
+        "- No invented statistics, quotes, or achievements.\n\n"
+        "=== THEME SYSTEMS (draw from these) ===\n"
+        f"{topics_block}\n\n"
+        "=== BRAND BRIEF (Atento DNA — the content pillars live here) ===\n"
+        f"{payload.get('dna') or '(no DNA configured)'}\n\n"
+        "=== IDEAS ALREADY QUEUED (do not repeat) ===\n"
+        f"{existing_block}\n\n"
+        "=== RECENT CAPTIONS (avoid repeating their angles) ===\n"
+        f"{recent_block}\n"
     )
 
 
@@ -415,37 +419,20 @@ def process_once(cfg: dict, *, draft_id: str = "", dry_run: bool = False) -> int
     done = 0
     for draft in drafts:
         ident = str(draft.get("id") or "")
-        # Three kinds of request share this queue: a full rewrite, the same rewrite
-        # in a voice the operator picked, and a prompt-only one ("the caption is
-        # fine, the picture is not") — which is the same run with a smaller prompt
-        # and a different endpoint to post back to.
-        image_only = draft.get("rewrite_mode") == REWRITE_IMAGE
+        # Two kinds of request share this queue: a full rewrite and the same
+        # rewrite in a voice the operator picked.
         voice_locked = draft.get("rewrite_mode") == REWRITE_CAPTION_VOICE
-        # The operator's own voice rides along with the caption tasks only: an
-        # image prompt is an English visual concept, where their chat register is
-        # beside the point.
-        my_voice = "" if image_only else _my_voice(cfg, draft)
-        prompt = (
-            build_image_prompt(payload, draft)
-            if image_only
-            else build_prompt(payload, draft, voice_locked=voice_locked, my_voice=my_voice)
-        )
-        task = f"a new image prompt for {ident}" if image_only else ident
-        endpoint = "image-prompt" if image_only else "rewrite"
+        my_voice = _my_voice(cfg, draft)
+        prompt = build_prompt(payload, draft, voice_locked=voice_locked, my_voice=my_voice)
         if dry_run:
-            extra = ""
-            if not image_only:
-                extra = f", {len(my_voice)} chars of voice" if my_voice else ", no voice examples"
-            print(f"[rewriter] would rewrite {task} ({len(prompt)} chars of prompt{extra})")
+            extra = f", {len(my_voice)} chars of voice" if my_voice else ", no voice examples"
+            print(f"[rewriter] would rewrite {ident} ({len(prompt)} chars of prompt{extra})")
             continue
-        print(f"[rewriter] rewriting {task}…", flush=True)
+        print(f"[rewriter] rewriting {ident}…", flush=True)
         try:
             rewrite = run_commandcode(settings, prompt)
-            _request_json(cfg, "POST", f"{base}/api/drafts/{ident}/{endpoint}", rewrite)
-            print(
-                f"[rewriter] {ident}: {'image prompt' if image_only else 'rewrite'} posted",
-                flush=True,
-            )
+            _request_json(cfg, "POST", f"{base}/api/drafts/{ident}/rewrite", rewrite)
+            print(f"[rewriter] {ident}: rewrite posted", flush=True)
             done += 1
         except WorkerError as exc:
             print(f"[rewriter] {ident} failed: {exc}", file=sys.stderr, flush=True)
@@ -456,6 +443,42 @@ def process_once(cfg: dict, *, draft_id: str = "", dry_run: bool = False) -> int
             except WorkerError as post_exc:
                 print(f"[rewriter] could not record the failure: {post_exc}", file=sys.stderr)
     return done
+
+
+def process_ideas_once(cfg: dict, *, dry_run: bool = False) -> int:
+    """Propose a batch of original post ideas if one was requested.
+
+    Polls ``GET /api/ideas``; when its ``requested`` flag is set, runs one headless
+    ``build_ideas_prompt`` and posts the proposed ideas to ``POST /api/ideas``
+    (queued as ``extracted`` drafts). A failure goes to ``POST /api/ideas/error``
+    so the request does not wait forever. Returns how many ideas were queued.
+    """
+    settings = rewrite_config(cfg)
+    base = str(settings.get("api_base") or "").rstrip("/")
+    payload = _request_json(cfg, "GET", f"{base}/api/ideas")
+    if not payload.get("requested"):
+        return 0
+    prompt = build_ideas_prompt(payload)
+    if dry_run:
+        print(f"[rewriter] would propose ideas ({len(prompt)} chars of prompt)")
+        return 0
+    print("[rewriter] proposing ideas…", flush=True)
+    try:
+        result = run_commandcode(settings, prompt)
+        ideas = result.get("ideas") if isinstance(result, dict) else None
+        if not isinstance(ideas, list) or not ideas:
+            raise WorkerError("the idea run returned no `ideas` array")
+        response = _request_json(cfg, "POST", f"{base}/api/ideas", {"ideas": ideas})
+        added = int(response.get("added", 0) or 0)
+        print(f"[rewriter] ideas: queued {added} draft(s)", flush=True)
+        return added
+    except WorkerError as exc:
+        print(f"[rewriter] idea generation failed: {exc}", file=sys.stderr, flush=True)
+        try:
+            _request_json(cfg, "POST", f"{base}/api/ideas/error", {"error": str(exc)})
+        except WorkerError as post_exc:
+            print(f"[rewriter] could not record the failure: {post_exc}", file=sys.stderr)
+        return 0
 
 
 def main(argv: list[str]) -> int:
@@ -484,11 +507,12 @@ def main(argv: list[str]) -> int:
     if args.draft or args.once or args.dry_run:
         try:
             count = process_once(cfg, draft_id=args.draft, dry_run=args.dry_run)
+            ideas = 0 if args.draft else process_ideas_once(cfg, dry_run=args.dry_run)
         except WorkerError as exc:
             print(f"rewrite_worker: {exc}", file=sys.stderr)
             return 1
         if not args.dry_run:
-            print(f"rewrite_worker: {count} rewrite(s) posted")
+            print(f"rewrite_worker: {count} rewrite(s) posted, {ideas} idea(s) queued")
         return 0
 
     poll = float(settings.get("poll_seconds", 15.0))
@@ -500,6 +524,7 @@ def main(argv: list[str]) -> int:
     while True:
         try:
             process_once(cfg)
+            process_ideas_once(cfg)
         except WorkerError as exc:  # a transient HTTP failure: log and keep polling
             print(f"[rewriter] {exc}", file=sys.stderr, flush=True)
         time.sleep(poll)

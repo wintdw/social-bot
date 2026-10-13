@@ -39,10 +39,11 @@ DEFAULTS: dict[str, Any] = {
             "token": "",  # populated by credentials.yaml (git-ignored)
         },
         "linkedin": {
-            "base_url": "https://api.linkedin.com",
-            "api_version": "",  # LinkedIn-Version header, e.g. "202601"
-            "author_urn": "",  # urn:li:organization:<id>
-            "token": "",  # populated by credentials.yaml (git-ignored)
+            # linkin-bot (a sibling service) owns the LinkedIn OAuth token and
+            # talks to LinkedIn; this app posts through its POST /post gateway.
+            "base_url": "http://host.docker.internal:8082",
+            "timeout_seconds": 30.0,
+            "visibility": "PUBLIC",  # PUBLIC | CONNECTIONS
         },
     },
     "feed": {
@@ -70,13 +71,13 @@ DEFAULTS: dict[str, Any] = {
     },
     # Publishing is human-gated: destinations are what a review-page approval
     # may post to. `dna_file` is an optional path to your brand-voice brief and
-    # `voices` an optional menu of per-post voice briefs (key -> file, like
-    # image_gen.styles); both are surfaced to the rewriter through
+    # `voices` an optional menu of per-post voice briefs (key -> file);
+    # both are surfaced to the rewriter through
     # GET /api/drafts. `dir` + `log_name` are the append-only audit log shown on
     # /publish.
     "publish": {
         "enabled": True,
-        "destinations": ["facebook"],
+        "destinations": ["facebook", "linkedin"],
         # Timed posting: a list of container-local "HH:MM" slots. The serve
         # scheduler posts *human-approved* drafts at each slot (oldest first,
         # up to `post_per_slot`), never approving anything itself. Empty (the
@@ -85,11 +86,17 @@ DEFAULTS: dict[str, Any] = {
         # once that day at a random time inside it (stable per day across
         # restarts), which reads less mechanically than a fixed slot.
         "post_at": [],
+        # Per-destination slot overrides, e.g. {"linkedin": ["14:00-14:30"]}. A
+        # destination not listed here uses `post_at`. Each destination has its own
+        # slots and its own interval_days pacing.
+        "destination_post_at": {},
         "post_per_slot": 1,
-        # Minimum days between *public* posts (0 = no minimum). Enforced by
-        # publish_draft, so it paces the scheduler and a manual "Post now"
-        # alike; private (unpublished) sends don't count. 1 = at most one post
-        # per day.
+        # Minimum days between *scheduled* public posts (0 = no minimum).
+        # Enforced by publish_draft on the unattended drain, so it paces the
+        # poster (post_at slots, blog publish, Post approved now); private
+        # (unpublished) sends and manual sends (a draft's Post now, a /queue
+        # platform button) are outside it entirely — they are never refused and
+        # never counted. 1 = at most one scheduled post per day.
         "interval_days": 0,
         # Real sends but unpublished (visible to page admins only): the Graph
         # API's way to test posting without going public. Private sends are
@@ -102,7 +109,7 @@ DEFAULTS: dict[str, Any] = {
         # Empty `choices` + `default` disables the masthead.
         "mastheads": {"choices": [], "default": ""},
         "dna_file": "",
-        # One file per voice under docs/voices/ (key -> path), like image_gen.styles:
+        # One file per voice under docs/voices/ (key -> path):
         # the rewriter picks a key per post and returns it as `voice`, and each
         # file's brief + samples ride along in GET /api/drafts `voices`. The DNA
         # stays the structural contract; a voice refines how one register sounds.
@@ -115,12 +122,6 @@ DEFAULTS: dict[str, Any] = {
         # same opener/closer/vocabulary across posts (the pipeline lints against
         # the same set). 0 sends none.
         "recent_captions": 12,
-        # The same, for images: the most recent `image_prompt`/`image_style`
-        # pairs, sent as `recent_images` so the rewriter can see what it has
-        # already illustrated and not repeat a subject or a composition. This is
-        # the anti-repetition signal that replaced the DNA's old "every post a
-        # different metaphor" decree. 0 sends none.
-        "recent_images": 12,
         "dir": "data/publish",
         "log_name": "published.jsonl",
     },
@@ -139,39 +140,20 @@ DEFAULTS: dict[str, Any] = {
         "enrich": True,  # fetch each new post page for title/excerpt/image
         "user_agent": "social-bot/0.1 (+content pipeline)",
     },
-    # AI image generation for drafts (Pollinations.ai by default). Off by
-    # default: it makes outbound calls and slows a scan, so opt in per project.
-    # `overwrite` true replaces a source image with a generated one; false (the
-    # default) only fills drafts that have no image, keeping a source post's
-    # own cover. `base_url` is the prompt endpoint; the
-    # default is the modern gateway (clean flux output, needs image_gen.api_key
-    # in credentials.yaml). The legacy `https://image.pollinations.ai/prompt`
-    # needs no key but is watermarked and locked to the older `sana` model.
-    # `style_file` is a short brand-look brief prepended to every prompt — the
-    # palette. Everything else about a look (medium, composition, lettering and
-    # what to avoid) belongs to the per-post treatment file, so the two never
-    # fight each other.
-    # `styles` is a menu of those treatments (key -> file): the rewriter picks
-    # one per post like the masthead, and the chosen treatment LEADS the prompt,
-    # ahead of the `style_file` palette. `default_style` is the fallback key.
-    # An empty `styles` disables the menu (the `style_file` look alone).
-    # `model` must be one the endpoint serves: the gen.pollinations.ai gateway
-    # takes provider-qualified names (e.g. "openai/gpt-image-1-mini"); the
-    # legacy endpoint ignores it entirely. The default follows a treatment
-    # brief's instructions far better than flux.1-schnell.
-    "image_gen": {
-        "enabled": False,
-        "provider": "pollinations",
-        "base_url": "https://gen.pollinations.ai/image",
-        "style_file": "",
-        "styles": {},
-        "default_style": "",
-        "overwrite": False,
-        "model": "openai/gpt-image-1-mini",
-        "width": 1080,
-        "height": 1350,
-        "timeout_seconds": 60.0,
-        "api_key": "",  # populated by credentials.yaml, never config.yaml
+    # Idea seeds: the systems/architectures *original* Atento posts are drawn
+    # from — NOT `sources[]` (those are feeds to repost). Nothing is fetched:
+    # `topics_file` is a plain list of themes (Elasticsearch, ClickHouse, Loki,
+    # MySQL, …) the rewriter agent turns into original posts from each system's
+    # own architecture and documentation. The app only holds the themes and
+    # accepts the agent's ideas as drafts (see draft_pipeline.queue_ideas).
+    "ideas": {
+        "enabled": False,  # opt-in, like rewrite/voice
+        "topics_file": "data/ideas/topics.md",  # one system/theme per line
+        "source_name": "atento-original",  # the `source` on generated drafts
+        "dir": "data/ideas",  # dedupe ledger + request state
+        "seen_name": "seen.json",
+        "state_name": "state.json",
+        "per_run": 3,  # how many ideas one agent run should propose
     },
     # Rewriter worker (scripts/rewrite_worker.py). When enabled, /review/{id}
     # offers a "Rewrite with Command Code" button that marks the draft; a
@@ -291,6 +273,20 @@ def _hhmm_minutes(value: str, field: str) -> int:
     return hour * 60 + minute
 
 
+def _check_post_slots(slots, field: str) -> None:
+    """Validate a list of HH:MM slots or HH:MM-HH:MM windows (publish.post_at shape)."""
+    if not isinstance(slots, list):
+        raise ValueError(f"config: {field} must be a list of HH:MM")
+    for slot in slots:
+        text = str(slot)
+        if "-" in text:
+            start, _, end = text.partition("-")
+            if _hhmm_minutes(start, field) >= _hhmm_minutes(end, field):
+                raise ValueError(f"config: {field} window {slot!r} must start before it ends")
+        else:
+            _hhmm_minutes(text, field)
+
+
 def validate(cfg: dict) -> None:
     """Raise ValueError on obviously unusable configuration."""
     # Imported here (not at module scope) to avoid a config <-> destinations
@@ -332,21 +328,14 @@ def validate(cfg: dict) -> None:
         raise ValueError("config: publish.interval_days must be >= 0")
     if int(publish.get("recent_captions", 0)) < 0:
         raise ValueError("config: publish.recent_captions must be >= 0")
-    if int(publish.get("recent_images", 0)) < 0:
-        raise ValueError("config: publish.recent_images must be >= 0")
-    post_at = publish.get("post_at", [])
-    if not isinstance(post_at, list):
-        raise ValueError("config: publish.post_at must be a list of HH:MM")
-    for slot in post_at:
-        text = str(slot)
-        if "-" in text:
-            start, _, end = text.partition("-")
-            if _hhmm_minutes(start, "publish.post_at") >= _hhmm_minutes(end, "publish.post_at"):
-                raise ValueError(
-                    f"config: publish.post_at window {slot!r} must start before it ends"
-                )
-        else:
-            _hhmm_minutes(text, "publish.post_at")
+    _check_post_slots(publish.get("post_at", []), "publish.post_at")
+    per_destination = publish.get("destination_post_at", {})
+    if not isinstance(per_destination, dict):
+        raise ValueError("config: publish.destination_post_at must map destination -> slots")
+    for name, slots in per_destination.items():
+        if name not in known:
+            raise ValueError(f"config: unknown publish.destination_post_at destination {name!r}")
+        _check_post_slots(slots, f"publish.destination_post_at.{name}")
 
     blog = cfg.get("blog", {})
     if float(blog.get("timeout_seconds", 30)) <= 0:
@@ -361,15 +350,13 @@ def validate(cfg: dict) -> None:
     for slot in scan_at:
         _hhmm_minutes(str(slot), "blog.scan_at")
 
-    image_gen = cfg.get("image_gen", {})
-    if image_gen.get("provider") not in ("pollinations",):
-        raise ValueError(f"config: unknown image_gen.provider {image_gen.get('provider')!r}")
-    if not str(image_gen.get("base_url", "")).startswith("https://"):
-        raise ValueError("config: image_gen.base_url must be an https URL")
-    if float(image_gen.get("timeout_seconds", 60)) <= 0:
-        raise ValueError("config: image_gen.timeout_seconds must be positive")
-    if int(image_gen.get("width", 1080)) < 1 or int(image_gen.get("height", 1350)) < 1:
-        raise ValueError("config: image_gen.width/height must be >= 1")
+    ideas = cfg.get("ideas", {})
+    if int(ideas.get("per_run", 3)) < 1:
+        raise ValueError("config: ideas.per_run must be >= 1")
+    if not str(ideas.get("topics_file", "")).strip():
+        raise ValueError("config: ideas.topics_file must not be empty")
+    if not str(ideas.get("source_name", "")).strip():
+        raise ValueError("config: ideas.source_name must not be empty")
 
     rewrite = cfg.get("rewrite", {})
     if float(rewrite.get("timeout_seconds", 600)) <= 0:

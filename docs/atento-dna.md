@@ -23,10 +23,9 @@ unchanged.
    **Vietnamese** following §4–§7. Keep technical terms in **English** (§4.3).
    Read the response's **`recent`** captions first and don't reuse their openers,
    closers, or vocabulary (§12).
-4. If the item is an **external source** (anything other than `atento-blog`),
-   credit the original author and site in the caption (§7.3).
-5. Return JSON: `caption`, `hashtags`, `cta`, `commentary`, `image_prompt`,
-   `image_style`, `voice` (§9).
+4. If the item is an **external source** (anything other than `atento-blog` /
+   `atento-original`), credit the original author and site in the caption (§7.3).
+5. Return JSON: `caption`, `hashtags`, `cta`, `commentary`, `voice` (§9).
 6. Self-check against §10 (and the AI tells in §12) before submitting.
 
 `GET /api/drafts` also carries a **`voices`** map — one entry per configured voice
@@ -38,15 +37,13 @@ the default voice's text, for convenience.) This DNA still owns structure — th
 masthead, the opening Formats, hashtags/CTA, and the output contract (§9) do not
 change; if a voice file and this one ever disagree, this file wins on structure.
 
-The same response carries **`image_style_briefs`** — the text of every configured
-visual treatment (`image_gen.styles` → `docs/image-styles/<key>.md`) — and
-**`recent_images`**, the last few `image_prompt`/`image_style` pairs already
-written. Read both before choosing `image_style` and writing `image_prompt` (§9):
-the brief is what your prompt has to serve, and the recent images are what it must
-not repeat.
+Images need nothing from you (§9): the post uses the source article's own
+cover, or the operator renders a code-drawn diagram for mechanism posts.
 
 Blog items (`sources: atento-blog`) are *Atento's own* articles — the caption's
-job is to sell the idea and send readers to the post. Event/recruit items are
+job is to sell the idea and send readers to the post. **Original** items
+(`source: atento-original`, §6.6) are also Atento's own, but written straight from
+an idea theme with **no article to link** — teach in the caption itself. Event/recruit items are
 *announcements* — the job is clear logistics + a warm call to action.
 
 ---
@@ -110,6 +107,7 @@ nằm trong file riêng dưới `docs/voices/` — pipeline gửi kèm trong `vo
 | `essay` | Personal essay / opinion (giọng Đạt): mindset, nghề nghiệp, "biết vậy thì đã…", một quan điểm cá nhân mạnh. | [voices/essay.md](voices/essay.md) |
 | `announcement` | Page announcement / community: khai giảng, seminar, workshop, recap, một lời nhắn cộng đồng. Ấm, ít kịch. | [voices/announcement.md](voices/announcement.md) |
 | `funny` | Châm biếm / hài: một bài parody hoặc "deep dive" giả nghiêm, để chia sẻ vì cái joke. Không bịa sự kiện, không nhắm vào người thật. | [voices/funny.md](voices/funny.md) |
+| `natural` | Nói thường: kể như nói với bạn, không register, không tếu của ai. Dùng cho bài test audience và mọi bài muốn nghe như người thật. | [voices/natural.md](voices/natural.md) |
 
 - Đọc file của giọng đã chọn **trước khi viết** — phần `Samples` là để chỉnh tai,
   **không** phải template để copy.
@@ -147,6 +145,12 @@ nằm trong file riêng dưới `docs/voices/` — pipeline gửi kèm trong `vo
 - Lần đầu xuất hiện một khái niệm, có thể viết tắt trong ngoặc: "Event-Driven
   Architecture (EDA)".
 - Không Việt hóa thuật ngữ ("hệ thống thiết kế" ✗ — giữ "System Design" ✓).
+- Riêng thuật ngữ **database/hạ tầng** (index, query, key, row…): giữ nguyên
+  tiếng Anh, **không diễn giải thành cụm từ Việt**. Câu chuyện kể bằng tiếng
+  Việt, nhưng tên khái niệm giữ gốc: "sparse index" ✗ "mục lục thưa",
+  "dense index" ✗ "index dày", "primary key" ✗ "khóa chính",
+  "query" ✗ "truy vấn". Người đọc ngành đã quen từ gốc; dịch ra vừa dài vừa
+  mất nghĩa chính xác.
 
 ### 4.4 Emoji & định dạng
 - Technical/essay: emoji **rất tiết chế** (0–2), không emoji trong câu chốt.
@@ -299,6 +303,24 @@ dung. Ghép một format (§5.2) với một template — chọn format hợp nh
 3. Lời mời cho hoạt động kế tiếp.
 4. Hashtag.
 
+### 6.6 Original từ theme seed (`source: atento-original`) — 120–250 từ
+
+Bài **gốc của Atento**, sinh từ một *system* trong `ideas.topics_file`
+(Elasticsearch, ClickHouse, Loki, MySQL, …). Khác bài blog: **không có bài viết gốc
+để dẫn lại và không có link** — đây là một bài giảng ngắn do chính Atento viết.
+
+1. **Mở bài** — một format §5.2 hợp với *ý tưởng* (scene, ví von, nghịch lý, câu hỏi thẳng).
+2. **Thân** — giải thích cơ chế và trade-off của hệ thống đó, đúng kiến thức của
+   người đi làm; **không bịa** số liệu, benchmark, phiên bản.
+3. **Payoff** — một câu chốt đáng nhớ (không nhất thiết là châm ngôn).
+4. **Không** đặt *"Đọc đầy đủ tại comment"* và **không** ghi nguồn (§7.3) — không có
+   bài nào để dẫn.
+5. **Hashtag** theo pillar (`#systemdesign`, `#architecture`, …).
+
+Masthead mặc định `[Học cùng Atento]` (đây là Atento dạy) — trừ khi bài chỉ để biết
+tin. Ảnh: không có cover nguồn, nên để trống (bài chữ) hoặc người duyệt vẽ diagram /
+`anatomy` (§9).
+
 ---
 
 ## 7. Hashtags & CTA
@@ -334,6 +356,9 @@ Có **hai loại item**, và cách ghi nguồn khác nhau:
 
 - **`atento-blog`** — bài của chính Atento. Không cần ghi công; CTA giữ
   *"Đọc đầy đủ tại comment"*.
+- **`atento-original`** — bài **gốc** sinh từ một theme (§6.6). Cũng là Atento viết,
+  nên **không** ghi công — nhưng **không có link**, nên **không** đặt *"Đọc đầy đủ
+  tại comment"* (không có gì để dẫn).
 - **Nguồn ngoài** — mọi `sources[]` khác (ví dụ blog của một tác giả khác).
   Đây là bài của người khác, nên phải **ghi rõ tên tác giả** trong `caption`, và
   đổi CTA thành *"Đọc bài gốc đầy đủ tại comment"* — bài gốc sẽ được pipeline
@@ -348,7 +373,8 @@ Ví dụ:
 
 > Nguồn: Sean Goedecke — "Automatically detecting AI text in my browser".
 
-- Xác định loại item qua trường `source` của draft (`atento-blog` = của Atento).
+- Xác định loại item qua trường `source` của draft (`atento-blog` = của Atento;
+  `atento-original` = bài gốc của Atento, không link — §6.6).
 - Lấy tên tác giả từ `url` + `title` của draft; **không bịa** tên người.
 - Không xác định được tác giả cá nhân thì ghi **tên ấn phẩm viết như tên riêng**
   (*"Nguồn: <tên ấn phẩm>"*) — **không được bỏ** phần ghi nguồn, nhưng cũng
@@ -395,112 +421,26 @@ Ví dụ:
 | `hashtags` | array[string] | 2–4 tag, **kèm dấu `#`**, gồm `#Atento` + `#fromfoundationtoexcellence` + 1 topic. |
 | `cta` | string | Câu kêu gọi hành động — **chỉ để người duyệt đọc**, không được đăng; bản tương ứng phải có trong `caption`. |
 | `commentary` | string | 2–4 câu cho người duyệt: register nào, **format/hook** là gì, mức drama, có gì cần xác nhận. |
-| `image_prompt` | string | **Tiếng Anh.** Một ý tưởng thị giác CỤ THỂ cho ảnh của riêng bài này, viết theo `image_style` đã chọn (§9.1). Cũng là alt text của ảnh — không cần bản dịch tiếng Việt. |
-| `image_style` | string | Phong cách vẽ cho ảnh, chọn **một** khóa theo bài như masthead (§9.2): `technical` / `editorial` / `sketch` / `bulletin` / `diagram`. Bỏ trống thì pipeline dùng mặc định. |
 | `voice` | string | Giọng viết, chọn **một** khóa theo bài (§3): `technical` / `essay` / `announcement` / `funny`. Bỏ trống thì pipeline dùng `publish.default_voice`. |
 
-**Yêu cầu chỉ đổi ảnh** (nút **Regenerate image prompt** trên `/review/{id}`, khi
-caption đã duyệt và chỉ ảnh chưa vừa ý): hợp đồng ở đây chỉ còn **một trường
-`image_prompt`**, gửi về `POST /api/drafts/{id}/image-prompt` — không có `caption`,
-`hashtags`, `cta`, `commentary`, `voice`, và **caption đã duyệt thì không được đụng
-tới**. **`image_style` là do người duyệt chọn** trong form soạn thảo và đã được lưu
-kèm yêu cầu: prompt phải viết **cho đúng style đó**, không tự chọn style khác và cũng
-không trả `image_style` về. Kết quả **không được vẽ ảnh luôn**: prompt hiện ra trên
-trang để người duyệt đọc (và sửa), rồi **Regenerate image** mới là bước vẽ. Quy tắc
-còn lại của §9.1 vẫn nguyên: không lặp lại chủ thể trong `recent_images`.
+### Ảnh: không viết prompt, không chọn style
 
-### 9.1 `image_prompt` — ảnh phải cụ thể, và phải khác nhau
+Bài đăng dùng **ảnh bìa của chính bài gốc** (pipeline lấy lúc scan), hoặc — với
+bài về **cơ chế** (nhiều thành phần trao đổi với nhau: request đi qua những đâu,
+cái gì gọi cái gì) — người duyệt tự vẽ **diagram bằng code** (nút **Render
+diagram** trên `/review/{id}`, hay `social-bot blog diagram`). Với bài mà *ý
+tưởng* cần một hình vẽ (một cơ chế, một cấu trúc, một so sánh trước/sau), người
+duyệt **có thể** vẽ **hình minh hoạ bằng skill `anatomy`** (hình isometric, xuất
+PNG rồi gắn vào draft) — **chọn lọc, không phải lúc nào cũng dùng**: mặc định
+vẫn là ảnh bìa bài gốc, và diagram code vẫn là đường dựng cho phần "cái gì gọi
+cái gì". Không có ảnh AI, nên:
 
-Ảnh được sinh tự động từ trường này. Nếu bỏ trống, hệ thống lấy `title` làm chủ
-đề — mà `title` là một khái niệm trừu tượng, nên các ảnh sẽ na ná nhau. Vì vậy
-**luôn điền `image_prompt`**.
+- **Đừng gửi `image_prompt` / `image_style`.** Pipeline vẫn nhận hai trường này
+  cho tương thích bản cũ, nhưng không có gì đọc chúng nữa.
+- Đừng tả ý tưởng thị giác, đừng chọn treatment, đừng kiểm tra ảnh bài trước —
+  không có gì để lặp lại.
 
-- **Viết bằng tiếng Anh.** Model vẽ ảnh hiểu tiếng Anh tốt hơn hẳn tiếng Việt;
-  tiếng Việt còn dễ bị vẽ thành chữ lên ảnh.
-- **Cụ thể và hình dung được**, không phải bản dịch của tiêu đề. Tả một *thứ nhìn
-  thấy được*, không tả một *khái niệm*.
-- **Prompt phục vụ `image_style` bạn chọn.** Đọc brief của style đó (gửi kèm trong
-  `image_style_briefs`, và trong khối **IMAGE STYLE BRIEFS**) rồi tả đúng thứ nó
-  vẽ: `editorial` là một tĩnh vật, `technical` là một kết cấu, `diagram` là một cơ
-  chế có tiêu đề và nhãn (§9.2). **Không phải bài nào cũng cần một ẩn dụ** — bài về cơ chế thì
-  tả cấu trúc, đừng gò nó thành ẩn dụ.
-- **Không lặp lại ảnh gần đây.** `recent_images` liệt kê `image_prompt` +
-  `image_style` của các bài vừa viết: đừng dùng lại cùng một đồ vật hay bố cục
-  (bài nào cũng "một chồng sách trên nền giấy"). Đây là cách giữ ảnh khác nhau —
-  thay cho quy tắc cũ "mỗi bài một ẩn dụ khác nhau".
-- **Chỉ tả chủ thể.** Palette do `docs/atento-image-style.md` lo; **chất liệu, bố
-  cục và những gì phải tránh** (người/mặt, chữ, các cliché) do file treatment của
-  `image_style` quyết (§9.2) — **không nhắc lại** ở đây, chỉ tập trung vào thứ sẽ
-  được vẽ.
-
-Ví dụ tốt (cụ thể, mỗi bài một chủ thể khác nhau):
-
-| Bài | `image_prompt` |
-|---|---|
-| Consumer Group | `one long ledger unspooling into several parallel readers, each taking a different strip` |
-| Kiến thức nền tảng | `a tall building whose visible floors are few but whose foundation extends far underground` |
-| Sau AI | `a hand-drawn sketch beside a finished print, the sketch faintly visible under the print` |
-| Code giỏi chưa chắc làm việc giỏi | `a single sheet of paper with one diagram, passed along a row of empty desks` |
-| Agent nói chuyện với nhau *(diagram)* | `two agents exchanging messages through one shared channel. Title: "AGENT MESSAGING". Labels: "AGENT 1", "SHARED CHANNEL", "AGENT 2"` |
-
-Ví dụ kém (trừu tượng, dễ ra ảnh giống nhau):
-
-- `Consumer Group` ✗ (thuật ngữ, không hình dung được)
-- `software architecture, scalability` ✗ (không có chủ thể cụ thể)
-- `a diagram of microservices` ✗ (chung chung, dễ thành icon cliché)
-
-Ví dụ:
-
-```json
-{
-  "caption": "Buổi phỏng vấn System Design. Ứng viên vẽ vanh vách Load Balancer, cache, cluster database.\n\nRồi interviewer hỏi một câu: \"Chi phí để chạy hệ thống này là bao nhiêu?\". Im lặng.\n\nThiết kế cho 1 triệu users không khó ở phần vẽ. Cái khó là những quyết định về architecture và trade-off phía sau — thứ quyết định hệ thống sống được hay không.\n\nĐó mới là lúc chúng ta thực sự phải \"design\".",
-  "hashtags": ["#Atento", "#fromfoundationtoexcellence", "#systemdesign"],
-  "cta": "Link khoá học System Design ở dưới comment nha. 🥰",
-  "commentary": "Register technical (giọng Dũng), format D (đám đông rồi lật), drama vừa. Luận điểm để ở cuối. Cần xác nhận link đăng ký trước khi duyệt.",
-  "image_prompt": "a wide drawing board holding one clean system sketch, surrounded by far larger discarded sketches crumpled on the floor",
-  "image_style": "technical"
-}
-```
-
-### 9.2 `image_style` — chọn phong cách theo bài
-
-Cùng một ý tưởng thị giác, vẽ theo các *chất liệu* khác nhau sẽ ra ảnh rất khác
-nhau. Mỗi bài chọn **đúng một** `image_style` theo nội dung và tông — giống như
-chọn masthead (§4.5), chọn theo **bài**, không theo vòng xoay. Palette dùng chung
-(`docs/atento-image-style.md`); mọi thứ còn lại — chất liệu, bố cục, và những gì
-phải tránh — nằm trong file treatment của style đó.
-
-| `image_style` | Dùng khi |
-|---|---|
-| `technical` | Bài System Design / Architecture, foundation — giải thích cấu trúc, cơ chế, trade-off. Nét vẽ kỹ thuật, đo đạc, có lưới và kết cấu. Không chữ. |
-| `editorial` *(mặc định)* | Bài nền tảng / nghề nghiệp / mindset chung — một ý trừu tượng cần ẩn dụ tĩnh. Tĩnh vật editorial, ấm và trầm. Không chữ. |
-| `sketch` | Essay cá nhân / ý kiến (giọng Đạt) — kể chuyện, tự vấn. Nét bút chì nhanh, hơi thô, đời thường. Không chữ. |
-| `bulletin` | Thông báo, sự kiện, cộng đồng, tin tức — cần đọc nhanh. Bố cục poster tối giản, mảng phẳng, rõ trọng tâm. Không chữ. |
-| `diagram` | Bài về **cơ chế** — nhiều thành phần trao đổi với nhau: request đi qua những đâu, cái gì gọi cái gì, cái gì chia sẻ cái gì. Bản vẽ tay màu nước, đóng khung như một trang giải thích: **một dòng tiêu đề**, cơ chế được vẽ ở giữa, các thành phần quanh nó ghi tên, mũi tên liền/nét đứt nối chúng, có thể có một đường bao quanh phần được bảo vệ (xem dưới). |
-
-- Viết **đúng một** trong năm khóa trên — không tự chế khóa mới, không dịch.
-- Chọn theo **bài viết**, không chọn cho "đa dạng": một bài technical nên là
-  `technical` kể cả khi bài trước cũng đã dùng `technical`.
-- Pipeline có mặc định (`default_style`) nếu bạn quên, nhưng **bạn phải tự chọn**.
-- Người duyệt có thể đổi lại trên `/review/{id}` trước khi sinh ảnh.
-
-**`diagram` vẽ cả chữ.** Đây là style duy nhất có chữ: **một dòng tiêu đề** và tên
-gọi các thành phần — chữ chính là nội dung của sơ đồ. Nên khi chọn `diagram`,
-`image_prompt` phải có `Title:` rồi `Labels:`, ngay sau câu tả chủ thể:
-
-    a Windows PC running a local AI agent, files and folders feeding in, a friendly agent robot and an optional cloud. Title: "LOCAL AI AGENT ON WINDOWS". Labels: "FILES", "FOLDER", "PC", "LOCAL AGENT", "CLOUD"
-
-- `Title`: **một** dòng, **tiếng Anh**, viết HOA, **tối đa 6 từ** — cái tên của
-  chính bức sơ đồ, không phải một câu văn. Không tiếng Việt có dấu.
-- `Labels`: **2–8 nhãn**, **tiếng Anh**, viết HOA, mỗi nhãn **tối đa 3 từ**. Thuật
-  ngữ kỹ thuật giữ tiếng Anh như trong caption (§4.2). Không tiếng Việt có dấu —
-  model vẽ ra chữ rác.
-- Nhãn là **tên của thành phần**, không phải câu: `"CACHE"`, `"LOAD BALANCER"`,
-  `"QUEUE"` — không phải `"Cache giúp giảm tải database"`.
-- Viết trong ngoặc kép **đúng chữ sẽ hiện trên ảnh**. `image_prompt` cũng là alt
-  text của ảnh, nên đừng để gì ngoài tiêu đề và nhãn.
-- Ngoài tiêu đề và những nhãn đó **không còn chữ nào**: không chú thích, không đoạn
-  văn, không số. Các style khác không có chữ nào cả.
+---
 
 ---
 
@@ -523,9 +463,6 @@ gọi các thành phần — chữ chính là nội dung của sơ đồ. Nên k
 - [ ] Emoji đúng liều theo register.
 - [ ] Đoạn văn: gộp các câu liên quan, ngăn câu bằng **shift-enter** trong cùng một đoạn; **dòng trống** chỉ để tách ý lớn — không mỗi câu một đoạn (§4.1, §4.4).
 - [ ] `commentary` đã điền (nêu rõ format + mức drama).
-- [ ] `image_prompt` đã điền: **tiếng Anh**, cụ thể, viết theo `image_style` đã chọn, và **khác chủ thể** với `recent_images` (cũng là alt text của ảnh).
-- [ ] Nếu `image_style` là `diagram`: có `Title: "…"` (**tiếng Anh, HOA, tối đa 6 từ**) và đoạn `Labels: "…"` với 2–8 nhãn **tiếng Anh, HOA, tối đa 3 từ** (§9.2).
-- [ ] `image_style` đã chọn: **một** khóa hợp bài (§9.2).
 - [ ] `voice` đã chọn: **một** khóa hợp bài (§3) — đã đọc file voice tương ứng.
 
 ---

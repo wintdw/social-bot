@@ -151,6 +151,14 @@ class TestClasses:
             assert not balance.errors, f"{name} has mismatched tags: {balance.errors[:5]}"
             assert not balance.stack, f"{name} has unclosed tags: {balance.stack[-5:]}"
 
+    def test_checkbox_chips_keep_their_pill_inside_a_field(self):
+        # The destination picker is a label.chip inside .field, whose
+        # plain-label rule would otherwise flatten it into a block with the
+        # text stuck at the top instead of centred in the pill.
+        rule = re.search(r"\.field label\.chip \{[^}]*\}", ui._CSS)
+        assert rule, "no .field label.chip override"
+        assert "display: inline-flex" in rule.group(0)
+
 
 class TestBadges:
     def test_every_draft_state_has_a_colour_rule(self):

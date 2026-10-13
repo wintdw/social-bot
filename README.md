@@ -21,14 +21,19 @@ and [development](docs/development.md).
 | `social-bot feed --limit 20` | Change how many posts are shown. |
 | `social-bot post --message "..."` | Post a status update to the page. |
 | `social-bot post --message "..." --link https://...` | Post with a link attachment. |
-| `social-bot post --photo https://.../pic.jpg` | Publish a photo from a public image URL. |
+| `social-bot post --photo https://.../pic.jpg` | Publish a photo (the image is downloaded, then uploaded to the page). |
 | `social-bot post --message "..." --photo https://.../pic.jpg` | Photo post, `--message` becomes its caption. |
 | `social-bot post --dry-run` | Print exactly what would be sent, send nothing. |
 | `social-bot refresh` | Fetch the feed and cache it as HTML/JSON under `feed.dir`. |
 | `social-bot blog scan` | Scan the configured source feeds and queue new drafts for review (never posts). |
+| `social-bot blog topics` | List the idea-seed systems original posts are drawn from (`ideas.topics_file`). |
+| `social-bot blog ideas [--request]` | Show the idea brief, or ask the worker for a batch of original post ideas. |
+| `social-bot blog add-idea "<title>"` | Queue one original-post idea by hand (same rewrite + approval flow). |
 | `social-bot blog publish` | Post the human-approved queue now (add `--dry-run` to preview). |
 | `social-bot blog queue` | Show the approved post queue in the order it will post. |
 | `social-bot blog move <id> up\|down\|top\|bottom` | Move one approved draft in the post queue. |
+| `social-bot blog localize-images` | Migration: copy generated images that are still remote URLs into the local store (never regenerates). |
+| `social-bot blog backfill-destinations` | Migration: union queued drafts onto `publish.destinations` (never removes). |
 | `social-bot serve` | Long-lived operator UI (dashboard/review/published/status) + scheduled refresh/scan/posting (needs the `server` extra). |
 
 Every command takes `--page-id` (overrides config) and `--token` (overrides
@@ -37,15 +42,17 @@ schedule, and posts approved drafts at the `publish.post_at` slots. It **never
 approves or rewrites anything**: a draft must first be approved on `/review`
 ("Approve & schedule", or "Post now" to send immediately). `publish.post_at: []`
 disables timed posting, leaving approval as the only publish path, and
-`publish.interval_days` enforces a minimum gap between public posts (e.g. `2` =
-one post every other day).
+`publish.interval_days` enforces a minimum gap between *scheduled* public posts
+(e.g. `2` = one post every other day); a manual send — a draft's **Post now**, a
+Post queue platform button — is exempt from it and doesn't count toward it, so a
+hand-made post never blocks the queue.
 
-Photos are published **by URL** (`POST /{page}/photos` with `url` + `caption`):
-Graph fetches the image itself, so no file upload and no extra HTTP
-dependency. The URL must be publicly reachable by Meta, the image should be a
-JPEG/PNG, and `pages_manage_posts` covers it. Local files are not uploaded yet
-— that would need a multipart body. `--link` and `--photo` are mutually
-exclusive.
+Photos are published by **uploading the image** (`POST /{page}/photos`, a
+multipart `source` part) — the bytes are read from the local image store, or
+downloaded first when the draft still points at a remote URL. Graph is never
+asked to fetch the image itself: the image generator no longer serves its URLs
+anonymously, so a URL photo post fails. `pages_manage_posts` covers it. `--link`
+and `--photo` are mutually exclusive.
 
 ## Setup
 
@@ -96,10 +103,10 @@ destinations:
     api_version: v26.0                   # pin the version; bump deliberately
     timeout_seconds: 30.0
     account_id: ""                       # the Page id, set from `whoami`
-  linkedin:                              # stubbed until the adapter is wired
-    base_url: https://api.linkedin.com
-    api_version: ""                      # LinkedIn-Version header
-    author_urn: ""                       # urn:li:organization:<id>
+  linkedin:                              # posts via linkin-bot's POST /post gateway
+    base_url: http://host.docker.internal:8082
+    timeout_seconds: 30.0
+    visibility: PUBLIC                   # PUBLIC | CONNECTIONS
 feed:
   limit: 10                              # default posts shown by `feed`
   dir: data/feed                         # cache written by `refresh`, served by `serve`
@@ -117,7 +124,7 @@ destinations:
   facebook:
     token: "EAA..."                      # or export SOCIAL_BOT_TOKEN
   linkedin:
-    token: ""                            # unused until LinkedIn is implemented
+    token: ""                            # not used — the gateway holds the token
 ```
 
 Resolution order, per destination: `--token` > `SOCIAL_BOT_<NAME>_TOKEN` >
@@ -150,7 +157,7 @@ docker compose logs -f                # follow refresh/scan runs
 |---|---|
 | `GET /` | **Dashboard** — refresh/scan controls, open-draft and published counts, scheduler state, the next post (time + which draft), and the cached feed. |
 | `GET /review` | **Review queue** — open drafts, newest first (with a **Scan sources now** button). Paged (`?page=`, `?per_page=`, default 20). |
-| `GET /review/{id}` | One draft: editable caption + hashtags + English image prompt, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set (and **Unapprove** on a draft already approved), a **Rewrite with Command Code** button when `rewrite.enabled` is set, and **Regenerate image prompt** (a fresh prompt from the agent, which you then render with **Regenerate image** — also on an approved draft), the DNA brief. |
+| `GET /review/{id}` | One draft: editable caption + hashtags, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set (and **Unapprove** on a draft already approved), a **Rewrite with Command Code** button when `rewrite.enabled` is set, **Render diagram** (a code-drawn explainer), **Restore source image** when the image is a diagram, the DNA brief. |
 | `GET /queue` | **Post queue** — the approved drafts in the order they will post, the one going out next marked, with drag / Top-Up-Down reorder controls and a **Post approved now** button. |
 | `GET /publish` | **Published** — the audit log (public and private sends, with permalinks). |
 | `GET /status` | **Status** — sources, drafts by state, publish settings (min interval, days remaining, next up), and scheduler runs. |
@@ -160,13 +167,13 @@ docker compose logs -f                # follow refresh/scan runs
 | `POST /refresh` | `{"started": true}`, or `409` if a refresh is already running. |
 | `POST /scan` | Scan the sources now; new drafts appear at `/review`. |
 | `POST /publish/run` | Post the approved queue now, without waiting for a slot. |
-| `POST /review/{id}/save` | Save the compose edits (caption, hashtags, image prompt); never posts. |
+| `POST /review/{id}/save` | Save the compose edits (caption, hashtags); never posts. |
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only; `approve=1` queues the draft for the next slot instead). |
 | `POST /review/{id}/unapprove` | Pull an approved draft back out of the queue (back to `ai_draft`); never posts. |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
-| `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a generated one. |
+| `POST /review/{id}/diagram` | Render the code-drawn diagram for the draft (SVG + PNG); never posts. |
+| `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a diagram. |
 | `POST /review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (needs `rewrite.enabled`); never rewrites itself. |
-| `POST /review/{id}/request-image-prompt` | Mark the draft for a *prompt-only* rewrite (a fresh image prompt, then a new image); never rewrites itself. Works on an approved draft too. |
 | `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request (either kind). |
 
 All five pages share the same top navigation, so you can move between them
@@ -243,7 +250,24 @@ no feed and its sitemap omits posts). New items are enriched from their post
 page (title/excerpt/featured image) before landing in the queue, and that image
 is kept on the draft as the post's own: a generated image only ever fills a
 draft that has none, and **Restore source image** on `/review/{id}` puts the
-original back (re-reading the source page if it was never kept).
+original back (re-reading the source page if it was never kept). A generated
+image is stored locally (`data/review/images/<id>.jpg`) and served back at
+`/images/<id>.<ext>`, so the review page shows it *and* the post uploads those
+bytes instead of asking Facebook to fetch a remote URL. Drafts with a
+still-remote non-source image keep it until you run
+`social-bot blog localize-images`, which copies those images into the store
+(no rendering).
+
+**Original posts, not just reposts.** Besides `sources:` (feeds to repost),
+`ideas:` lists **systems** in a plain file — `data/ideas/topics.md`, one per line
+(Elasticsearch, ClickHouse, Loki, MySQL, …), optionally `| <docs url>`. Click
+**Generate ideas** on `/review` (or run `social-bot blog ideas --request`): the
+same host worker proposes specific angles from those systems and queues each as an
+`extracted` draft with `source: atento-original` and no URL, then the ordinary
+rewrite + approval flow publishes it. The app never fetches or scrapes the
+systems' docs — the agent draws on its own knowledge — and `social-bot blog
+topics` lists the themes. (You can also seed one by hand: `social-bot blog
+add-idea "Vì sao ClickHouse chọn MergeTree?" --topic "ClickHouse architecture"`.)
 
 Then, with `serve` running, hand the drafts to your rewriter and approve:
 
@@ -251,7 +275,7 @@ Then, with `serve` running, hand the drafts to your rewriter and approve:
 curl localhost:8083/api/drafts                          # drafts + your DNA text
 curl -X POST localhost:8083/api/drafts/post-one/rewrite \
      -H 'content-type: application/json' \
-     -d '{"caption":"...","hashtags":["#Atento"],"image_prompt":"a lone tree by a river","image_style":"editorial"}'
+     -d '{"caption":"...","hashtags":["#Atento"]}'
 open http://localhost:8083/review                       # edit + Post now / Approve & schedule
 ```
 
@@ -273,18 +297,11 @@ writes from the DNA and the voice menu exactly as before — voice is an
 enhancement, never a gate. See
 [content-pipeline §2c](docs/content-pipeline.md).
 
-Same worker, second kind of request: **Regenerate image prompt** on
-`/review/{id}` asks for a new *image prompt* only — the caption is left exactly as
-approved, and the image style on the page is the one the agent writes for — and
-renders nothing: the prompt lands on the page to be read (or edited), and
-**Regenerate image** is the separate move that renders it. The worker
-tells the two apart from the request's own kind (`Draft.rewrite_mode`) and posts a
-prompt-only result to `/api/drafts/{id}/image-prompt`.
-
 State lives under `data/review/`: `queue.json` (the queue) and `seen.json`
 (dedupe); the publish audit is `data/publish/published.jsonl`. Set
 `publish.enabled: false` for a global kill-switch, `publish.interval_days` for a
-minimum gap between public posts (`1` = at most one per day), and
+minimum gap between *scheduled* public posts (`1` = at most one per day; a manual
+**Post now** / `/queue` send is exempt from it and doesn't count toward it), and
 `publish.post_at` to the daily slots at which approved drafts post (a slot is
 `HH:MM`, or a window `HH:MM-HH:MM`; `[]` disables timed posting). Drain the
 approved queue on demand with `blog publish` or `POST /publish/run`.
@@ -305,34 +322,44 @@ toward `publish.interval_days`. Set it back to `false`
 to post publicly. This is
 not a dry run — it does create a post object, just an unpublished one.
 
+**Posting by hand.** A draft's **Post now** (and a per-platform button on
+`/queue`) is a manual send: it always goes out, and it is recorded with
+`"manual": true` and left out of `publish.interval_days` — so posting by hand
+never blocks the timer-driven poster, and the interval never refuses you.
+
 | Endpoint | Returns |
 |---|---|
 | `GET /` | Dashboard: controls + counts + scheduler state + cached feed. |
 | `GET /review` | HTML review list of open drafts (with a **Scan sources now** button). |
-| `GET /review/{id}` | HTML detail with an editable caption, hashtags, image prompt, and image style + Approve/Reject (and Unapprove on an approved draft). |
+| `GET /review/{id}` | HTML detail with an editable caption and hashtags + Approve/Reject (and Unapprove on an approved draft, Render diagram, Restore source image). |
 | `GET /publish` | HTML audit log of what has been posted (public and private). |
 | `GET /status` | HTML status page (sources, drafts by state, publish settings, runs). |
 | `POST /scan` | Trigger a source scan now (`{"started": true}`, or `409` if one is running). |
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only). |
 | `POST /review/{id}/unapprove` | Pull an approved draft back out of the queue (back to `ai_draft`); never posts. |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
-| `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a generated one. |
+| `POST /review/{id}/diagram` | Render the code-drawn diagram for the draft (SVG + PNG); never posts. |
+| `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a diagram. |
 | `POST /review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (`rewrite.enabled`); never rewrites itself. |
-| `POST /review/{id}/request-image-prompt` | Mark the draft for a *prompt-only* rewrite; works on an approved draft too. |
 | `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request (either kind). |
-| `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents (`dna`) + the voice menu `publish.voices` (`voices` = `{key: brief+samples}`, with `voice_choices`/`default_voice`) + the image treatment briefs (`image_style_briefs`) + `recent` captions and `recent_images` prompts, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
-| `GET /api/rewrite-queue` | JSON: the drafts a human asked to rewrite + the brand context (DNA, voices, mastheads, image styles **and their briefs**, `recent` captions, `recent_images`), polled by the host-side rewriter worker. Each draft carries `rewrite_mode` (what the request asks for). |
+| `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents (`dna`) + the voice menu `publish.voices` (`voices` = `{key: brief+samples}`, with `voice_choices`/`default_voice`) + `recent` captions, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
+| `GET /api/rewrite-queue` | JSON: the drafts a human asked to rewrite + the brand context (DNA, voices, mastheads, `recent` captions), polled by the host-side rewriter worker. Each draft carries `rewrite_mode` (`caption` or `caption-voice`). |
 | `GET /api/status` | JSON: full pipeline snapshot — sources, drafts by state, seen, published, schedules, lifecycle. `publish.next_draft` names the oldest approved draft the poster will send next (`publish.approved` counts them, `publish.interval_remaining` is the days still to wait). |
-| `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `image_prompt`, `image_style`, `voice`). |
-| `POST /api/drafts/{id}/image-prompt` | JSON: store a *prompt-only* rewrite (`image_prompt`, `image_style`) and re-render the image. The caption and the draft's state are untouched. |
+| `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `voice`). |
 | `POST /api/drafts/{id}/rewrite-error` | JSON: record the rewriter worker's failure and close the request (shown on `/review/{id}`). |
 
 **Destinations** are pluggable: each platform is a package under
 `src/social_bot/destinations/` and is registered in `destinations/registry.py`.
-LinkedIn is wired as a destination adapter but not implemented — the
-company-page path needs LinkedIn's Community Management API approval. Add a
-token + `author_urn` and implement `LinkedInPublisher.publish` to switch it on;
-no pipeline, CLI, or UI changes required.
+`facebook` posts straight to the Graph API. `linkedin` posts through **linkin-bot**
+(a sibling service that owns the LinkedIn OAuth token) via its `POST /post`
+gateway — the caption and, when the draft has one, the image (sent as base64) —
+so set `destinations.linkedin.base_url` to that gateway (internal network,
+e.g. `http://host.docker.internal:8082`).
+
+`publish.destinations` is only the routing default for **new** drafts. The review
+page owns the rest: a destination picker sets one draft's targets, and the action
+bar carries **one Post button per pending platform** — so Facebook and LinkedIn
+are separate sends, and a post can go to one, the other, or both (in any order).
 
 ## Tests
 
@@ -359,10 +386,10 @@ so `[dev]` is enough to run them.
   the client requests `status_type` instead.
 - Status posts on pages are immediate. There is no editing/deleting command
   yet — deleted posts stay deleted, so use `--dry-run` first.
-- Photo posts go through `POST /{page}/photos` with `url` + `caption`; Graph
-  downloads the image, so the URL must be public and the token needs
-  `pages_manage_posts`. The response returns the photo id in `id` and the feed
-  post id in `post_id` — the permalink comes from `post_id`.
+- Photo posts go through `POST /{page}/photos` as a **multipart upload** (the
+  `source` part holds the bytes); the token needs `pages_manage_posts`. The
+  response returns the photo id in `id` and the feed post id in `post_id` — the
+  permalink comes from `post_id`.
 - Page tokens expire; when a call fails with an OAuth error, mint a fresh one
   in the Explorer and re-export it. `whoami` is the fastest sanity check.
 - Unpublished ("private") posts use `published=false` on both `POST

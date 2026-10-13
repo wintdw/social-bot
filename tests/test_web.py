@@ -14,7 +14,6 @@ from social_bot.web import (
     _writable_dir,
     apply_runtime_state,
     current_slot,
-    image_jobs_view,
     infer_last_runs,
     live_view,
     message_url,
@@ -242,55 +241,6 @@ class TestInferLastRuns:
         out = infer_last_runs(self._cfg(tmp_path))
         assert out["refresh"] is None
         assert out["scan"] is None
-
-
-class TestImageJobsView:
-    def test_empty(self):
-        assert image_jobs_view(True, {}) == {
-            "enabled": True,
-            "running": 0,
-            "failed": 0,
-            "jobs": [],
-        }
-
-    def test_serializes_running_and_failed(self):
-        started = dt.datetime(2026, 9, 11, 8, 0, 0)
-        finished = dt.datetime(2026, 9, 11, 8, 0, 30)
-        view = image_jobs_view(
-            True,
-            {
-                "a": {"status": "running", "started_at": started},
-                "b": {"status": "error", "error": "HTTP 520", "finished_at": finished},
-            },
-        )
-        assert view["enabled"] is True
-        assert view["running"] == 1
-        assert view["failed"] == 1
-        assert view["jobs"] == [
-            {
-                "draft_id": "a",
-                "status": "running",
-                "error": "",
-                "started_at": "2026-09-11 08:00:00",
-                "finished_at": None,
-            },
-            {
-                "draft_id": "b",
-                "status": "error",
-                "error": "HTTP 520",
-                "started_at": None,
-                "finished_at": "2026-09-11 08:00:30",
-            },
-        ]
-
-    def test_ok_and_unchanged_are_not_failures(self):
-        view = image_jobs_view(
-            True,
-            {"a": {"status": "ok"}, "b": {"status": "unchanged"}, "c": {"status": "skipped"}},
-        )
-        assert view["running"] == 0
-        assert view["failed"] == 0
-        assert [job["status"] for job in view["jobs"]] == ["ok", "unchanged", "skipped"]
 
 
 class TestRewriteView:

@@ -71,23 +71,14 @@ end of the queue.
 - The agent calls `GET /api/drafts` (open drafts + `publish.dna_file` contents
   as `dna` + the **voice menu** `publish.voices` as `voices` (`{key: brief +
   samples}`, with `voice_choices` and `default_voice`) + the most recently
-  written captions as `recent` + the **treatment briefs** as `image_style_briefs`
-  and the last few image prompts as `recent_images`; paged — pass
+  written captions as `recent`; paged — pass
   `limit`/`offset` and follow
   `next_offset`) and
   `POST /api/drafts/{id}/rewrite` with
-  `{caption, hashtags, cta, commentary, image_prompt, image_style, voice}`.
+  `{caption, hashtags, cta, commentary, voice}`.
 - `recent` (capped by `publish.recent_captions`, 0 = off) exists so the rewriter
   can see what it just wrote and not reopen the same way twice — the "mọi bài
   một màu" failure is invisible in one draft and obvious across several (DNA §12).
-- `recent_images` (capped by `publish.recent_images`, same idea) does that job for
-  the **image**: the last few `image_prompt`/`image_style` pairs, so a rewriter
-  can see it has illustrated the same object five posts running and pick another.
-  Nothing else tells it — which is why the DNA used to *mandate* "a different
-  metaphor per post" instead, a rule that fought any treatment which is not a
-  metaphor. `image_style_briefs` carries each configured treatment's text, so the
-  rewriter writes a prompt that serves the style it picked rather than guessing
-  from a key name.
 - **The caption is linted, advisory only** (`caption_lint.lint_caption`, alongside
   `receive_rewrite`/`edit_draft`). It names the AI-writing tells — a repeated
   hook/closer versus `recent`, a stock opener, the "không phải X mà là Y" engine,
@@ -118,23 +109,8 @@ end of the queue.
   as `GET /api/drafts` `voices`. Overriding it and pressing **Rewrite in this
   voice** (§2a) is what makes the pick the *instruction* rather than a note: the
   other rewrite button lets the rewriter choose.
-- `image_gen.styles` (config.yaml) is the same pattern for the image's **visual
-  treatment**: a menu of `key → docs/image-styles/<key>.md`, of which the
-  rewriter picks one per post by content and tone (DNA §9.2). The key is stored
-  on the draft as `image_style`; `image_gen.default_style` is the fallback when
-  the rewriter omits one. At prompt time (`draft_pipeline.image_style_text`) the
-  chosen treatment **leads** and the shared `style_file` palette follows, so the
-  medium, the composition and what to avoid all vary per post while the palette
-  stays constant. That is the whole rule: a treatment file carries its own
-  prohibitions — people, lettering, the clichés — and nothing outside it forbids
-  anything, so no look can be fought by a rule written somewhere else. `diagram`
-  is the one treatment that writes: it carries a title and labelled parts, which
-  its file states and the DNA §9.2 tells the rewriter how to feed. A valid
-  key is kept, an unknown one falls back to the default — and it is
-  **overridable on `/review/{id}`** before regenerating, where the select's hint
-  is each style file's own opening paragraph (`draft_pipeline.image_style_hints`)
-  so the operator reads the same "when to use" guidance as the docs. Clearing
-  `styles` restores the single `style_file` look.
+- Images need nothing from the rewriter (DNA §9): a post uses its source
+  article's own cover, or the operator renders a code-drawn diagram (§2b).
 - A Facebook post has no title field, so a post's title can only be the caption's
   leading line — the **hook under the series masthead** (the masthead is a
   standing label, not a title). `caption.split_title` promotes that line for
@@ -147,6 +123,10 @@ end of the queue.
   `social-bot blog masthead` fills the default in (idempotent, never replaces a
   chosen label, never touches the image). Re-label a misjudged post on
   `/review/{id}`.
+- Drafts queued **before** LinkedIn joined the default route carry
+  `destinations: ["facebook"]`; `social-bot blog backfill-destinations` unions
+  them onto `publish.destinations` (idempotent, never removes, never touches
+  the caption/image/state). Re-target one draft on `/review/{id}` or `/queue`.
 
 ### 2a. Rewriter worker (`scripts/rewrite_worker.py`, optional)
 - The rewrite is normally run by hand (an agent calls `GET /api/drafts` and POSTs
@@ -154,8 +134,7 @@ end of the queue.
   **Rewrite with Command Code** button — but it only *marks* the draft
   (`Draft.rewrite_requested_at`); the app never runs the agent itself.
 - A host-side worker polls `GET /api/rewrite-queue` (the marked drafts plus the
-  DNA, the voice menu, the masthead/`image_style` choices, the treatment briefs
-  themselves, `recent` captions and `recent_images`), attaches the operator's own
+  DNA, the voice menu, the masthead choices and `recent` captions), attaches the operator's own
   voice itself (§2c — the app neither sends it nor needs to know about it), runs the
   Command Code CLI headlessly per draft (`commandcode -p --output-format json
   --skip-onboarding --max-turns N`, with the whole brief in the prompt so the run
@@ -164,35 +143,19 @@ end of the queue.
   `POST /api/drafts/{id}/rewrite-error`, which stores `Draft.rewrite_error` and
   closes the request, so the page shows why nothing came back instead of a request
   that waits forever.
-- **Three kinds of request ride that one queue, told apart by `Draft.rewrite_mode`.**
+- **Two kinds of request ride that one queue, told apart by `Draft.rewrite_mode`.**
   `caption` is the button above — the whole rewrite, the agent choosing the
   register. `caption-voice` is **Rewrite in this voice**, beside it: the same full
   rewrite with the register pinned to the one picked in the compose form's Voice
   select, for when you want the same idea in a specific voice instead of the one
-  the rewriter judges. That button **submits the compose form** (like the two image
-  tools, and unlike `caption`'s field-less form), so the pick is saved with the
-  request — it used to be dropped here *and* at the worker, which then chose a
-  register of its own. `rewrite_worker.build_prompt(..., voice_locked=True)` names
+  the rewriter judges. That button **submits the compose form** (unlike `caption`'s
+  field-less form), so the pick is saved with the request.
+  `rewrite_worker.build_prompt(..., voice_locked=True)` names
   that key in the output contract and adds a hard rule against substituting
   another, and `draft_pipeline.receive_rewrite` keeps the draft's own voice when
   the pending request was this kind, so a run that ignored the instruction cannot
   relabel the post. The DNA, the voice menu and the mastheads all ride along as
-  usual. `image` is **Regenerate
-  image prompt**: the caption is settled (often already approved) and only the
-  picture is wrong, so the worker runs a much smaller task
-  (`rewrite_worker.build_image_prompt` — the treatment briefs, the recent images,
-  and the post's own caption; no DNA, no voice menu, no mastheads) and posts **one
-  field, `image_prompt`** — the subject — to
-  `POST /api/drafts/{id}/image-prompt`. That stores it through
-  `Draft.apply_image_prompt` and **stops — the prompt is the whole delivery,
-  nothing is rendered**. The style is the operator's pick, saved from the compose
-  form with the request: the worker writes *for* it and never returns one of its
-  own (`receive_image_prompt` ignores `image_style`). The new prompt lands on
-  `/review/{id}` to be read (or edited), and **Regenerate image** is the separate
-  move that spends it on a picture; the caption and the draft's state are
-  untouched, so an approved post stays queued. One flag plus one kind means "a
-  caption rewrite and an image rewrite are both pending" cannot exist — the
-  operator's latest ask wins.
+  usual.
 - It runs on the **host**, not in the app: the CLI and its auth live there (the
   container image is python-slim with no Node), and headless runs need no
   `--yolo` — the rewriter only reads its prompt and prints JSON, so file writes
@@ -206,88 +169,54 @@ end of the queue.
 - It never approves or posts: the worker reaches the same `receive_rewrite` path a
   manual rewrite uses, and the human gate is untouched.
 
-### 2b. Images (`image_gen.py`, optional)
-- Images are generated **after** the rewrite, on demand via
-  `social-bot blog image`, the **Generate image** button on `/review/{id}`, or
-  `POST /api/drafts/{id}/image`. The rewriter supplies `image_prompt` — a
-  concrete English visual concept for that post — and that is what gets
-  illustrated. It is also the image's alt text (there is no separate Vietnamese
-  alt), and it is **editable on `/review/{id}`** (saved with the caption), as is
-  the draft's `image_style` treatment. That pick is the operator's dial and it
-  governs **both** image buttons. The style picker names the treatment the current
-  image was generated with: that option is labelled **`<key> (current)`** (and is
-  the default selection), so any other option reads as the next one. The label is
-  dropped while a regeneration is running, when the stored style is already the
-  new one but the image on screen is not.
-  **Regenerate image** submits the compose form to `/review/{id}/image`, so the
-  edited prompt and style are saved and used for that generation (it also saves
-  the caption/hashtags, like Save). The button only appears when
-  `image_gen.enabled` is true.
-  **Regenerate image prompt** beside it is the other direction: instead of
-  rendering what the form says, it asks the worker (above) for a fresh prompt — and
-  stops there. The two are deliberately separate moves, so the new prompt can be
-  read (and edited) before **Regenerate image** spends it on a picture. It submits
-  the compose form too, so the style you picked is saved with the request and the
-  agent writes the subject *for* that treatment rather than choosing one of its own
-  (a field-less button dropped the pick, and the worker fell back to the draft's old
-  style). It is the path that repairs a draft whose prompt was written before the
-  current image rules.
-- `blog image` batches, and the **Regenerate image** button runs the provider
-  call **in the background** (like the post-rewrite fill): the request returns
-  at once and the page shows the job, instead of holding the connection open for
-  the minutes a `gpt-image` model can take. The JSON API
-  (`POST /api/drafts/{id}/image`) is still synchronous.
-- **Every post is a photo post**, so `serve` also fills the image
-  automatically: when a rewrite lands (`POST /api/drafts/{id}/rewrite`) it
-  generates that draft's image **in the background**, only if the draft has
-  none, and returns the rewrite response immediately. A restart before the
-  background job finishes is caught by `blog image`.
-- **Knowing whether it worked** (the job is async, so the draft's `image` field
-  alone only says "present or not"):
-  - `GET /api/status` → `images` lists each job with `status`
-    (`running` / `ok` / `unchanged` / `skipped` / `error`), `error`, and
-    timestamps, plus `running` / `failed` counts. In-memory: a `serve` restart
-    clears the job list (the draft's `image` is still the durable truth).
-  - The **`/status`** page and the **dashboard (`/`)** both render an
-    **Image jobs** section from that payload.
-  - `/review/{id}` shows it in the UI: "Generating…" while running (the page
-    polls `/api/status` and reloads when the job finishes — unless there are
-    unsaved edits, when it says the image is ready instead), the error text on
-    failure (even when a previous image is still in place), and "No image yet"
-    otherwise.
-  - Failures are also logged to the container (`docker logs social-bot`).
-- **Scanning does not generate images.** At scan time no rewrite exists, so the
-  only available subject would be the raw `title`; illustrating an abstract
-  Vietnamese title produced a near-identical picture for every draft. Generate
-  after the rewrite instead.
-- **An existing image is never replaced by default.** Generation only fills
-  drafts that have none, so a source post's own cover (e.g. the blog's image)
-  survives every trigger — the rewrite background job, `blog image`, and the
-  API. To deliberately replace one, opt in: `blog image --overwrite`,
-  `POST /api/drafts/{id}/image?overwrite=true`, the **Regenerate image** button
-  on `/review/{id}`, or `image_gen.overwrite: true` in config.
+### 2b. Images (source cover, code-drawn diagram, or a drawn illustration)
+
+- A post uses its **source article's own cover**, captured at scan time
+  (enrichment reads the post page for `title`/`excerpt`/`image`). No AI
+  generation: nothing is invented, and a post without a cover simply publishes
+  without an image (a link post) unless the operator draws one.
+- For a **mechanism** post — many parts exchanging with each other — the
+  operator renders a **code-drawn plate**: the **Render diagram** button on
+  `/review/{id}` (`POST /review/{id}/diagram`), or `social-bot blog diagram`
+  for a batch. A plate is a small isometric scene of real objects (a console,
+  cabinets, a chest of drawers) drawn from the `iso.py` kit, with every word in
+  the margins so nothing has to be scraped or guessed; `diagram.py` is the
+  vector source and `diagram_html.py` only **wraps** that SVG in a bare page,
+  which `browser_shot` screenshots to PNG through the host's Chromium — the
+  draft points at the PNG because Graph only accepts raster, and the PNG and the
+  preview cannot drift because they are the same SVG. A missing/failing browser
+  never blocks the render: the draft keeps pointing at the SVG preview.
+  **The plate is matched to the draft, not fixed**: `diagram_kind` reads the
+  draft's topic/title/excerpt and picks a renderer — `write_concern` for MongoDB
+  (`w:1` vs `w:majority`), `sparse_index` for ClickHouse — and a draft that
+  matches no renderer renders **nothing** rather than borrowing another system's
+  plate. A new system is a new renderer plus a branch, in the one house style.
+  Rendering fills the gap by default and never replaces an existing image
+  without `overwrite` (`blog diagram --overwrite`).
+- **Selectively**, an **illustration** may be drawn for a post with the
+  `anatomy` skill: a crafted isometric SVG figure, screenshotted to a PNG on the
+  same served `/images/` store a diagram uses, that the draft then points at. It
+  is for the post whose *idea* needs a drawn picture — a mechanism, a structure,
+  an inventory of parts, a before/after — where a figure earns the reader better
+  than the source cover or the code plate. It is **not a default and never every
+  post**: the source cover stays the norm and the code diagram still owns plain
+  wiring. It is a drawn figure (operator-made, via the host-side `anatomy`
+  skill), never a generated or photographic image, and it goes through the same
+  human gate as any other image. See
+  [image-styles/illustration.md](image-styles/illustration.md).
 - **The source post's own image is kept on the draft** as `source_image`, written
-  at scan time and never touched by generation. A generation can therefore only
-  ever *add* an image, and **Restore source image** on `/review/{id}`
-  (`POST /review/{id}/restore-image`) always puts the original picture back
-  without touching the caption. The draft page offers it whenever the current
-  image came from `image_gen` — decided by comparing against `source_image`, or,
-  for a draft scanned before that was recorded, by recognising the generator's
-  own URL — and since a pre-existing draft has no `source_image` stored, the
-  restore reads the source page once (as scan enrichment does) to recover it and
-  keeps it for next time. Nothing to recover (no source URL, no image on the
-  page, an unreachable page) returns a warning, never a broken page.
-- The prompt (`image_gen.build_prompt`) leads with the draft's chosen
-  `image_style` treatment (medium, composition and prohibitions —
-  `docs/image-styles/<key>.md`), then the `image_gen.style_file` shared palette,
-  then the subject (`image_prompt`, under a plain `Subject:` label). The builder
-  adds no prohibitions of its own: every one of them belongs to the treatment,
-  so a look is never fought by a rule written elsewhere.
-  `image_gen.base_url` selects the endpoint
-  (`gen.pollinations.ai/image` — clean output, needs `api_key`;
-  `image.pollinations.ai/prompt` — keyless but watermarked and `sana`-only).
-- A failure is recorded in the summary `errors` and the draft keeps its
-  existing image: image generation never blocks the pipeline.
+  at scan time and never touched by rendering. **Restore source image** on
+  `/review/{id}` (`POST /review/{id}/restore-image`) always puts the original
+  picture back without touching the caption. The draft page offers it whenever
+  the current image is a diagram — decided by comparing against `source_image`,
+  or, for a draft scanned before that was recorded, by recognising a locally
+  stored `/images/...` file — and since a pre-existing draft has no
+  `source_image` stored, the restore reads the source page once (as scan
+  enrichment does) to recover it and keeps it for next time. Nothing to recover
+  (no source URL, no image on the page, an unreachable page) returns a warning,
+  never a broken page.
+- `blog localize-images` copies a still-remote non-source image into the local
+  store (a migration for legacy AI-image drafts; it never renders anything).
 
 ### 2c. The operator's own voice (`voice.py`, optional)
 - The DNA and the voice menu are **brand** voices; `voice.py` adds the operator's
@@ -346,6 +275,44 @@ end of the queue.
 - Image tasks never get the block: an image prompt is an English visual concept,
   where a chat register is beside the point.
 
+### 2d. Idea seeds — original posts, not reposts (`draft_pipeline.queue_ideas`)
+- `sources[]` are feeds to **repost**: each has a URL, is fetched, and the caption
+  credits an external author. The `ideas` block is a different input on purpose — a
+  plain list of **systems** to write *original* posts about.
+  `ideas.topics_file` is a markdown file, one theme per line with an optional
+  `| <docs url>` (Elasticsearch, ClickHouse, Loki, Grafana, MySQL, MongoDB,
+  Kafka, System Design, …); the operator edits it live, no restart needed.
+  **Nothing is fetched, nothing is reposted** — the agent draws on its own
+  knowledge of each system. Keep the entries at the level of the **system**
+  (*Kafka*, *ClickHouse architecture*, *System design*) and let each post go
+  deep in **one** aspect, grounded in a real problem — approachable for a reader
+  who knows the basics, not an internals tour.
+- The app never generates the ideas itself (the same rule as the rewriter). A
+  human asks for a batch from `/review` (**Generate ideas**,
+  `POST /review/request-ideas`) or `blog ideas --request`; that only *marks* the
+  request (`data/ideas/state.json`). The same host-side worker
+  (`scripts/rewrite_worker.py`) polls `GET /api/ideas`, and when `requested` is set
+  it proposes a batch — `build_ideas_prompt` carries the themes, the DNA, the
+  titles already queued and the recent captions so nothing repeats — and POSTs
+  `{"ideas": [{"title", "topic", "excerpt"}, …]}` to `/api/ideas`.
+- `queue_ideas` turns each idea into an `EXTRACTED` draft: `source:
+  ideas.source_name` (`atento-original`), the specific angle as `title`, the system
+  as the new `Draft.topic`, a short outline as `excerpt`, and **no `url` and no
+  source image** — an original post has no article to link. A slug of the title is
+  the id, deduped against the queue and `data/ideas/seen.json`, so re-running a
+  batch is safe. A successful batch closes the request; a failed run goes to
+  `POST /api/ideas/error`.
+- From there it is an ordinary draft: the rewrite writes the caption from the idea,
+  a human approves on `/review/{id}`, and the poster sends it. A generated idea
+  only ever reaches `EXTRACTED`; the pipeline never posts one on its own.
+- DNA: an original draft has no article to link, so §7.3's credit rule does not
+  apply and the caption carries no "đọc đầy đủ tại comment" CTA (DNA §6.6); the
+  masthead defaults to `[Học cùng Atento]` (it is Atento teaching). Image: none
+  from a source — leave it text-only, or draw a code diagram / `anatomy` figure.
+- CLI: `blog topics` (list the themes), `blog ideas [--request] [--json]` (the
+  brief, and the optional request), `blog add-idea "<title>" [--topic …]
+  [--excerpt …]` (seed one by hand, same dedupe).
+
 ### 3. Review queue (human)
 - `/review` lists open drafts (`extracted`/`ai_draft` plus `approved` ones still
   waiting for a slot) **newest first by the item's own date**
@@ -366,9 +333,14 @@ end of the queue.
   `/review/{id}` shows the extracted info, the
   editable caption + hashtags, and the actions. Rendered by
   `draft_html.render_draft_html`.
+- **Destinations**: a chip per registered platform sets *this* draft's targets —
+  `publish.destinations` only seeds new drafts. The action bar then carries one
+  **Post to &lt;Platform&gt;** button per platform still pending (the plain
+  **Post publicly** when only one is left), so Facebook and LinkedIn are
+  independent sends: a draft can go to either, or to both, in any order.
 - Actions: **Save** (persist the caption, hashtags, and image prompt without
   posting) and **Post now** (publish immediately) always; **Reject**. A draft
-  whose image came from `image_gen` also offers **Restore source image**, which
+  whose image is a diagram also offers **Restore source image**, which
   swaps the source post's own picture back in and leaves the caption alone.
   With `rewrite.enabled` on, `extracted`/`ai_draft` drafts also offer the two
   rewriter buttons — **Rewrite with Command Code** (the agent picks the voice) and
@@ -389,23 +361,33 @@ end of the queue.
   the nav from `ui.py`.
 
 ### 4. Publish (`draft_pipeline.publish_draft`)
-- Triggered by `POST /review/{id}/publish` (the review page's **Post now**) or,
-  for approved drafts, by the posting scheduler / `POST /publish/run` /
-  `blog publish`. Parsed in `web.py`. Validates `can_publish()`, then resolves a
+- Triggered by `POST /review/{id}/publish` (the review page's **Post now**), by
+  a `/queue` per-platform button, or — for approved drafts — by the posting
+  scheduler / `POST /publish/run` / `blog publish`. Parsed in `web.py`.
+  Validates `can_publish()`, then resolves a
   publisher per destination through `destinations.publisher_for` (the registry).
+  The two operator buttons pass `manual=True` (see the interval note below); the
+  drain paths do not.
 - Each destination posts independently: one already posted publicly is skipped,
   so a re-run after a partial failure only fills the gaps. The draft turns
   `posted` only once every target has a public record; each result is stored
   under `Draft.posts[destination]`.
 - `FacebookPublisher` posts `Draft.post_text` (**caption + hashtags**) — a photo
   post via `create_photo_post` when `image` is set, else a link post via
-  `create_post`.
+  `create_post`. The photo is an **upload** (multipart `source`), never a `url`
+  for Graph to fetch: `media.load` reads the stored file, or downloads a remote
+  URL first (with the generator's key when it is the generator's host).
 - `dry_run=True` prints the request and mutates nothing.
 - With `publish.private: true` every destination sends **unpublished**
   (`published=false` on the Graph call, visible to page admins only). The call
   is real — it just doesn't go public — so the draft stays in the queue and the
   record in `published.jsonl` gets `"private": true`. Private sends don't count
   toward `publish.interval_days`.
+- A **manual** send (a draft's **Post now**, a `/queue` platform button) is
+  audited with `"manual": true` and sits outside `publish.interval_days` in both
+  directions — the gate never refuses it and it never paces the gap (so the
+  poster isn't held back by a post a person made by hand). Unlike a private send
+  it consumes the destination normally.
 - On a public success: `mark_posted`, append to `published.jsonl`, save.
 
 ### 4b. Scheduled posting (`draft_pipeline.publish_scheduled`)
@@ -449,15 +431,22 @@ end of the queue.
   so resuming posts from the *next* slot rather than firing a backlog. The pause
   is persisted (`data/state.json`) so a restart keeps the hold. Only the
   scheduler is paused: "Post approved now", a draft's Post now, and
-  `blog publish` still send, because those are explicit human actions.
+  `blog publish` still send, because those are explicit human actions. (The
+  *interval* draws its line elsewhere: the drain paths — **Post approved now**,
+  `blog publish` — obey it, the two per-draft buttons don't.)
 - After a run that actually posted, `serve` also refreshes the feed cache
   (`refresh_feed`), so the new post shows on the dashboard immediately instead
   of waiting for the next `--refresh-at` slot. A run that posted nothing
   refreshes nothing.
-- `publish.interval_days` sets a minimum gap between **public** posts (e.g. `2`
+- `publish.interval_days` sets a minimum gap between **scheduled** public posts
+  (e.g. `2`
   = one post every other day, `1` = at most one per day); enforced in
-  `publish_draft`, so it paces both the scheduler and "Post now". Private sends
-  don't count. The built-in default is `0` (no minimum).
+  `publish_draft` for the poster's own sends — the `post_at` slots, `POST
+  /publish/run` and `blog publish`. Private sends don't count, and **manual**
+  sends (a draft's **Post now**, a `/queue` platform button) are outside the
+  interval in both directions: never refused by it, never counted toward it, so
+  a hand-made post can't hold the queue back (`publish_draft(..., manual=True)`,
+  audited as `"manual": true`). The built-in default is `0` (no minimum).
 - The next send is knowable ahead of time: `status()` sets
   `publish.next_draft` (the first draft in posting order — exactly what
   `publish_scheduled` drains first), plus `publish.approved` and
@@ -477,9 +466,9 @@ end of the queue.
 
 | File | Contents |
 |---|---|
-| `data/review/queue.json` | The queue (list of drafts). Each carries `queue_order` (0 = the default oldest-first position). Written atomically (tmp + rename). |
+| `data/review/queue.json` | The queue (list of drafts). Each carries `queue_order` (0 = the default oldest-first position). Written atomically (tmp + rename), and every slow writer (a scan) re-reads it right before saving so a post recorded meanwhile isn't dropped. |
 | `data/review/seen.json` | `"source:slug"` dedupe ledger. |
-| `data/publish/published.jsonl` | Append-only publish audit (one JSON record per post; `"private": true` marks an unpublished test send). |
+| `data/publish/published.jsonl` | Append-only publish audit (one JSON record per post; `"private": true` marks an unpublished test send, `"manual": true` a send a person made by hand — both are left out of the `interval_days` count). |
 
 The operator's own voice (§2c) keeps its own state, outside the pipeline's
 `review.dir`/`publish.dir`:
@@ -490,6 +479,14 @@ The operator's own voice (§2c) keeps its own state, outside the pipeline's
 | `data/voice/index/` | The LanceDB vector index (`social-bot voice index`). Only valid for the embedding model that built it. |
 | `data/voice/profile.md` | The learned voice profile, attached to every rewrite as part of `MY VOICE`. |
 
+The idea seeds (§2d) keep their own state under `ideas.dir`:
+
+| File | Contents |
+|---|---|
+| `data/ideas/topics.md` | The systems/themes original posts are drawn from — `ideas.topics_file`, edited live by the operator. |
+| `data/ideas/seen.json` | Title slugs of ideas already queued (dedupe). |
+| `data/ideas/state.json` | The pending "generate ideas" request (`requested_at`, `note`, `error`). |
+
 ## HTTP surface (`web.py`)
 
 | Method | Path | Purpose |
@@ -497,7 +494,7 @@ The operator's own voice (§2c) keeps its own state, outside the pipeline's
 | GET | `/` | Factory dashboard: controls, counts, scheduler state, cached feed. |
 | GET | `/queue` | Post queue: the approved drafts in posting order, with the reorder controls and the **Post approved now** button (when `publish.post_at` is set). |
 | GET | `/review` | Review queue list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters, `?q=<text>` title/excerpt search, and `?sort=oldest`; paged with `?page=<n>&per_page=<n>` (default 20, max 200). |
-| GET | `/review/{id}` | Review detail: editable caption, hashtags, and image prompt; Save / Post now / Reject, plus Approve & schedule when `publish.post_at` is set (+ Unapprove on an approved draft, + Generate image when enabled, + Restore source image when the image came from the generator). |
+| GET | `/review/{id}` | Review detail: editable caption and hashtags; the destination picker (per-platform chips) and one **Post to &lt;Platform&gt;** button per pending destination; Save / Reject, plus Approve & schedule when `publish.post_at` is set (+ Unapprove on an approved draft, + Render diagram, + Restore source image when the image is a diagram). |
 | GET | `/publish` | Publish audit log (public + private sends). |
 | GET | `/status` | Human-readable snapshot: token validity/expiry, schedules, sources. |
 | GET | `/drafts` | Redirect (307) to `/review` for old links. |
@@ -517,18 +514,19 @@ The operator's own voice (§2c) keeps its own state, outside the pipeline's
 | POST | `/review/{id}/image` | Save the compose edits and regenerate the draft's image in the background (form; redirects back immediately; the page then shows the job). |
 | POST | `/review/{id}/restore-image` | Put the source post's own image back, replacing a generated one (reads the source page once when the draft has no stored original). |
 | POST | `/review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (`rewrite.enabled`); never rewrites itself. |
-| POST | `/review/{id}/request-image-prompt` | Mark the draft for a *prompt-only* rewrite: a fresh `image_prompt`/`image_style` from the worker, then a re-render. Allowed on an approved draft; never rewrites itself. |
 | POST | `/review/{id}/request-voice-rewrite` | Mark the draft for a rewrite **in the voice picked on this page**: the compose form is saved first, so the Voice select reaches the worker and is re-asserted on the result. Same gate as `/request-rewrite`; never rewrites itself. |
 | POST | `/review/{id}/cancel-rewrite` | Drop a pending rewrite request (any kind). |
+| POST | `/review/request-ideas` | Mark that a batch of original post ideas was asked for (`ideas.topics_file` systems); the host-side worker proposes it. Never generates, rewrites, or posts. |
 | POST | `/queue/{id}/move` | Move an approved draft in the post queue (`direction=up\|down\|top\|bottom`, plus a `next` return path — the queue page sends `/queue#post-queue`); never posts. |
 | POST | `/queue/order` | Persist a drag-and-drop reorder: JSON `{"ids": [...]}` (a subset is fine), returns `{"ok": true, "order": [...]}`. |
 | POST | `/queue/reset` | Clear every manual position, restoring the default oldest-first order. |
-| GET | `/api/drafts` | Open drafts + DNA (`dna`) + the voice menu (`voices`, `voice_choices`, `default_voice`) + `recent` captions + the image treatment briefs (`image_style_briefs`) + `recent_images` prompts, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
+| GET | `/api/drafts` | Open drafts + DNA (`dna`) + the voice menu (`voices`, `voice_choices`, `default_voice`) + `recent` captions, for the rewriter. Paged: `?limit=<n>&offset=<n>` (default 100, max 500); the body carries `total`/`has_more`/`next_offset`. |
 | POST | `/api/drafts/{id}/rewrite` | Store the rewrite. |
-| POST | `/api/drafts/{id}/image-prompt` | Store a prompt-only rewrite (`image_prompt`, `image_style`) and re-render the image with `overwrite`; the caption and the draft's state are untouched. |
-| POST | `/api/drafts/{id}/image` | Generate an image for one draft (JSON), for the rewriter/operator. |
-| GET | `/api/rewrite-queue` | The drafts a human asked the rewriter for, plus the brand context (DNA, voices, mastheads, image styles **and their briefs**, `recent` captions, `recent_images`) — polled by the host-side rewriter worker. Each draft carries `rewrite_mode` (`caption`, `caption-voice` or `image`), which decides the worker's prompt and the endpoint it posts back to. |
+| GET | `/api/rewrite-queue` | The drafts a human asked the rewriter for, plus the brand context (DNA, voices, mastheads, `recent` captions) — polled by the host-side rewriter worker. Each draft carries `rewrite_mode` (`caption` or `caption-voice`), which decides the worker's prompt. |
 | POST | `/api/drafts/{id}/rewrite-error` | Record the rewriter worker's failure and close the request; shown on `/review/{id}`. |
+| GET | `/api/ideas` | The idea brief for the rewriter agent: the theme systems (`topics`), the titles already queued (`existing`), the DNA and `recent` captions — plus whether a batch was requested (`requested`/`requested_at`). Polled by the worker. |
+| POST | `/api/ideas` | Queue agent-proposed original-post ideas as `extracted` drafts (`source: ideas.source_name`, no URL); body `{"ideas": [{"title", "topic", "excerpt"}, …]}` (a single idea object is accepted too), deduped by title slug, closes the request. Never rewrites, approves, or posts. |
+| POST | `/api/ideas/error` | Record the worker's idea-generation failure and close the request. |
 
 ## Extending
 
@@ -539,14 +537,22 @@ The operator's own voice (§2c) keeps its own state, outside the pipeline's
 `tests/test_source.py`. Fetching itself rarely changes — `source_api` returns
 text.
 
+**A new idea theme.** Just add a line to `ideas.topics_file`
+(`data/ideas/topics.md` by default) — no code and no restart. A theme is a
+*system* (a name, optional `| <docs url>`), never a feed; the agent does the rest.
+To change the *mechanism* (where the themes live, how ideas are queued), it is
+`src/social_bot/ideas.py` (pure parse + slug) and `draft_pipeline.idea_brief` /
+`queue_ideas`, tested in `tests/test_ideas.py` / `tests/test_draft_pipeline.py`.
+
 **A new destination.** Add a package under `src/social_bot/destinations/` with a
 `Publisher` subclass (`name`, `label`, `describe`, `publish -> PublishResult`),
 register it in `destinations/registry.py`, and add its
 `DEFAULTS["destinations"]["<name>"]` block + credentials entry.
 `config.validate` accepts any registered name. Its `posts[destination]` records
-and audit rows flow through unchanged. `linkedin/publisher.py` is a stub showing
-the shape; company-page posting needs LinkedIn Community Management API
-approval.
+and audit rows flow through unchanged. `linkedin/publisher.py` shows the shape of
+a destination that **delegates to another local service**: it calls linkin-bot's
+`POST /post` gateway (text + the image bytes as base64) instead of talking to the
+platform API, so no token/OAuth lives here.
 
 **Changing the caption text.** The published text is `Draft.post_text`
 (caption + hashtags). Keep hashtags in the `hashtags` field, not the caption.
@@ -570,18 +576,11 @@ the draft (the facts). To change the last of those, edit the corpus under
 `voice.corpus_dir` and re-run `social-bot voice index`; to change how much of it
 rides along, tune `voice.top_k` and `voice.max_examples_chars`.
 
-**Changing the image look.** Edit `docs/atento-image-style.md` (the shared
-palette prepended to every image prompt) and keep
-`image_gen.style_file` pointed at it. The per-post **treatment** menu is
-`image_gen.styles` → `docs/image-styles/<key>.md` with `image_gen.default_style`;
-add, edit, or remove a treatment by writing its file and listing it there (the
-DNA §9.2 table documents the menu for the rewriter). A treatment's file owns
-everything else about its look — medium, composition, and what to avoid,
-including whether the image may carry lettering, as `diagram` does. Nothing
-outside the file forbids anything, so no config key or prompt rule has to be
-told about a new treatment.
-Swap the image endpoint/provider with `image_gen.base_url` +
-`image_gen.model`.
+**Changing the image look.** Diagrams are drawn by `diagram.py` (the SVG
+source) with `diagram_html.py` porting the same plate to HTML for the PNG
+screenshot — edit those two together so the preview and the upload never
+disagree. A new diagram is a new renderer plus a branch in
+`render_for_draft`/`render_for_draft_html`.
 
 **Changing what a draft stores.** Edit the `Draft` dataclass in `drafts.py`;
 `from_dict` ignores unknown keys, so old `queue.json` files still load.
@@ -593,9 +592,11 @@ Swap the image endpoint/provider with `image_gen.base_url` +
   `approved`; it must never approve, rewrite, or touch `extracted`/`ai_draft`.
 - `publish_draft` is reached from the explicit **Post now** action, the scheduled
   drain, `POST /publish/run`, and `blog publish`. `publish.post_at: []` disables
-  timed posting entirely.
+  timed posting entirely. Only **Post now** and the `/queue` platform buttons
+  pass `manual=True`; the drain paths are the machine and stay paced.
 - `publish.enabled: false` is a global kill-switch; `publish.interval_days`
-  enforces a minimum gap between public posts (enforced in `publish_draft`).
+  enforces a minimum gap between scheduled public posts (enforced in
+  `publish_draft`; manual and private sends are neither gated nor counted).
 - `--dry-run` is available on every publish path (`post` command, `blog publish`,
   and `dry_run=1` on `POST /review/{id}/publish`).
 - Only the configured official feeds are fetched — no HTML scraping of

@@ -128,10 +128,10 @@ _STATS = {
     "publish": {
         "enabled": True,
         "private": False,
-        "destinations": ["facebook"],
+        "destinations": ["facebook", "linkedin"],
         "destination_state": [
             {"name": "facebook", "label": "Facebook", "enabled": True, "configured": True},
-            {"name": "linkedin", "label": "LinkedIn", "enabled": False, "configured": False},
+            {"name": "linkedin", "label": "LinkedIn", "enabled": True, "configured": True},
         ],
         "post_at": ["19:30-21:00"],
         "post_per_slot": 1,
@@ -149,7 +149,7 @@ _STATS = {
         "voice_choices": ["technical", "essay", "announcement", "funny"],
         "default_voice": "technical",
     },
-    "image_gen": {"enabled": True, "provider": "pollinations", "overwrite": False, "key_set": True},
+    "images": {"with_image": 3},
 }
 
 _REFRESH = {
@@ -188,33 +188,34 @@ _TOKEN = {
     "scopes": ["pages_read_engagement", "pages_manage_posts", "pages_show_list"],
     "checked_at": "2026-09-10 07:00:00",
 }
-_IMAGES = {
-    "enabled": True,
-    "running": 1,
-    "failed": 1,
-    "jobs": [
+_LINKEDIN = {
+    "configured": True,
+    "ok": True,
+    "base_url": "http://host.docker.internal:8082",
+    "checked_at": "2026-09-10 07:00:00",
+    "error": "",
+    "status": "ok",
+    "connected": True,
+    "oauth_summary": "oauth token: expires 2026-12-12 10:39 (59 day(s) left)",
+    "kill_switch": False,
+    "caps": [
         {
-            "draft_id": "how-smart-model-routing-can-cut-llm",
-            "status": "ok",
-            "error": "",
-            "started_at": "2026-09-10 06:12:00",
-            "finished_at": "2026-09-10 06:12:38",
+            "kind": "connect",
+            "sent_today": 0,
+            "day_remaining": 30,
+            "week_remaining": 20,
+            "remaining": 20,
         },
         {
-            "draft_id": "social-media-engagement-summer-2026",
-            "status": "error",
-            "error": "HTTP 520 <upstream>",
-            "started_at": "2026-09-10 06:12:00",
-            "finished_at": "2026-09-10 06:12:30",
-        },
-        {
-            "draft_id": "automatically-detecting-ai-text",
-            "status": "running",
-            "error": "",
-            "started_at": "2026-09-10 06:13:00",
-            "finished_at": None,
+            "kind": "follow",
+            "sent_today": 0,
+            "day_remaining": 10,
+            "week_remaining": 50,
+            "remaining": 10,
         },
     ],
+    "schedule": {"connect": ["09:30"], "follow": ["10:00"]},
+    "next_run": {"connect": "2026-09-10 09:30", "follow": "2026-09-10 10:00"},
 }
 
 _RECORDS = [
@@ -284,6 +285,7 @@ _QUEUE = [
         published="Thu, 10 Sep 2026 00:00:00 GMT",
         created_at="2026-09-10T07:28:25+00:00",
         state="approved",
+        destinations=["facebook", "linkedin"],
         queue_order=1,
     ),
     Draft(
@@ -295,6 +297,7 @@ _QUEUE = [
         published="Wed, 09 Sep 2026 15:30:26 GMT",
         created_at="2026-09-10T07:28:25+00:00",
         state="approved",
+        destinations=["facebook", "linkedin"],
         queue_order=2,
     ),
     Draft(
@@ -357,7 +360,7 @@ _DETAIL = Draft(
     image=_THUMB,
     published="Wed, 09 Sep 2026 15:30:26 GMT",
     lang="en",
-    destinations=["facebook"],
+    destinations=["facebook", "linkedin"],
     state="ai_draft",
     caption=(
         "[Học cùng Atento]\n\n"
@@ -377,11 +380,6 @@ _DETAIL = Draft(
     ),
     hashtags=["#Atento", "#fromfoundationtoexcellence", "#systemdesign"],
     cta="Đọc bài gốc đầy đủ tại comment.",
-    image_prompt=(
-        "a funnel splitting small parcels onto three conveyor belts of different widths, "
-        "only the heaviest parcel reaching the widest belt"
-    ),
-    image_style="technical",
     commentary=(
         "Register technical (giọng Dũng), format D (đám đông rồi lật), drama vừa. Có nêu trade-off "
         "under/over-routing để không hype con số 10x."
@@ -420,7 +418,6 @@ def render_pages() -> list[tuple[str, str]]:
                 refresh=_REFRESH,
                 scan=_SCAN,
                 post=_POST,
-                images=_IMAGES,
                 token=_TOKEN,
                 feed_section=render_feed_section(_ITEMS),
                 feed_label="Facebook feed",
@@ -463,15 +460,11 @@ def render_pages() -> list[tuple[str, str]]:
                 # The rewriter is on in the sample so the Draft tab shows the
                 # whole Compose panel: the image tools *and* the caption rewrite,
                 # both grouped above the terminal-only action bar.
-                image_enabled=True,
                 rewrite_enabled=True,
-                image_status={"status": "ok"},
-                # The sample's picture is a stand-in for a generated one, so the
+                # The sample's picture is a stand-in for a diagram, so the
                 # "Restore source image" control the detail page shows for a post
                 # whose own cover was replaced is part of the preview too.
                 image_generated=True,
-                image_styles=["technical", "editorial", "sketch", "bulletin"],
-                default_image_style="editorial",
                 voices=["technical", "essay", "announcement", "funny"],
                 default_voice="technical",
                 voice_hints=_VOICE_HINTS,
@@ -497,7 +490,7 @@ def render_pages() -> list[tuple[str, str]]:
                 scan=_SCAN,
                 post=_POST,
                 token=_TOKEN,
-                images=_IMAGES,
+                linkedin=_LINKEDIN,
                 generated_at=_AT,
             ),
         ),

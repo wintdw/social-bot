@@ -1,8 +1,9 @@
 """Minimal Facebook Graph API client over the standard library.
 
 The Graph API is plain HTTPS + JSON, so no browser and no third-party HTTP
-dependency: urllib.request handles GET (feed reads) and form-encoded POST
-(status/link posts and photo posts from a public image URL). Access is
+dependency: urllib.request handles GET (feed reads), form-encoded POST
+(status/link posts), and a hand-rolled multipart POST (photo uploads — Graph no
+longer gets handed a URL to fetch, see ``create_photo_post``). Access is
 token-based — see README for how to mint a Page access token with the right
 permissions.
 """
@@ -14,6 +15,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from typing import Any
 
 from ...config import resolve_token
@@ -27,6 +29,36 @@ UA = "social-bot/0.1 (Graph API client)"
 #   pages_show_list        -> `whoami` lists the pages the token can manage
 
 FEED_FIELDS = "id,created_time,message,story,permalink_url,status_type,full_picture,from{name,id}"
+
+
+def _multipart_body(
+    boundary: str,
+    fields: dict[str, str],
+    *,
+    field: str,
+    filename: str,
+    data: bytes,
+    content_type: str,
+) -> bytes:
+    """A ``multipart/form-data`` body: plain text fields, then one file part.
+
+    Hand-rolled so the client keeps its "standard library only" promise (as the
+    form-encoded POSTs already do). Graph's photo upload needs the image as a
+    file part named ``source``.
+    """
+    out = bytearray()
+    for name, value in fields.items():
+        out += f"--{boundary}\r\n".encode()
+        out += f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode()
+        out += f"{value}\r\n".encode()
+    out += f"--{boundary}\r\n".encode()
+    out += (
+        f'Content-Disposition: form-data; name="{field}"; filename="{filename}"\r\n'
+        f"Content-Type: {content_type}\r\n\r\n"
+    ).encode()
+    out += data
+    out += f"\r\n--{boundary}--\r\n".encode()
+    return bytes(out)
 
 
 class ApiError(DestinationError):
@@ -148,28 +180,10 @@ class GraphApi:
     def _url(self, path: str) -> str:
         return f"{self.base_url}/{self.api_version}/{path.lstrip('/')}"
 
-    def _request(self, method: str, path: str, params: dict | None = None) -> Any:
-        url = self._url(path)
-        payload = dict(params or {})
-        if method == "GET":
-            payload["access_token"] = self.token
-            url = f"{url}?{urllib.parse.urlencode(payload)}"
-            data = None
-        else:
-            payload["access_token"] = self.token
-            data = urllib.parse.urlencode(payload).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            method=method,
-            headers={
-                "User-Agent": UA,
-                "Accept": "application/json",
-                "Content-Type": "application/x-www-form-urlencoded",
-            },
-        )
+    def _send(self, request: urllib.request.Request) -> Any:
+        """Send a prepared request, decode its JSON answer, raise on Graph errors."""
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(request, timeout=self.timeout) as resp:
                 raw = resp.read()
                 status = resp.status
         except urllib.error.HTTPError as exc:
@@ -185,11 +199,66 @@ class GraphApi:
             raise ApiError.from_payload(body if isinstance(body, dict) else {}, status=status)
         return body
 
+    def _request(self, method: str, path: str, params: dict | None = None) -> Any:
+        url = self._url(path)
+        payload = dict(params or {})
+        payload["access_token"] = self.token
+        if method == "GET":
+            request = urllib.request.Request(
+                f"{url}?{urllib.parse.urlencode(payload)}",
+                method=method,
+                headers={"User-Agent": UA, "Accept": "application/json"},
+            )
+        else:
+            request = urllib.request.Request(
+                url,
+                data=urllib.parse.urlencode(payload).encode("utf-8"),
+                method=method,
+                headers={
+                    "User-Agent": UA,
+                    "Accept": "application/json",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                },
+            )
+        return self._send(request)
+
     def get(self, path: str, params: dict | None = None) -> Any:
         return self._request("GET", path, params)
 
     def post(self, path: str, params: dict | None = None) -> Any:
         return self._request("POST", path, params)
+
+    def post_file(
+        self,
+        path: str,
+        fields: dict[str, str],
+        *,
+        field: str,
+        filename: str,
+        data: bytes,
+        content_type: str,
+    ) -> Any:
+        """POST text fields plus one binary file, as ``multipart/form-data``."""
+        boundary = f"----socialbot{uuid.uuid4().hex}"
+        body = _multipart_body(
+            boundary,
+            {**fields, "access_token": self.token},
+            field=field,
+            filename=filename,
+            data=data,
+            content_type=content_type,
+        )
+        request = urllib.request.Request(
+            self._url(path),
+            data=body,
+            method="POST",
+            headers={
+                "User-Agent": UA,
+                "Accept": "application/json",
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+            },
+        )
+        return self._send(request)
 
     # -- Endpoints ------------------------------------------------------
 
@@ -258,22 +327,34 @@ class GraphApi:
         self,
         page_id: str,
         caption: str,
-        url: str,
+        data: bytes,
+        *,
+        filename: str = "photo.jpg",
+        content_type: str = "image/jpeg",
         published: bool = True,
     ) -> dict:
-        """Publish a photo to the page from a publicly reachable image URL.
+        """Publish a photo to the page by uploading the image bytes.
 
-        Graph fetches the image itself, so no multipart upload and no extra
-        dependency. The response carries both the photo id (``id``) and the
-        feed post id (``post_id``); use ``post_id`` for the permalink.
+        The image is uploaded as a multipart ``source`` part rather than handed
+        to Graph as a ``url`` to fetch: that only works while the host serves the
+        image anonymously, and the image generator no longer does — every photo
+        post failed on its 401. The response carries the photo id (``id``) and
+        the feed post id (``post_id``); use ``post_id`` for the permalink.
         ``published=False`` uploads the photo without publishing it.
         """
-        params: dict[str, Any] = {"url": url}
+        fields: dict[str, str] = {}
         if caption:
-            params["caption"] = caption
+            fields["caption"] = caption
         if not published:
-            params["published"] = "false"
-        return self.post(f"{page_id}/photos", params)
+            fields["published"] = "false"
+        return self.post_file(
+            f"{page_id}/photos",
+            fields,
+            field="source",
+            filename=filename,
+            data=data,
+            content_type=content_type,
+        )
 
     def add_comment(self, post_id: str, message: str) -> dict:
         """Post a comment on an existing post.

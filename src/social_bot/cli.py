@@ -7,7 +7,7 @@ import json
 import pathlib
 import sys
 
-from . import __version__, voice
+from . import __version__, media, voice
 from .config import load_config, validate
 from .destinations import names as destination_names
 from .destinations import publisher_for
@@ -20,10 +20,17 @@ from .destinations.facebook import (
 )
 from .draft_pipeline import (
     apply_masthead,
-    generate_images,
+    backfill_destinations,
+    idea_brief,
+    ideas_topics_path,
+    load_topics,
+    localize_images,
     move_in_queue,
     publish_scheduled,
+    queue_ideas,
     queue_view,
+    render_diagrams,
+    request_ideas,
     reset_queue_order,
     scan_sources,
 )
@@ -102,23 +109,37 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p_scan.set_defaults(func=_cmd_blog_scan)
 
-    p_image = blog_sub.add_parser(
-        "image", help="generate AI images for queued drafts (never posts)"
+    p_diagram = blog_sub.add_parser(
+        "diagram", help="render code-drawn diagrams for queued drafts (never posts)"
     )
-    p_image.add_argument(
+    p_diagram.add_argument(
+        "--draft",
+        action="append",
+        metavar="ID",
+        help="only this draft id (repeatable; default: all diagram drafts)",
+    )
+    p_diagram.add_argument("--limit", type=int, default=None, help="max drafts to process")
+    p_diagram.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace existing images too (default: only fill drafts without one)",
+    )
+    p_diagram.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_diagram.set_defaults(func=_cmd_blog_diagram)
+
+    p_localize = blog_sub.add_parser(
+        "localize-images",
+        help="copy still-remote non-source images into the local store (never renders)",
+    )
+    p_localize.add_argument(
         "--draft",
         action="append",
         metavar="ID",
         help="only this draft id (repeatable; default: all open drafts)",
     )
-    p_image.add_argument("--limit", type=int, default=None, help="max drafts to process")
-    p_image.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="replace existing images too (default: only fill drafts without one)",
-    )
-    p_image.add_argument("--json", action="store_true", help="print the summary as JSON")
-    p_image.set_defaults(func=_cmd_blog_image)
+    p_localize.add_argument("--limit", type=int, default=None, help="max drafts to process")
+    p_localize.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_localize.set_defaults(func=_cmd_blog_localize)
 
     p_masthead = blog_sub.add_parser(
         "masthead",
@@ -133,6 +154,20 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p_masthead.add_argument("--limit", type=int, default=None, help="max drafts to update")
     p_masthead.add_argument("--json", action="store_true", help="print the summary as JSON")
     p_masthead.set_defaults(func=_cmd_blog_masthead)
+
+    p_backfill = blog_sub.add_parser(
+        "backfill-destinations",
+        help="union queued drafts onto publish.destinations (never removes)",
+    )
+    p_backfill.add_argument(
+        "--draft",
+        action="append",
+        metavar="ID",
+        help="only this draft id (repeatable; default: all drafts)",
+    )
+    p_backfill.add_argument("--limit", type=int, default=None, help="max drafts to update")
+    p_backfill.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_backfill.set_defaults(func=_cmd_blog_backfill_destinations)
 
     p_publish = blog_sub.add_parser(
         "publish",
@@ -171,6 +206,34 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "direction", choices=("up", "down", "top", "bottom"), help="where to move it"
     )
     p_move.set_defaults(func=_cmd_blog_move)
+
+    p_topics = blog_sub.add_parser(
+        "topics", help="list the idea-seed systems original posts are drawn from"
+    )
+    p_topics.add_argument("--json", action="store_true", help="print the topics as JSON")
+    p_topics.set_defaults(func=_cmd_blog_topics)
+
+    p_ideas = blog_sub.add_parser(
+        "ideas",
+        help="show the idea brief, or ask the worker to propose a batch (never posts)",
+    )
+    p_ideas.add_argument(
+        "--request",
+        action="store_true",
+        help="mark that a fresh batch of idea seeds was requested (the worker picks it up)",
+    )
+    p_ideas.add_argument("--json", action="store_true", help="print the brief as JSON")
+    p_ideas.set_defaults(func=_cmd_blog_ideas)
+
+    p_add_idea = blog_sub.add_parser(
+        "add-idea",
+        help="queue one original-post idea by hand (never rewrites or posts)",
+    )
+    p_add_idea.add_argument("title", help="the idea, as the post's hook or angle")
+    p_add_idea.add_argument("--topic", default="", help="the system/theme it belongs to")
+    p_add_idea.add_argument("--excerpt", default="", help="a short outline for the rewriter")
+    p_add_idea.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_add_idea.set_defaults(func=_cmd_blog_add_idea)
 
     p_serve = sub.add_parser(
         "serve",
@@ -340,12 +403,20 @@ def _cmd_post(args: argparse.Namespace) -> int:
         return 0
     try:
         if args.photo:
+            # Read the image here and upload the bytes: handing Graph the URL
+            # only works while that host serves it anonymously (see media).
+            image, filename, content_type = media.load(cfg, args.photo)
             resp = api.create_photo_post(
-                page_id, args.message or "", args.photo, published=not private
+                page_id,
+                args.message or "",
+                image,
+                filename=filename,
+                content_type=content_type,
+                published=not private,
             )
         else:
             resp = api.create_post(page_id, args.message, args.link, published=not private)
-    except ApiError as exc:
+    except (ApiError, media.MediaError) as exc:
         print(f"post: {exc}", file=sys.stderr)
         return 1
     post_id = str(resp.get("post_id") or resp.get("id", ""))
@@ -404,32 +475,56 @@ def _cmd_blog_scan(args: argparse.Namespace) -> int:
     return 1 if result["errors"] else 0
 
 
-def _cmd_blog_image(args: argparse.Namespace) -> int:
+def _cmd_blog_diagram(args: argparse.Namespace) -> int:
     cfg = _load_config(args)
     try:
-        result = generate_images(
+        result = render_diagrams(
             cfg,
             draft_ids=args.draft,
             limit=args.limit,
-            overwrite=True if args.overwrite else None,
+            overwrite=args.overwrite,
         )
     except ValueError as exc:
-        print(f"blog image: {exc}", file=sys.stderr)
+        print(f"blog diagram: {exc}", file=sys.stderr)
         return 2
     except OSError as exc:
         where = getattr(exc, "filename", None) or "the drafts directory"
-        print(f"blog image: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(f"blog diagram: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
         print(_DATA_DIR_HINT, file=sys.stderr)
         return 1
     if args.json:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
-        print(f"Generated {result['generated']} image(s) ({result['candidates']} candidate(s)).")
+        print(f"Rendered {result['rendered']} diagram(s) ({result['candidates']} candidate(s)).")
         for draft_id in result["ids"]:
             print(f"  - {draft_id}")
-    for err in result["errors"]:
-        print(f"  ! {err['source']}: {err['error']}", file=sys.stderr)
-    return 1 if result["errors"] else 0
+    return 0
+
+
+def _cmd_blog_localize(args: argparse.Namespace) -> int:
+    cfg = _load_config(args)
+    try:
+        result = localize_images(cfg, draft_ids=args.draft, limit=args.limit)
+    except ValueError as exc:
+        print(f"blog localize-images: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(f"blog localize-images: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(
+            f"Moved {result['localized']} image(s) into the local store "
+            f"({result['candidates']} candidate(s))."
+        )
+        for draft_id in result["ids"]:
+            print(f"  - {draft_id}")
+        for error in result["errors"]:
+            print(f"  ! {error['error']}", file=sys.stderr)
+    return 0
 
 
 def _cmd_blog_masthead(args: argparse.Namespace) -> int:
@@ -448,6 +543,30 @@ def _cmd_blog_masthead(args: argparse.Namespace) -> int:
         print(json.dumps(result, indent=2, ensure_ascii=False))
     else:
         print(f"Filled masthead on {result['updated']} draft(s): {result['masthead']!r}")
+        for draft_id in result["ids"]:
+            print(f"  - {draft_id}")
+    return 0
+
+
+def _cmd_blog_backfill_destinations(args: argparse.Namespace) -> int:
+    cfg = _load_config(args)
+    try:
+        result = backfill_destinations(cfg, draft_ids=args.draft, limit=args.limit)
+    except ValueError as exc:
+        print(f"blog backfill-destinations: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(
+            f"blog backfill-destinations: cannot write {where}: {exc.strerror or exc}",
+            file=sys.stderr,
+        )
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        print(f"Backfilled {result['updated']} draft(s) onto {', '.join(result['destinations'])}.")
         for draft_id in result["ids"]:
             print(f"  - {draft_id}")
     return 0
@@ -517,6 +636,87 @@ def _cmd_blog_move(args: argparse.Namespace) -> int:
     position = next((i + 1 for i, draft in enumerate(queue) if draft.id == args.draft), 0)
     print(f"Moved {args.draft} to position {position} of {len(queue)}.")
     return 0
+
+
+def _cmd_blog_topics(args: argparse.Namespace) -> int:
+    """List the idea-seed systems (ideas.topics_file) — themes, not articles."""
+    cfg = _load_config(args)
+    topics = load_topics(cfg)
+    if args.json:
+        print(json.dumps(topics, indent=2, ensure_ascii=False))
+        return 0
+    if not topics:
+        print(f"No idea topics configured. Add systems to {ideas_topics_path(cfg)}.")
+        return 0
+    print(f"{len(topics)} idea seed(s):")
+    for topic in topics:
+        suffix = f"  ({topic['url']})" if topic.get("url") else ""
+        print(f"  - {topic['name']}{suffix}")
+    return 0
+
+
+def _cmd_blog_ideas(args: argparse.Namespace) -> int:
+    """Show the idea brief, and optionally ask the worker for a fresh batch."""
+    cfg = _load_config(args)
+    if args.request:
+        try:
+            request_ideas(cfg)
+        except ValueError as exc:
+            print(f"blog ideas: {exc}", file=sys.stderr)
+            return 2
+        except OSError as exc:
+            where = getattr(exc, "filename", None) or "the ideas directory"
+            print(f"blog ideas: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+            print(_DATA_DIR_HINT, file=sys.stderr)
+            return 1
+    try:
+        brief = idea_brief(cfg)
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the ideas directory"
+        print(f"blog ideas: cannot read {where}: {exc.strerror or exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(brief, indent=2, ensure_ascii=False))
+        return 0
+    if args.request:
+        print("Ideas requested — the Command Code worker will propose a batch.")
+    print(f"enabled:  {brief['enabled']}")
+    print(f"source:   {brief['source_name']}  (the `source` on generated drafts)")
+    print(f"per run:  {brief['per_run']}")
+    print(f"topics:   {len(brief['topics'])} (in {ideas_topics_path(cfg)})")
+    print(f"queued:   {len(brief['existing'])} existing idea(s)")
+    if brief["requested"]:
+        print(f"pending:  requested {brief['requested_at']}")
+    if brief["error"]:
+        print(f"error:    {brief['error']}", file=sys.stderr)
+    return 0
+
+
+def _cmd_blog_add_idea(args: argparse.Namespace) -> int:
+    """Queue one original-post idea by hand (a seed for the normal rewrite flow)."""
+    cfg = _load_config(args)
+    try:
+        result = queue_ideas(
+            cfg,
+            [{"title": args.title, "topic": args.topic, "excerpt": args.excerpt}],
+        )
+    except ValueError as exc:
+        print(f"blog add-idea: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(f"blog add-idea: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    if result["added"]:
+        print(f"Queued idea {result['drafts'][0]['id']!r}: {args.title}")
+        return 0
+    reason = result["skipped_ideas"][0]["reason"] if result["skipped_ideas"] else "not added"
+    print(f"Skipped: {reason}", file=sys.stderr)
+    return 1
 
 
 def _cmd_voice_index(args: argparse.Namespace) -> int:

@@ -1,23 +1,57 @@
-Treatment: annotated explainer diagram. For mechanism and structure — a system
-whose parts talk to each other — where the *wiring* is the message. This is the
-one treatment whose image is written as well as drawn.
+# Diagram plate — the house style
 
-Draw the idea as a hand-inked, watercolour-washed explainer plate on a warm paper
-ground. A thin freehand frame borders the whole page, and one title line in dark
-ink sits at the top. The middle holds the mechanism itself, drawn properly — a
-machine, a stack, a tray — in ink outline with a light wash of the palette inside
-it; around it, three to six labelled parts: rounded boxes, small stacks of paper,
-folders, trays, a cloud, and a simple friendly character for whoever acts in the
-system (a small robot or rounded mascot, drawn, never photographic). Join the
-parts with freehand arrows — solid and dashed, single and double headed, curving
-where the wiring curves, because the arrows are the conversation. A dotted line
-may enclose what is protected or private, carrying its own label. Slightly
-imperfect ink, a faint pencil construction line or two, and enough empty paper
-around the drawing that it stays legible. The feeling is a thought worked out on
-paper and kept: friendly, hand-made, a little charming.
+The `diagram` image style is a **code-drawn isometric plate**: a small scene of
+real objects that shows how a system works. It is not an illustration and not a
+prompt for one — `src/social_bot/diagram.py` draws it deterministically from the
+`src/social_bot/iso.py` kit, so every box, card and cable sits exactly where the
+code puts it, and every Vietnamese string renders exactly (no diacritics lost,
+no stray lettering).
 
-Every drawn part carries its short label in plain capitals, and the title is the
-only other writing: no captions, no paragraphs, no numbers, no legend. No
-photographic people, no hands, no portrait faces. No photograph, no 3D render,
-no glossy UI mockup, no stock flowchart clip-art — this page was drawn by a
-person, and the wobble in the lines is what says so.
+**One style, every post.** A plate is not designed per post: a *system* gets a
+renderer, and every renderer draws the same way. When you add a system you add a
+renderer, not a look.
+
+## What a plate looks like
+
+- **Warm paper, one accent.** The ground is `#f6f3ed` with a faint dot grid and a
+  thin rounded frame. Ink is near-black, a single petrol-teal `#0e6b64` marks the
+  part that carries the idea, a rust `#b0503a` marks a hazard. At most two
+  colours per scene.
+- **Objects, not boxes-and-arrows.** The reader understands the idea because they
+  recognise the thing: a console, cabinets with a bay, a chest of drawers, a
+  plinth. Never a labelled rectangle, never a floating slab.
+- **Isometric solids.** Every part is a solid cuboid — three tone faces, the top
+  lightest — painted back to front so nearer parts hide farther ones, each with a
+  soft ground shadow. Nothing is a wireframe and nothing is see-through.
+- **Words live in the margins.** The drawing carries no labels, arrows or
+  captions. Up top: a kicker (the system), the title, and one line naming the
+  question. Then for each row, a label and a ratio on the left and an icon with a
+  verdict on the right.
+- **Two rows, one reading.** The rows are the two settings being compared (e.g.
+  `w:1` vs `w:majority`); the reader compares the *same* objects under each, so
+  the difference is the only thing that moves.
+
+## How a plate is built
+
+- `iso.py` — the kit: `Iso.p` / `quad` / `box` / `shadow` / `line`, and
+  `fit(bounds, rect)` to centre a known world box at whatever scale a row allows.
+- `diagram.py` — one `render_<system>` per system, plus `diagram_kind(draft)`, the
+  matcher that reads the draft's topic / title / excerpt and picks the renderer.
+  A new system is a new renderer **plus a branch in `diagram_kind`**; a draft that
+  matches no renderer renders **nothing** rather than borrowing a plate from
+  another system — a wrong figure is worse than no figure.
+- `diagram_html.py` — wraps that SVG in a bare page, and `browser_shot`
+  screenshots it to the PNG the publisher uploads. There is one drawing, so the
+  preview and the PNG cannot drift.
+
+## Palette
+
+| Token | Use |
+|---|---|
+| `_PAPER #f6f3ed` | the page |
+| `_INK #171a19`, `_MUTED #616963` | text, frame, hairlines |
+| `_ACCENT #0e6b64` | the part that carries the idea, and the good verdict |
+| `iso.TEAL / CREAM / SHELL / WOOD / INK` | materials, as (top, right, left, edge) |
+| `iso.RUST #b0503a` | a hazard — the failure the plate is about |
+
+Keep any new material or plate inside this palette and this grammar.

@@ -20,13 +20,9 @@ your task.
   rewriter picks one per post and returns it as `voice`, delivered in
   `GET /api/drafts` `voices`. Refines how a register sounds; the DNA still owns
   structure.
-- **[atento-image-style.md](atento-image-style.md)** — the shared palette
-  prepended to every generated image prompt (`image_gen.style_file`). Everything
-  else about a look (medium, composition, prohibitions — lettering included) is
-  the job of the per-post **treatments** in
-  **[image-styles/](image-styles/)** (`image_gen.styles`, chosen by the rewriter
-  like the masthead, DNA §9.2). A treatment file is the only place its look is
-  described, so adding one is a file plus a `styles` key.
+- **[image-styles/](image-styles/)** — how a post's image may be drawn:
+  `diagram.md` (the code-drawn explainer plate) and `illustration.md` (a crafted
+  `anatomy` isometric figure, used selectively).
 
 `AGENTS.md` (repo root) is the short brief; these docs are the detail.
 
@@ -37,14 +33,15 @@ your task.
 | Add or change a CLI command / flag | `src/social_bot/cli.py` |
 | Add a config key (default + validation) | `src/social_bot/config.py`, `config.yaml`, `tests/test_config.py` |
 | Add a source type / feed parser | `src/social_bot/source.py` (parse + `parse_source`), `src/social_bot/draft_pipeline.py:scan_sources`, `tests/test_source.py` |
+| Change how original posts are seeded (the idea themes) | `src/social_bot/ideas.py` (parse/slug) + `draft_pipeline.py` (`idea_brief`/`queue_ideas`/`request_ideas`) + the `ideas` block in `config.yaml`, `tests/test_ideas.py` / `tests/test_draft_pipeline.py` |
 | Change how a source is fetched (HTTP/retries) | `src/social_bot/source_api.py` |
 | Change the Draft model, states, or persistence | `src/social_bot/drafts.py`, `tests/test_drafts.py` |
 | Change scan / rewrite / publish orchestration | `src/social_bot/draft_pipeline.py`, `tests/test_draft_pipeline.py` |
 | Trigger a rewrite from the UI (the rewriter worker) | `scripts/rewrite_worker.py` + `Draft.rewrite_requested_at` (`drafts.py`) + `draft_pipeline.py` (`request_rewrite`/`rewrite_queue`) + `web.py` (`/api/rewrite-queue`), `tests/test_rewrite_worker.py` |
 | Change the post queue order (manual ordering) | the **Post queue** tab's queue panel in `dashboard_html.py` (`render_queue_html`, `_queue_panel`, `_queue_row`) + `draft_pipeline.py` (`_queue_key`, `set_queue_order`, `move_in_queue`) + `Draft.queue_order` in `drafts.py`, `tests/test_dashboard_html.py` / `tests/test_draft_pipeline.py` |
 | Change the AI-tell checks shown on /review (advisory lint) | `src/social_bot/caption_lint.py`, `tests/test_caption_lint.py` |
-| Change AI image generation (prompt, endpoint, provider) | `src/social_bot/image_gen.py`, `tests/test_image_gen.py` |
-| Change the image look / brand style | `docs/atento-image-style.md` (shared floor) + `docs/image-styles/*.md` (per-post treatments), then `image_gen.style_file` / `image_gen.styles` in `config.yaml` |
+| Change a code-drawn plate (the isometric scene) | `src/social_bot/diagram.py` (the plates + `diagram_kind`), `src/social_bot/iso.py` (the kit), `src/social_bot/diagram_html.py` (wraps the SVG to a page), `docs/image-styles/diagram.md`, `tests/test_diagram.py` |
+| Draw a post's illustration with the `anatomy` skill | `docs/image-styles/illustration.md` (operator/agent-drawn; the PNG lands in the served `/images/` store) |
 | Add a social destination (LinkedIn, …) | new package under `src/social_bot/destinations/`, register it in `destinations/registry.py`, then `tests/test_destinations.py` / `tests/test_publishers.py` |
 | Change one platform's publishing / transport / feed | `src/social_bot/destinations/<name>/` (facebook: `api.py`, `publisher.py`, `reader.py`, `feed.py`, `feed_html.py`) |
 | Change the review UI (HTML) | `src/social_bot/draft_html.py`, `tests/test_draft_html.py` |

@@ -24,16 +24,7 @@ def _payload(drafts=None):
         "voice_choices": ["technical", "essay"],
         "default_voice": "technical",
         "mastheads": {"choices": ["[Học cùng Atento]"], "default": "[Học cùng Atento]"},
-        "image_styles": ["technical", "editorial"],
-        "image_style_briefs": {
-            "technical": "TREATMENT BRIEF: drafted schematic, no lettering.",
-            "editorial": "TREATMENT BRIEF: quiet still life.",
-        },
-        "default_style": "editorial",
         "recent": [{"id": "prev", "source": "x", "caption": "old caption"}],
-        "recent_images": [
-            {"id": "prev", "image_style": "editorial", "image_prompt": "a stack of books"}
-        ],
         "drafts": drafts or [],
     }
 
@@ -65,29 +56,15 @@ class TestBuildPrompt:
         assert "[Học cùng Atento]" in prompt  # the masthead choices
         assert "old caption" in prompt  # recent captions to avoid
         assert '"id": "d1"' in prompt
-        assert "technical" in prompt  # voice + style choices
+        assert "technical" in prompt  # voice choices
 
-    def test_carries_the_treatment_briefs_themselves(self):
-        # A prompt has to serve the style it picks, which a bare key list cannot
-        # tell it how to do.
+    def test_says_not_to_write_an_image_prompt(self):
         prompt = worker.build_prompt(_payload(), {"id": "d1"})
-        assert "TREATMENT BRIEF: drafted schematic, no lettering." in prompt
-        assert "TREATMENT BRIEF: quiet still life." in prompt
-        assert "IMAGE STYLE BRIEFS" in prompt
+        assert "Do not write an image prompt" in prompt
 
-    def test_carries_the_recent_images_to_avoid(self):
+    def test_names_the_product_so_readers_know_what_it_is_about(self):
         prompt = worker.build_prompt(_payload(), {"id": "d1"})
-        assert "RECENT IMAGES" in prompt
-        assert "[editorial] a stack of books" in prompt
-
-    def test_says_so_when_no_treatment_briefs_are_configured(self):
-        payload = {**_payload(), "image_style_briefs": {}}
-        assert "no treatment briefs configured" in worker.build_prompt(payload, {"id": "d1"})
-
-    def test_empty_recent_images_reads_as_none(self):
-        payload = {**_payload(), "recent_images": []}
-        prompt = worker.build_prompt(payload, {"id": "d1"})
-        assert "RECENT IMAGES (avoid repeating these subjects) ===\n(none)" in prompt
+        assert "Name the product the post is about" in prompt
 
     def test_a_locked_voice_names_the_key_and_forbids_another(self):
         # "Rewrite in this voice": the operator picked the register, so there is no
@@ -118,12 +95,12 @@ class TestBuildPrompt:
         assert "PROFILE + REAL LINES" in prompt
         assert "Match the VOICE of the real messages in MY VOICE below" in prompt
 
-    def test_my_voice_sits_between_the_menu_and_the_style_briefs(self):
+    def test_my_voice_sits_between_the_menu_and_the_draft(self):
         prompt = worker.build_prompt(_payload(), {"id": "d1"}, my_voice="X")
         assert (
             prompt.index("=== VOICE MENU")
             < prompt.index("=== MY VOICE")
-            < prompt.index("=== IMAGE STYLE BRIEFS")
+            < prompt.index("=== DRAFT TO REWRITE")
         )
 
     def test_leaves_my_voice_out_entirely_when_empty(self):
@@ -131,39 +108,6 @@ class TestBuildPrompt:
         prompt = worker.build_prompt(_payload(), {"id": "d1"})
         assert "MY VOICE" not in prompt
         assert "Match the VOICE of the real messages" not in prompt
-
-
-class TestBuildImagePrompt:
-    """The prompt-only task: a new image prompt, caption untouched."""
-
-    def test_asks_for_the_prompt_alone_and_leaves_the_style_to_the_operator(self):
-        prompt = worker.build_image_prompt(
-            _payload(), {"id": "d1", "caption": "Một caption", "image_style": "sketch"}
-        )
-        assert '"image_prompt"' in prompt
-        assert "exactly this one key" in prompt
-        # The treatment was picked on /review/{id}: it is context (it rides in the
-        # POST block, which is how the agent knows what to write for), never a key
-        # to send back. The old task asked it to choose one.
-        assert "do NOT pick one" in prompt
-        assert "the image_style you choose" not in prompt
-        assert '"image_style":  exactly one of' not in prompt
-        # The caption is context, not a thing to rewrite.
-        assert "Một caption" in prompt
-        assert "its image is being redone" in prompt
-
-    def test_carries_the_treatment_briefs_and_the_recent_images(self):
-        prompt = worker.build_image_prompt(_payload(), {"id": "d1"})
-        assert "TREATMENT BRIEF: drafted schematic, no lettering." in prompt
-        assert "RECENT IMAGES" in prompt and "[editorial] a stack of books" in prompt
-
-    def test_leaves_the_caption_contract_out(self):
-        # The DNA, the voice menu and the mastheads are about prose: beside the
-        # point here, and their bulk would only dilute the image instruction.
-        prompt = worker.build_image_prompt(_payload(), {"id": "d1"})
-        assert "DNA BRIEF" not in prompt
-        assert "Voice brief" not in prompt
-        assert "[Học cùng Atento]" not in prompt
 
 
 class TestMyVoice:
@@ -256,21 +200,6 @@ class TestProcessOnce:
             {"caption": "hi"},
         )
 
-    def test_an_image_only_request_posts_to_the_image_prompt_endpoint(self, monkeypatch):
-        calls = []
-        self._patch(
-            monkeypatch,
-            calls,
-            drafts=[{"id": "d1", "rewrite_mode": "image"}],
-            result={"image_prompt": "a labelled diagram", "image_style": "diagram"},
-        )
-        assert worker.process_once(_cfg()) == 1
-        assert calls[-1] == (
-            "POST",
-            "http://127.0.0.1:8083/api/drafts/d1/image-prompt",
-            {"image_prompt": "a labelled diagram", "image_style": "diagram"},
-        )
-
     def test_an_unknown_mode_is_a_full_rewrite(self, monkeypatch):
         calls = []
         self._patch(
@@ -301,34 +230,10 @@ class TestProcessOnce:
         assert worker.process_once(_cfg()) == 1
         # The whole rewrite, not the smaller prompt-only task…
         assert "DNA BRIEF" in prompts[0]
-        assert "IMAGE STYLE BRIEFS" in prompts[0]
         # …with the operator's register pinned.
         assert '"voice":        exactly "essay"' in prompts[0]
         # …and posted back where a caption rewrite lands, not to the image endpoint.
         assert calls[-1][1].endswith("/api/drafts/d1/rewrite")
-
-    def test_each_draft_uses_its_own_prompt(self, monkeypatch):
-        # Two requests of different kinds in one poll: each gets its own task.
-        prompts = []
-        calls = []
-        self._patch(
-            monkeypatch,
-            calls,
-            drafts=[{"id": "cap"}, {"id": "img", "rewrite_mode": "image"}],
-            result={"caption": "hi"},
-        )
-        original = worker.run_commandcode
-
-        def capture(settings, prompt):
-            prompts.append(prompt)
-            return original(settings, prompt)
-
-        monkeypatch.setattr(worker, "run_commandcode", capture)
-        worker.process_once(_cfg())
-        assert len(prompts) == 2
-        assert "IMAGE STYLE BRIEFS" in prompts[1]
-        assert "DNA BRIEF" in prompts[0] and "DNA BRIEF" not in prompts[1]
-        assert [call[1].rsplit("/", 1)[-1] for call in calls[1:]] == ["rewrite", "image-prompt"]
 
     def test_a_caption_rewrite_carries_the_operators_voice(self, monkeypatch):
         prompts = []
@@ -344,29 +249,6 @@ class TestProcessOnce:
         monkeypatch.setattr(worker, "run_commandcode", capture)
         assert worker.process_once(_cfg()) == 1
         assert "VOICE-FOR-d1" in prompts[0]
-
-    def test_an_image_request_gets_no_voice_block(self, monkeypatch):
-        # An image prompt is an English visual concept; the chat register is beside
-        # the point there, so the block is never even fetched.
-        prompts = []
-        calls = []
-        self._patch(
-            monkeypatch,
-            calls,
-            drafts=[{"id": "d1", "rewrite_mode": "image"}],
-            result={"image_prompt": "a diagram"},
-        )
-        monkeypatch.setattr(worker, "_my_voice", lambda cfg, draft: "SHOULD-NOT-APPEAR")
-        original = worker.run_commandcode
-
-        def capture(settings, prompt):
-            prompts.append(prompt)
-            return original(settings, prompt)
-
-        monkeypatch.setattr(worker, "run_commandcode", capture)
-        worker.process_once(_cfg())
-        assert "SHOULD-NOT-APPEAR" not in prompts[0]
-        assert "MY VOICE" not in prompts[0]
 
     def test_records_a_failure_and_keeps_going(self, monkeypatch):
         calls = []
@@ -398,3 +280,105 @@ class TestProcessOnce:
         self._patch(monkeypatch, calls, drafts=[{"id": "d1"}])
         with pytest.raises(worker.WorkerError, match="not in the rewrite queue"):
             worker.process_once(_cfg(), draft_id="nope")
+
+
+def _ideas_payload(**over):
+    payload = {
+        "enabled": True,
+        "source_name": "atento-original",
+        "per_run": 2,
+        "requested": True,
+        "requested_at": "2026-09-10T10:00:00+07:00",
+        "error": "",
+        "topics": [
+            {"name": "ClickHouse architecture", "url": "https://clickhouse.com/docs"},
+            {"name": "MySQL internals", "url": ""},
+        ],
+        "existing": ["Old idea"],
+        "dna": "DNA BRIEF",
+        "recent": [{"id": "prev", "caption": "old caption"}],
+    }
+    payload.update(over)
+    return payload
+
+
+class TestBuildIdeasPrompt:
+    def test_carries_themes_docs_dna_and_anti_repetition(self):
+        prompt = worker.build_ideas_prompt(_ideas_payload())
+        assert "DNA BRIEF" in prompt
+        assert "ClickHouse architecture" in prompt
+        assert "https://clickhouse.com/docs" in prompt  # reference docs
+        assert "- Old idea" in prompt  # already queued
+        assert "old caption" in prompt  # recent captions
+        assert "exactly 2 of them" in prompt  # per_run
+        assert '"ideas"' in prompt
+
+    def test_no_themes_reads_as_configured_none(self):
+        prompt = worker.build_ideas_prompt(_ideas_payload(topics=[]))
+        assert "(no themes configured)" in prompt
+
+    def test_asks_for_an_approachable_single_aspect_with_a_real_problem(self):
+        prompt = worker.build_ideas_prompt(_ideas_payload())
+        assert "Aim at a wide audience" in prompt
+        assert "Go deep in ONE spot only" in prompt
+        assert "real, familiar problem" in prompt
+        assert "X là gì" in prompt  # a named example of what to skip
+        assert "naming the system" in prompt  # the title must name the product
+
+
+class TestProcessIdeasOnce:
+    def _patch(self, monkeypatch, calls, *, initial, result=None, error=None, response=None):
+        def fake_request(cfg, method, url, body=None):
+            calls.append((method, url, body))
+            if method == "GET" and url.endswith("/api/ideas"):
+                return initial
+            if url.endswith("/api/ideas"):
+                return response or {"added": 2}
+            return {}
+
+        def fake_run(settings, prompt):
+            if error:
+                raise worker.WorkerError(error)
+            return result
+
+        monkeypatch.setattr(worker, "_request_json", fake_request)
+        monkeypatch.setattr(worker, "run_commandcode", fake_run)
+
+    def test_no_request_only_polls(self, monkeypatch):
+        calls = []
+        self._patch(monkeypatch, calls, initial=_ideas_payload(requested=False))
+        assert worker.process_ideas_once(_cfg()) == 0
+        assert len(calls) == 1  # just the GET
+
+    def test_posts_the_batch_back(self, monkeypatch):
+        calls = []
+        ideas = [{"topic": "MySQL internals", "title": "B+ tree"}]
+        self._patch(monkeypatch, calls, initial=_ideas_payload(), result={"ideas": ideas})
+        assert worker.process_ideas_once(_cfg()) == 2
+        assert calls[-1] == ("POST", "http://127.0.0.1:8083/api/ideas", {"ideas": ideas})
+
+    def test_a_run_without_ideas_is_a_failure(self, monkeypatch):
+        calls = []
+        self._patch(monkeypatch, calls, initial=_ideas_payload(), result={"nope": 1})
+        assert worker.process_ideas_once(_cfg()) == 0
+        assert calls[-1][1].endswith("/api/ideas/error")
+        assert "no `ideas` array" in calls[-1][2]["error"]
+
+    def test_records_a_failure_and_keeps_going(self, monkeypatch):
+        calls = []
+        self._patch(monkeypatch, calls, initial=_ideas_payload(), error="boom")
+        assert worker.process_ideas_once(_cfg()) == 0
+        method, url, body = calls[-1]
+        assert method == "POST" and url.endswith("/api/ideas/error")
+        assert body == {"error": "boom"}
+
+    def test_dry_run_never_runs_the_cli_or_posts(self, monkeypatch):
+        calls = []
+        self._patch(monkeypatch, calls, initial=_ideas_payload(), result={"ideas": []})
+
+        def fail(*a, **k):
+            raise AssertionError("the CLI must not run in --dry-run")
+
+        monkeypatch.setattr(worker, "run_commandcode", fail)
+        assert worker.process_ideas_once(_cfg(), dry_run=True) == 0
+        assert len(calls) == 1

@@ -20,11 +20,16 @@ destinations:
     account_id: "1148652808337860"
 
   linkedin:
-    # Publishing is a stub for now (needs Community Management API approval).
-    # Fill in author_urn + a token to switch it on once the adapter is wired.
-    base_url: https://api.linkedin.com
-    api_version: ""            # LinkedIn-Version header, e.g. "202601"
-    author_urn: ""             # urn:li:organization:<id>
+    # linkin-bot (a sibling service) owns the LinkedIn OAuth token and talks to
+    # LinkedIn; this app posts through its POST /post gateway over the internal
+    # network (linkin-bot is not exposed publicly). host.docker.internal is the
+    # host, where linkin-bot publishes port 8082 (see docker-compose extra_hosts).
+    base_url: http://host.docker.internal:8082
+    # The gateway runs LinkedIn's register-then-PUT image flow before the post,
+    # so an image post can take well over 30s; at 30s a post that had already
+    # gone out was reported as failed.
+    timeout_seconds: 120.0
+    visibility: PUBLIC         # PUBLIC | CONNECTIONS
 
 feed:
   limit: 10            # default number of feed posts shown by `feed`
@@ -38,13 +43,7 @@ feed:
 
 sources:
   # One entry per feed to watch. type: sitemap | rss | index.
-  # `index` reads a listing page's JSON-LD ItemList (for sites with no feed) —
-  # atento.vn/blog has no RSS and its sitemap omits posts, so we use the index.
-  - name: atento-blog
-    type: index
-    url: https://atento.vn/blog
-    path_prefix: /blog/       # only post URLs containing this are queued
-    lang: vi
+  # `index` reads a listing page's JSON-LD ItemList (for sites with no feed).
   - name: seangoedecke
     type: rss
     url: https://www.seangoedecke.com/rss.xml
@@ -52,14 +51,6 @@ sources:
   - name: bytebytego
     type: rss
     url: https://blog.bytebytego.com/feed
-    lang: en
-  - name: martinfowler
-    type: rss                 # Atom is parsed by the `rss` reader too
-    url: https://martinfowler.com/feed.atom
-    lang: en
-  - name: netflix-tech-blog
-    type: rss
-    url: https://netflixtechblog.com/feed
     lang: en
 
 # Review queue (/review): queue.json is the list awaiting review; seen.json
@@ -71,7 +62,7 @@ review:
 
 publish:
   enabled: true               # false is a global kill-switch (approve returns an error)
-  destinations: [facebook]    # what an approval may post to (linkedin is a stub)
+  destinations: [facebook, linkedin]    # routing default for NEW drafts; /review can retarget one draft
   # Timed posting: a human still approves each draft (Approve & schedule on
   # /review/{id}); the serve scheduler then posts approved drafts at these
   # container-local slots, oldest first. It never approves anything. An empty
@@ -81,10 +72,18 @@ publish:
   # random time inside it, so posts don't land at a fixed clock minute. 20:00 to
   # 20:30 Vietnam time (compose sets TZ=Asia/Ho_Chi_Minh).
   post_at: ["20:00-20:30"]
+  # Per-destination slots override post_at for that platform only. LinkedIn posts
+  # 14:00-14:30 VNT; Facebook keeps the shared post_at above.
+  destination_post_at:
+    linkedin: ["14:00-14:30"]
   post_per_slot: 1            # oldest approved drafts posted per slot
-  # Minimum days between *public* posts. 2 = one post every other day, 1 = at
-  # most one per day: the scheduler still wakes daily, but skips until the gap
-  # has elapsed. Private (unpublished) test sends don't count toward it.
+  # Minimum days between *scheduled* public posts, counted per destination (so
+  # LinkedIn's 14:00 and Facebook's 20:00 don't block each other). 2 = one post
+  # every other day,
+  # 1 = at most one per day: the scheduler still wakes daily, but skips until the
+  # gap has elapsed. Only the poster's own sends pace it — private (unpublished)
+  # test sends don't, and neither do manual sends (a draft's Post now, a /queue
+  # platform button), which are never held back by the interval either.
   interval_days: 1
   # Private mode: every approve/post is a REAL Graph call but stays unpublished
   # (visible to page admins only). Private sends are audited, don't consume the
@@ -104,7 +103,7 @@ publish:
       - "[Mỗi ngày 1 kiến thức mới]"   # một mẩu kiến thức ngắn, một ý
     default: "[Đọc báo cùng Atento]"
   dna_file: docs/atento-dna.md  # Atento brand-voice brief; surfaced via GET /api/drafts
-  # One file per voice under docs/voices/ (key -> path), like image_gen.styles:
+  # One file per voice under docs/voices/ (key -> path):
   # the rewriter picks a key per post (by content and tone) and returns it as
   # `voice`; the file's brief + samples are delivered in GET /api/drafts `voices`.
   # The DNA above still owns the structure (masthead, formats, hashtags, CTA,
@@ -115,18 +114,13 @@ publish:
     essay: docs/voices/essay.md                # giọng Đạt — essay / mindset
     announcement: docs/voices/announcement.md  # khai giảng, seminar, cộng đồng
     funny: docs/voices/funny.md                # trào phúng / hài (giọng VOZ)
+    natural: docs/voices/natural.md              # nói thường, như kể cho bạn nghe (bài test audience)
   default_voice: technical
   # How many recently-written captions to give the rewriter with the open drafts
   # (GET /api/drafts `recent`) so it doesn't reopen the same way twice — and the
   # same set the pipeline lints a new caption against (the tells shown on
   # /review/{id}). 0 turns both off.
   recent_captions: 12
-  # The same for images: the last N `image_prompt`/`image_style` pairs go to the
-  # rewriter as `recent_images`, so it can see which subjects and compositions it
-  # has already used and pick a different one. This is what keeps a run of posts
-  # from all illustrating the same object — the DNA deliberately does not mandate
-  # "a different metaphor each time" any more. 0 sends none.
-  recent_images: 12
   dir: data/publish           # publish audit log (/publish)
   log_name: published.jsonl   # append-only publish audit
 
@@ -136,58 +130,29 @@ blog:
   retries: 2                  # retries with backoff (the blog host is flaky)
   max_scan: 12                # max new drafts queued per source per scan
   # Skip items published more than this many days ago (0 = no limit). A feed
-  # that exposes more entries than one scan takes (martinfowler's Atom, notably:
-  # a 30-entry window against a max_scan of 12) is otherwise walked back another
-  # batch every scan.
+  # that exposes more entries than one scan takes is otherwise walked back
+  # another batch every scan.
   max_age_days: 90
   excerpt_chars: 240          # excerpt truncation for RSS items
   enrich: true                # fetch each new post page for title/excerpt/image
   user_agent: social-bot/0.1 (+content pipeline)
 
-# --- AI image generation ------------------------------------------------------
-# Generates an image from each draft's own title/excerpt (Pollinations.ai).
-# Only drafts WITHOUT an image get one: a post that already has an image (e.g.
-# the blog's cover) keeps it, wherever generation is triggered from. To
-# deliberately replace an existing image, pass `--overwrite` to `blog image`
-# (or `?overwrite=true` to POST /api/drafts/{id}/image, or the Regenerate
-# image button on /review/{id}).
-#
-# base_url is the prompt endpoint:
-#   https://gen.pollinations.ai/image  -> clean flux output, REQUIRES a valid
-#                                         image_gen.api_key (credentials.yaml);
-#                                         get one at enter.pollinations.ai/keys
-#   https://image.pollinations.ai/prompt -> no key needed, but ignores `model`
-#                                         (serves the older `sana`) and
-#                                         watermarks every image
-image_gen:
+# --- Idea seeds: original Atento posts (not reposts) --------------------------
+# `sources[]` above are feeds to *repost*. `ideas` is a different input: a list
+# of systems/architectures the rewriter agent turns into *original* Atento posts
+# grounded in each system's own documentation — nothing is fetched or reposted.
+# The seeds live in `topics_file` (one system per line, optional "| <docs url>");
+# the agent proposes specific ideas, POSTs them to /api/ideas, and each lands as
+# an `extracted` draft with `source: atento-original` (no URL), then flows
+# through the normal rewrite + human approval like any other draft. Request a
+# batch from /review's "Generate ideas" button (fulfilled by the host-side
+# scripts/rewrite_worker.py) or `social-bot blog ideas --request`.
+ideas:
   enabled: true
-  provider: pollinations
-  base_url: https://gen.pollinations.ai/image
-  style_file: docs/atento-image-style.md  # shared palette; prepended to every prompt
-  # Visual treatments, chosen per post by the rewriter like the masthead (DNA
-  # §9.2). Each key names a file under docs/image-styles/ whose text LEADS the
-  # prompt, ahead of the shared palette brief (style_file), so it governs the
-  # medium — and carries that look's own prohibitions (people, lettering, the
-  # clichés to avoid). Nothing outside the treatment file forbids anything, so
-  # add a treatment by writing its file and listing it here.
-  # `default_style` is the fallback when the rewriter omits a key. Clear
-  # `styles` to fall back to the single style_file look.
-  styles:
-    technical: docs/image-styles/technical.md   # System Design / Architecture, nền tảng
-    editorial: docs/image-styles/editorial.md   # nền tảng/nghề/mindset chung (mặc định)
-    sketch: docs/image-styles/sketch.md         # essay cá nhân / ý kiến
-    bulletin: docs/image-styles/bulletin.md     # thông báo, sự kiện, tin tức
-    diagram: docs/image-styles/diagram.md       # cơ chế: nhiều thành phần trao đổi với nhau
-  default_style: editorial
-  overwrite: false            # only fill drafts with no image; keep covers
-  # Provider-qualified model on the gen.pollinations.ai gateway. gpt-image-1-mini
-  # follows a treatment brief's instructions far better than flux.1-schnell
-  # (which draws literal buildings and stray words). List others
-  # with: curl -H "Authorization: Bearer $KEY" https://gen.pollinations.ai/models
-  model: openai/gpt-image-1-mini
-  width: 1080                 # portrait 1080x1350 = most feed real estate
-  height: 1350
-  timeout_seconds: 300.0      # gpt-image models are slow; be generous
+  topics_file: data/ideas/topics.md   # edit live; one system/theme per line
+  source_name: atento-original        # the `source` on generated drafts
+  dir: data/ideas                     # dedupe ledger + request state
+  per_run: 3                          # ideas one agent run should propose
 
 # --- Rewriter worker ----------------------------------------------------------
 # When enabled, /review/{id} offers a "Rewrite with Command Code" button that
