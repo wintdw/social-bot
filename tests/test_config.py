@@ -178,30 +178,17 @@ def test_defaults_include_pipeline_sections(tmp_path):
     assert cfg["publish"]["post_at"] == []  # timed posting is off by default
     assert cfg["publish"]["post_per_slot"] == 1
     assert cfg["publish"]["interval_days"] == 0  # no minimum gap by default
-    assert cfg["publish"]["recent_captions"] == 12  # anti-repetition context for the rewriter
+    assert cfg["publish"]["recent_captions"] == 12  # caption-lint comparison window
     assert cfg["blog"]["scan_at"] == ["06:00"]
     assert cfg["blog"]["max_age_days"] == 0  # no age window by default
     assert cfg["review"]["dir"] == "data/review"
     assert cfg["publish"]["log_name"] == "published.jsonl"
-    assert cfg["publish"]["voices"] == {}  # no voice menu by default
-    assert cfg["publish"]["default_voice"] == ""
 
 
 def test_defaults_include_the_ideas_section(tmp_path):
     cfg = load_config(tmp_path / "missing.yaml")
-    assert cfg["ideas"]["enabled"] is False  # opt-in, like rewrite/voice
     assert cfg["ideas"]["topics_file"] == "data/ideas/topics.md"
     assert cfg["ideas"]["source_name"] == "atento-original"
-    assert cfg["ideas"]["per_run"] >= 1
-
-
-def test_rewrite_worker_disabled_by_default(tmp_path):
-    cfg = load_config(tmp_path / "missing.yaml")
-    assert cfg["rewrite"]["enabled"] is False
-    assert cfg["rewrite"]["command"] == "commandcode"
-    assert cfg["rewrite"]["model"] == ""
-    assert cfg["rewrite"]["max_turns"] >= 1
-    assert cfg["rewrite"]["api_base"].startswith("http://")
 
 
 @pytest.mark.parametrize(
@@ -227,22 +214,8 @@ def test_rewrite_worker_disabled_by_default(tmp_path):
         {"blog": {"timeout_seconds": 0}},
         {"blog": {"max_scan": 0}},
         {"blog": {**DEFAULTS["blog"], "max_age_days": -1}},
-        {"ideas": {"per_run": 0}},
         {"ideas": {"topics_file": "   "}},
         {"ideas": {"source_name": "  "}},
-        {"rewrite": {"timeout_seconds": 0}},
-        {"rewrite": {"poll_seconds": 0}},
-        {"rewrite": {"max_turns": 0}},
-        {"rewrite": {"api_base": "localhost:8083"}},
-        {"rewrite": {"command": "   "}},
-        {"voice": {"backend": "elasticsearch"}},
-        {"voice": {"top_k": 0}},
-        {"voice": {"max_examples_chars": -1}},
-        {"voice": {"min_similarity": 1.5}},
-        {"voice": {"min_example_words": -1}},
-        {"voice": {"hybrid_candidates": 0}},
-        {"voice": {"embedding": {"provider": "cohere"}}},
-        {"voice": {"embedding": {"timeout_seconds": 0}}},
     ],
     ids=[
         "empty-sources",
@@ -265,35 +238,10 @@ def test_rewrite_worker_disabled_by_default(tmp_path):
         "bad-blog-timeout",
         "zero-max-scan",
         "negative-max-age-days",
-        "zero-ideas-per-run",
         "blank-ideas-topics-file",
         "blank-ideas-source-name",
-        "zero-rewrite-timeout",
-        "zero-rewrite-poll",
-        "zero-rewrite-max-turns",
-        "bad-rewrite-api-base",
-        "blank-rewrite-command",
-        "unknown-voice-backend",
-        "zero-voice-top-k",
-        "negative-voice-max-examples",
-        "voice-similarity-above-one",
-        "negative-voice-min-example-words",
-        "zero-voice-hybrid-candidates",
-        "unknown-voice-embedding-provider",
-        "zero-voice-embedding-timeout",
     ],
 )
 def test_validate_rejects_bad_pipeline_config(override):
     with pytest.raises(ValueError):
         validate({**DEFAULTS, **override})
-
-
-def test_defaults_include_the_voice_section(tmp_path):
-    cfg = load_config(tmp_path / "missing.yaml")
-    assert cfg["voice"]["enabled"] is False  # opt-in, like rewrite
-    assert cfg["voice"]["backend"] == "hybrid"
-    assert cfg["voice"]["corpus_dir"] == "data/voice/normalized"
-    assert cfg["voice"]["only_me"] is True
-    assert cfg["voice"]["include_profile"] is True
-    assert cfg["voice"]["embedding"]["provider"] == "local"
-    assert cfg["voice"]["embedding"]["api_key"] == ""  # secrets live in credentials.yaml

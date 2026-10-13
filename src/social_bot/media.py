@@ -2,7 +2,7 @@
 
 Photos used to be published by handing Graph a remote URL and letting Graph
 fetch it. That only works while the host serves the image anonymously, so
-images are stored locally — the folder that holds the code-drawn diagrams,
+images are stored locally — the folder that holds the drawn plates,
 which the app serves at ``/images/`` — and the publisher uploads the bytes
 instead of a URL.
 
@@ -23,8 +23,8 @@ from .config import ROOT
 PREFIX = "/images/"
 
 # One flat name, ``<draft id>.<ext>``, validated so a request can never escape
-# the images directory. ``.svg`` is the diagram preview; ``.png`` its raster;
-# the rest are copied down from a source cover.
+# the images directory. ``.png`` is a drawn plate; the rest are copied down
+# from a source cover.
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*\.(svg|jpg|jpeg|png|webp)$", re.IGNORECASE)
 
 MEDIA_TYPES = {

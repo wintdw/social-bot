@@ -1,11 +1,10 @@
-"""Advisory lint for the AI-writing tells a rewrite should avoid (pure logic).
+"""Advisory lint for the AI-writing tells a caption should avoid (pure logic).
 
-The rewrite itself is done by an external agent applying the Atento DNA
-(docs/atento-dna.md §12) and is not generated in this codebase. This module does
-not edit a caption — it *names* the tells a human reviewer (and the rewriter)
-should fix, so a run of posts doesn't converge on one formula. Warnings are
-advisory: they are stored on the draft and shown on /review/{id} and in the
-rewrite response; they never block a rewrite or a post.
+Captions are written by the operator in Claude. This module does not edit a
+caption — it *names* the
+tells a human reviewer should fix, so a run of posts doesn't converge on one
+formula. Warnings are advisory: they are stored on the draft and shown on
+/review/{id} whenever a caption is saved; they never block a save or a post.
 
 Two kinds of check: ones that read a single caption (a stock opener, the
 antithesis engine, a flat rhythm, the rule of three, a cliché transition, empty
@@ -52,7 +51,7 @@ _ANTITHESIS = (
     re.compile(r"\bkhông phải (?:là |hẳn )?[^.\n!?]{0,40}?mà\b", re.I),
 )
 
-# Empty hype the DNA bans outright (§8).
+# Empty hype a caption should never carry.
 _HYPE = (
     "cách mạng",
     "đột phá",
@@ -63,7 +62,7 @@ _HYPE = (
 )
 
 # Empty transition phrases that pad an idea instead of advancing it. Keep this
-# short and deliberately NOT the DNA §11 signature phrases ("Hãy tưởng tượng…",
+# short and deliberately NOT the stock signature phrases ("Hãy tưởng tượng…",
 # "Điều quan trọng cần chú ý là…") — those are voice, not filler.
 _CLICHE = (
     "về cơ bản",
@@ -85,7 +84,7 @@ _TRICOLON_MAX_WORDS = 3
 
 # Required boilerplate that is not the post's own closing move, so it never
 # counts as a repeated closer: the CTA line ("… tại comment") and the source
-# credit ("Nguồn: …", DNA §7.3) — the latter repeats verbatim for a frequent
+# credit ("Nguồn: …") — the latter repeats verbatim for a frequent
 # source, which would otherwise false-positive on every post from that author.
 _BOILERPLATE_RE = re.compile(r"comment|^\s*nguồn\s*:", re.I)
 

@@ -1,4 +1,4 @@
-"""Content pipeline orchestration: scan sources, receive rewrites, publish.
+"""Content pipeline orchestration: scan sources, save captions, publish.
 
 The fetch/write glue lives here, the pure model in drafts.py, the pure parsing
 in source.py, and the network in source_api.py and the `destinations/` packages.
@@ -13,7 +13,6 @@ import pathlib
 
 from . import ideas as idea_seeds
 from . import media
-from .browser_shot import ShotError, html_to_png
 from .caption import display_title
 from .caption_lint import lint_caption
 from .config import ROOT, load_config
@@ -25,14 +24,10 @@ from .destinations import (
 from .destinations import (
     names as destination_names,
 )
-from .diagram import render_for_draft as render_diagram_for_draft
-from .diagram_html import render_for_draft_html as render_diagram_html_for_draft
 from .drafts import (
     AI_DRAFT,
     APPROVED,
     EXTRACTED,
-    REWRITE_CAPTION,
-    REWRITE_CAPTION_VOICE,
     STATES,
     Draft,
     append_audit,
@@ -45,9 +40,8 @@ from .drafts import (
 from .source import Source, parse_blog_posting, parse_source
 from .source_api import SourceClient, SourceError
 
-# States shown for review / rewrite. OPEN_STATES is the rewrite backlog (what
-# the rewriter reads and may rewrite); REVIEW_STATES adds approved drafts, which
-# stay on /review until they post.
+# States shown for review. OPEN_STATES is the drafts still being written; REVIEW_STATES
+# adds approved drafts, which stay on /review until they post.
 OPEN_STATES = ("extracted", "ai_draft")
 REVIEW_STATES = (EXTRACTED, AI_DRAFT, APPROVED)
 # The scheduler's queue: drafts a human approved, waiting for a posting slot.
@@ -79,9 +73,9 @@ def published_path(cfg: dict) -> pathlib.Path:
     )
 
 
-# Parsed side-files (seen ledger, publish audit, DNA/style briefs) keyed by
+# Parsed side-files (seen ledger, publish audit) keyed by
 # path, validated against (mtime_ns, size). Read on every request by /status,
-# /review and /api/drafts; re-parsing them each time is pure waste once warm.
+# /review and /status; re-parsing them each time is pure waste once warm.
 # Callers get a copy of the cached value, never the cache itself.
 _FILE_CACHE: dict[str, tuple[int, int, object]] = {}
 
@@ -118,186 +112,7 @@ def save_seen(cfg: dict, seen: set[str]) -> None:
     _write_json(seen_path(cfg), sorted(seen))
 
 
-def _read_optional_file(raw) -> str:
-    """Contents of a configured file path (resolved against ROOT), or ''."""
-    raw = str(raw or "").strip()
-    if not raw:
-        return ""
-    path = pathlib.Path(raw)
-    if not path.is_absolute():
-        path = ROOT / path
-    return _cached_file(path, lambda p: p.read_text(encoding="utf-8")) or ""
-
-
-def dna_text(cfg: dict) -> str:
-    """Contents of publish.dna_file, if configured and present."""
-    return _read_optional_file(cfg.get("publish", {}).get("dna_file"))
-
-
-def voice_map(cfg: dict) -> dict[str, str]:
-    """The configured voice menu ``publish.voices`` as {key: file path}."""
-    raw = cfg.get("publish", {}).get("voices")
-    if not isinstance(raw, dict):
-        return {}
-    return {
-        str(key).strip(): str(path).strip()
-        for key, path in raw.items()
-        if str(key).strip() and str(path).strip()
-    }
-
-
-def voice_choices(cfg: dict) -> list[str]:
-    """The voice keys a rewriter may pick from (DNA §3)."""
-    return list(voice_map(cfg))
-
-
-def default_voice(cfg: dict) -> str:
-    """The voice key the pipeline falls back to when the rewriter omits one."""
-    return str(cfg.get("publish", {}).get("default_voice") or "").strip()
-
-
-def _resolve_voice(cfg: dict, key) -> str:
-    """Keep a valid voice key; otherwise the default; '' when no menu."""
-    choices = voice_choices(cfg)
-    key = str(key or "").strip()
-    if key in choices:
-        return key
-    fallback = default_voice(cfg)
-    return fallback if fallback in choices else ""
-
-
-def voice_text(cfg: dict, key: str = "") -> str:
-    """The resolved voice file's text (brief + samples) for one draft.
-
-    A voice file is the register's full brief with its verbatim ``Samples``; the
-    rewriter reads it to write in that voice. An unknown or blank key falls back
-    to ``publish.default_voice``; '' when no menu is configured.
-    """
-    voices = voice_map(cfg)
-    chosen = _resolve_voice(cfg, key)
-    return _read_optional_file(voices.get(chosen)).strip() if chosen else ""
-
-
-def _first_paragraph(text: str) -> str:
-    """A file's opening paragraph collapsed to one line ('' when empty)."""
-    lines: list[str] = []
-    for line in text.strip().splitlines():
-        if not line.strip():
-            break
-        lines.append(line)
-    return " ".join(" ".join(lines).split())
-
-
-def voice_hints(cfg: dict) -> dict[str, str]:
-    """Operator guidance per voice: ``{key: the file's opening paragraph}``.
-
-    The hint is each voice file's own "when to use" paragraph, so the review page
-    describes the voices from ``docs/voices/`` rather than keeping a second copy
-    that drifts. A key whose file is missing or empty is omitted.
-    """
-    hints: dict[str, str] = {}
-    for key, path in voice_map(cfg).items():
-        paragraph = _first_paragraph(_read_optional_file(path))
-        if paragraph:
-            # Drop the "Voice: " lead-in and the files' markdown emphasis, which
-            # would otherwise show literally as asterisks in the UI.
-            hints[key] = paragraph.removeprefix("Voice: ").replace("*", "")
-    return hints
-
-
 # -- AI image generation -------------------------------------------------
-
-
-def rewrite_config(cfg: dict) -> dict:
-    """The rewriter-worker settings (``rewrite``); see scripts/rewrite_worker.py."""
-    return dict(cfg.get("rewrite", {}) or {})
-
-
-def diagram_dir(cfg: dict) -> pathlib.Path:
-    """Where code-drawn diagrams and generated images are stored.
-
-    Served by the app at ``/images/`` (see ``media``, which owns the folder and
-    the name validation).
-    """
-    return media.images_dir(cfg)
-
-
-def render_diagrams(
-    cfg: dict | None = None,
-    *,
-    draft_ids: list[str] | None = None,
-    states: tuple[str, ...] | None = OPEN_STATES,
-    limit: int | None = None,
-    overwrite: bool = False,
-) -> dict:
-    """Render code-drawn diagrams for queued drafts and point them at it.
-
-    No network, no provider — the renderer (``diagram.py``) draws the draft's
-    mechanism from its own template and the file lands in ``diagram_dir``
-    (inside the bind-mounted review dir, so the container serves it with no
-    rebuild). A batch only picks up drafts with ``image_style == diagram``;
-    a caller naming drafts explicitly renders them regardless of style.
-
-    Graph only accepts raster, so each SVG is also screenshotted to PNG
-    through the host's Chromium (``diagram_html`` + ``browser_shot``) and the
-    draft points at the PNG — exactly the bytes a later publish uploads.
-    A missing or failing browser never blocks the render: the draft keeps
-    pointing at the SVG preview.
-
-    Fills the gap by default and never replaces an existing image without
-    ``overwrite``.
-    """
-    cfg = cfg or load_config()
-    drafts = load_drafts(queue_path(cfg))
-    wanted = set(draft_ids) if draft_ids else None
-    if wanted is not None:
-        states = None
-    selected = [
-        draft
-        for draft in drafts
-        if (wanted is None or draft.id in wanted)
-        and (states is None or draft.state in states)
-        and (wanted is not None or draft.image_style == "diagram")
-        and (overwrite or not draft.image)
-    ]
-    if wanted:
-        missing = wanted - {draft.id for draft in drafts}
-        if missing:
-            raise ValueError(f"no draft {sorted(missing)[0]!r}")
-    if limit is not None:
-        selected = selected[:limit]
-
-    rendered: list[str] = []
-    rastered: set[str] = set()
-    out_dir = diagram_dir(cfg)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for draft in selected:
-        svg = render_diagram_for_draft(draft)
-        if not svg:
-            continue
-        (out_dir / f"{draft.id}.svg").write_text(svg, encoding="utf-8")
-        try:
-            page = render_diagram_html_for_draft(draft)
-            if page:
-                html_to_png(page, out_dir / f"{draft.id}.png")
-                rastered.add(draft.id)
-        except ShotError:
-            pass
-        rendered.append(draft.id)
-
-    if rendered:
-        fresh = load_drafts(queue_path(cfg))
-        for draft in fresh:
-            if draft.id in rendered:
-                ext = ".png" if draft.id in rastered else ".svg"
-                draft.image = f"/images/{draft.id}{ext}"
-                draft.touch()
-        save_drafts(queue_path(cfg), fresh)
-    return {
-        "rendered": len(rendered),
-        "candidates": len(selected),
-        "ids": rendered,
-    }
 
 
 def localize_images(
@@ -803,7 +618,7 @@ def scan_sources(
 
     # Re-read before saving: fetching every source is slow (and the host retries),
     # so writing back a queue read at the top would silently discard whatever
-    # landed meanwhile — a manual post's record, a rewrite, an edit. Merge the
+    # landed meanwhile — a manual post's record, an edit. Merge the
     # new drafts into the queue as it is now instead.
     merged = load_drafts(queue_path(cfg))
     known = {draft.id for draft in merged}
@@ -820,16 +635,12 @@ def scan_sources(
     }
 
 
-# -- rewrite intake ------------------------------------------------------
+# -- idea seeds ----------------------------------------------------------
 
 
 def ideas_config(cfg: dict) -> dict:
     """The ``ideas`` block (idea seeds: original posts, not source reposts)."""
     return dict(cfg.get("ideas", {}) or {})
-
-
-def ideas_enabled(cfg: dict) -> bool:
-    return bool(ideas_config(cfg).get("enabled", False))
 
 
 def ideas_source_name(cfg: dict) -> str:
@@ -853,10 +664,6 @@ def ideas_seen_path(cfg: dict) -> pathlib.Path:
     return ideas_dir(cfg) / str(ideas_config(cfg).get("seen_name", "seen.json"))
 
 
-def ideas_state_path(cfg: dict) -> pathlib.Path:
-    return ideas_dir(cfg) / str(ideas_config(cfg).get("state_name", "state.json"))
-
-
 def load_topics(cfg: dict) -> list[dict]:
     """The configured idea seeds as ``[{"name", "url"}]`` ('' if the file is absent)."""
     text = _cached_file(ideas_topics_path(cfg), lambda p: p.read_text(encoding="utf-8")) or ""
@@ -875,86 +682,17 @@ def save_ideas_seen(cfg: dict, seen: set[str]) -> None:
     _write_json(ideas_seen_path(cfg), sorted(seen))
 
 
-def load_ideas_request(cfg: dict) -> dict:
-    """The pending "generate ideas" request state (``{}`` when none has been made)."""
-    cached = _cached_file(
-        ideas_state_path(cfg), lambda p: json.loads(p.read_text(encoding="utf-8"))
-    )
-    return dict(cached) if isinstance(cached, dict) else {}
-
-
-def request_ideas(cfg: dict, note: str = "") -> dict:
-    """Mark that the operator asked for a fresh batch of idea seeds.
-
-    A human action (the review page's "Generate ideas" button, or ``blog ideas
-    --request``) that only *records* the wish; the host-side worker
-    (``scripts/rewrite_worker.py``) picks it up from ``GET /api/ideas`` and posts
-    the ideas back through ``queue_ideas``. It never generates, rewrites, or
-    posts anything itself.
-    """
-    if not ideas_enabled(cfg):
-        raise ValueError("ideas are disabled (ideas.enabled is false)")
-    if not load_topics(cfg):
-        raise ValueError(f"no idea topics configured: add systems to {ideas_topics_path(cfg)}")
-    payload = {"requested_at": now_iso(), "note": str(note or "").strip(), "error": ""}
-    _write_json(ideas_state_path(cfg), payload)
-    return payload
-
-
-def clear_ideas_request(cfg: dict, *, error: str = "") -> dict:
-    """Close a pending request (a batch landed, or the worker failed)."""
-    payload = {"requested_at": "", "note": "", "error": str(error or "").strip()}
-    _write_json(ideas_state_path(cfg), payload)
-    return payload
-
-
-def _existing_idea_titles(cfg: dict, limit: int = 40) -> list[str]:
-    """Titles of ideas already queued (newest first) — what the agent must not repeat."""
-    source = ideas_source_name(cfg)
-    titles = [
-        draft.title
-        for draft in reversed(load_drafts(queue_path(cfg)))
-        if draft.source == source and draft.title
-    ]
-    return titles[:limit]
-
-
-def idea_brief(cfg: dict) -> dict:
-    """Everything an agent needs to propose original ideas — and nothing to fetch.
-
-    The configured themes (with optional reference-docs URLs), the titles already
-    queued (so it does not repeat one), the DNA (the content pillars and brand
-    rules live there), the most recently written captions (so a new idea does not
-    reopen an old one), and the pending-request state the worker polls.
-    """
-    request = load_ideas_request(cfg)
-    return {
-        "enabled": ideas_enabled(cfg),
-        "source_name": ideas_source_name(cfg),
-        "per_run": max(1, int(ideas_config(cfg).get("per_run", 3))),
-        "requested": bool(request.get("requested_at")),
-        "requested_at": str(request.get("requested_at") or ""),
-        "error": str(request.get("error") or ""),
-        "topics": load_topics(cfg),
-        "existing": _existing_idea_titles(cfg),
-        "dna": dna_text(cfg),
-        "recent": [{"id": d.id, "caption": d.caption} for d in recent_captions(cfg)],
-    }
-
-
 def queue_ideas(cfg: dict, ideas: list[dict]) -> dict:
-    """Queue agent-proposed ideas as ``extracted`` drafts, deduped by title slug.
+    """Queue ideas as ``extracted`` drafts, deduped by title slug.
 
     Each idea is ``{"title", "topic", "excerpt"}`` — the specific angle, the
     system it belongs to (``ideas.topics_file``), and a short outline. The draft
     is an *original* post: ``source`` is ``ideas.source_name``, there is no
-    ``url`` and no source image, and it flows through the normal rewrite + human
+    ``url`` and no source image, and it flows through the normal caption + human
     review like any scanned draft. An idea whose slug already exists (in the
     queue or the ideas ledger) is skipped, so re-running a batch is safe. Never
-    rewrites, approves, or posts.
+    approves or posts.
     """
-    if not ideas_enabled(cfg):
-        raise ValueError("ideas are disabled (ideas.enabled is false)")
     source = ideas_source_name(cfg)
     seen = load_ideas_seen(cfg)
     drafts = load_drafts(queue_path(cfg))
@@ -1013,7 +751,7 @@ def masthead_config(cfg: dict) -> dict:
 
 
 def masthead_choices(cfg: dict) -> list[str]:
-    """The mastheads a rewriter may pick from (DNA §4.5)."""
+    """The series mastheads a caption may open with."""
     raw = masthead_config(cfg).get("choices") or []
     if isinstance(raw, str):
         raw = [raw]
@@ -1021,7 +759,7 @@ def masthead_choices(cfg: dict) -> list[str]:
 
 
 def default_masthead(cfg: dict) -> str:
-    """The masthead the pipeline falls back to when the rewriter omits one."""
+    """The masthead a caption is backfilled with when it has none (`blog masthead`)."""
     return str(masthead_config(cfg).get("default") or "").strip()
 
 
@@ -1032,19 +770,6 @@ def _leading_masthead(caption: str, choices: list[str]) -> str:
         if text.startswith(masthead):
             return masthead
     return ""
-
-
-def _ensure_masthead(caption: str, fallback: str, choices: list[str]) -> str:
-    """Keep the rewriter's chosen masthead; prepend the fallback when absent.
-
-    The DNA asks the rewriter to pick a masthead per post (by content, not
-    source), so a caption that already opens with one of ``choices`` is left
-    exactly as written. This only fills the gap when the rewriter didn't.
-    """
-    fallback = fallback.strip()
-    if not fallback or _leading_masthead(caption, choices):
-        return caption
-    return f"{fallback}\n\n{caption}" if caption else fallback
 
 
 def recent_caption_limit(cfg: dict) -> int:
@@ -1067,10 +792,8 @@ def _recent_written(
 def recent_captions(cfg: dict, *, limit: int | None = None, exclude_id: str = "") -> list[Draft]:
     """The most recently written captions, newest first, for anti-repetition.
 
-    A rewriter only sees the *open* drafts it is asked to rewrite, so without
-    this it can't tell it has opened three posts in a row the same way. Capped by
-    ``publish.recent_captions`` (0 = off); the rewriter reads them and avoids
-    reusing an opener, a closer, or the same vocabulary (DNA §12).
+    Capped by ``publish.recent_captions`` (0 = off). The caption lint compares a
+    new caption against these to flag a repeated opener, closer, or vocabulary.
     """
     cap = recent_caption_limit(cfg) if limit is None else int(limit)
     if cap <= 0:
@@ -1086,58 +809,19 @@ def _recent_texts(drafts: list[Draft], cfg: dict, exclude_id: str = "") -> list[
     return [draft.caption for draft in _recent_written(drafts, exclude_id)[:cap]]
 
 
-def receive_rewrite(cfg: dict, draft_id: str, body: dict) -> Draft:
-    """Store the AI rewrite (from the Command Code agent) on a draft.
-
-    The caption is also *linted* — advisory only. The tells a run of posts
-    converges on (a repeated hook or closer, a stock opener, a flat rhythm, the
-    rule of three) are stored on the draft for the reviewer to see; the pipeline
-    never edits the text itself (DNA §12).
-
-    A **voice-locked** request ("Rewrite in this voice") keeps the voice the
-    operator picked: the register on the draft was saved with the request, and it is
-    this side — not the agent — that decides, so a run that ignored the prompt's
-    instruction cannot quietly relabel the post. Read before ``apply_rewrite``,
-    which clears the request.
-    """
-    choices = masthead_choices(cfg)
-    fallback = default_masthead(cfg)
-    drafts = load_drafts(queue_path(cfg))
-    draft = find(drafts, draft_id)
-    if draft is None:
-        raise ValueError(f"no draft {draft_id!r}")
-    if not draft.can_receive_rewrite():
-        raise ValueError(f"draft {draft_id!r} in state {draft.state!r} cannot be rewritten")
-    locked_voice = (
-        _resolve_voice(cfg, draft.voice) if draft.rewrite_kind() == REWRITE_CAPTION_VOICE else ""
-    )
-    hashtags = body.get("hashtags")
-    draft.apply_rewrite(
-        caption=_ensure_masthead(str(body.get("caption", "") or ""), fallback, choices),
-        hashtags=hashtags if hashtags is None else hashtags,
-        cta=str(body.get("cta", "") or ""),
-        commentary=str(body.get("commentary", "") or ""),
-        image_prompt=str(body.get("image_prompt", "") or ""),
-        image_style=str(body.get("image_style", "") or "").strip(),
-        voice=_resolve_voice(cfg, locked_voice or body.get("voice")),
-    )
-    draft.lint = lint_caption(draft.caption, recent=_recent_texts(drafts, cfg, draft_id))
-    save_drafts(queue_path(cfg), drafts)
-    return draft
-
-
 def edit_draft(
     cfg: dict,
     draft_id: str,
     *,
     caption: str | None = None,
     hashtags: str | None = None,
-    image_prompt: str | None = None,
-    image_style: str | None = None,
-    voice: str | None = None,
     destinations: list[str] | None = None,
 ) -> Draft:
-    """Human edits from the review page (caption, hashtags, image prompt, style, voice).
+    """Human edits from the review page (caption, hashtags).
+
+    Saving a non-empty caption is what moves an ``extracted`` draft on to
+    ``ai_draft`` (caption written, ready to approve) — the human stands in for the
+    rewrite step that used to do it.
 
     ``destinations`` replaces the draft's target list — the review page's
     destination picker, so one draft can go to Facebook, another to LinkedIn,
@@ -1145,8 +829,7 @@ def edit_draft(
     An empty list is refused: a draft with no target could never be posted, and
     ``publish_draft`` would silently re-adopt the configured default.
 
-    Re-lints the caption so the /review/{id} warnings track what a human just
-    wrote too, not only what the rewriter submitted.
+    Re-lints the caption so the /review/{id} warnings track each saved caption.
     """
 
     drafts = load_drafts(queue_path(cfg))
@@ -1157,12 +840,6 @@ def edit_draft(
         draft.caption = caption
     if hashtags is not None:
         draft.hashtags = _split_hashtags(hashtags)
-    if image_prompt is not None:
-        draft.image_prompt = image_prompt
-    if image_style is not None:
-        draft.image_style = image_style
-    if voice is not None:
-        draft.voice = voice
     if destinations is not None:
         unknown = [name for name in destinations if name not in destination_names()]
         if unknown:
@@ -1170,102 +847,13 @@ def edit_draft(
         if not destinations:
             raise ValueError("a draft must target at least one destination")
         draft.destinations = list(dict.fromkeys(destinations))
+    if caption is not None and draft.caption.strip() and draft.state == EXTRACTED:
+        draft.state = AI_DRAFT
     draft.touch()
     if draft.caption:
         draft.lint = lint_caption(draft.caption, recent=_recent_texts(drafts, cfg, draft_id))
     save_drafts(queue_path(cfg), drafts)
     return draft
-
-
-def request_rewrite(cfg: dict, draft_id: str) -> Draft:
-    """Ask the rewriter worker to rewrite a draft (a human action on /review).
-
-    The agent picks the voice here, like the masthead and the image treatment;
-    ``request_voice_rewrite`` is the sibling that locks it to the operator's pick.
-
-    Only a draft still awaiting a rewrite (``extracted``/``ai_draft``) can be
-    requested — an ``approved`` draft is already queued to post, and rewriting it
-    would have to undo that approval. This only *marks* the draft; the host-side
-    worker (``scripts/rewrite_worker.py``) picks the request up from
-    ``GET /api/rewrite-queue`` and posts the result back through
-    ``receive_rewrite``, which clears the request. Nothing here rewrites,
-    approves, or posts.
-    """
-    now = now_iso()
-
-    def _mutate(draft: Draft) -> None:
-        if not draft.can_receive_rewrite():
-            raise ValueError(f"draft {draft.id!r} in state {draft.state!r} cannot be rewritten")
-        draft.rewrite_requested_at = now
-        draft.rewrite_mode = REWRITE_CAPTION
-        draft.rewrite_error = ""
-
-    return _save_one(cfg, draft_id, _mutate)
-
-
-def request_voice_rewrite(cfg: dict, draft_id: str) -> Draft:
-    """Ask the worker to rewrite a draft *in the voice the operator picked*.
-
-    The "Rewrite in this voice" action on /review/{id}: the same full rewrite as
-    ``request_rewrite``, except the caption's register is not the agent's to choose.
-    It submits the compose form, so the Voice pick is saved before this runs;
-    ``build_prompt`` then names that key and forbids another, and ``receive_rewrite``
-    re-asserts it on the way back in. Same gate as ``request_rewrite``
-    (``extracted``/``ai_draft``) — an ``approved`` draft's caption is what a human
-    already approved. Like every request this only *marks* the draft, and never
-    touches the caption, the state, or a post.
-    """
-    now = now_iso()
-
-    def _mutate(draft: Draft) -> None:
-        if not draft.can_receive_rewrite():
-            raise ValueError(f"draft {draft.id!r} in state {draft.state!r} cannot be rewritten")
-        # Resolve first: the lock has to name a register that exists, or the prompt's
-        # hard rule would point the agent at a key that is not in the menu.
-        draft.voice = _resolve_voice(cfg, draft.voice)
-        draft.rewrite_requested_at = now
-        draft.rewrite_mode = REWRITE_CAPTION_VOICE
-        draft.rewrite_error = ""
-
-    return _save_one(cfg, draft_id, _mutate)
-
-
-def cancel_rewrite(cfg: dict, draft_id: str) -> Draft:
-    """Drop a pending rewriter request (and any error it left behind)."""
-
-    def _mutate(draft: Draft) -> None:
-        draft.rewrite_requested_at = ""
-        draft.rewrite_mode = ""
-        draft.rewrite_error = ""
-
-    return _save_one(cfg, draft_id, _mutate)
-
-
-def record_rewrite_error(cfg: dict, draft_id: str, error: str) -> Draft:
-    """Close a rewriter request with the worker's failure recorded on the draft.
-
-    The request is cleared so it does not sit open forever (the operator can ask
-    again), and the error is stored so ``/review/{id}`` can say why nothing came
-    back instead of showing a request that waits indefinitely.
-    """
-
-    def _mutate(draft: Draft) -> None:
-        draft.rewrite_error = str(error or "").strip() or "unknown error"
-        draft.rewrite_requested_at = ""
-        draft.rewrite_mode = ""
-
-    return _save_one(cfg, draft_id, _mutate)
-
-
-def rewrite_queue(cfg: dict) -> list[Draft]:
-    """The drafts a human asked the rewriter for, oldest request first (the worker's FIFO).
-
-    A full rewrite or a full rewrite in a voice the operator picked, marked
-    with ``Draft.rewrite_mode``; a draft leaves the queue when its result lands
-    (``receive_rewrite``) or the request is cancelled / fails.
-    """
-    pending = [draft for draft in load_drafts(queue_path(cfg)) if draft.rewrite_requested_at]
-    return sorted(pending, key=lambda d: parse_when(d.rewrite_requested_at) or _EPOCH)
 
 
 def reject_draft(cfg: dict, draft_id: str) -> Draft:
@@ -1286,7 +874,7 @@ def unapprove_draft(cfg: dict, draft_id: str) -> Draft:
 
     The inverse of ``approve_draft``: the draft leaves the queue the poster
     drains and returns to ``ai_draft``, so the scheduler skips it but it stays on
-    /review for further edits, a rewrite, or another approval. It never posts,
+    /review for further edits or another approval. It never posts,
     and never touches the caption.
     """
     return _save_one(cfg, draft_id, lambda d: d.unapprove())
@@ -1307,10 +895,10 @@ def apply_masthead(
 ) -> dict:
     """Fill the default masthead into captions that have none.
 
-    A safety net for captions written before/without a masthead. Normally the
-    rewriter picks one per post (DNA §4.5) and ``receive_rewrite`` keeps it —
-    and since that choice is a *content* judgment, this never replaces an
-    existing one; a wrong label is for a human to fix on ``/review/{id}``.
+    A safety net for captions written before/without a masthead. The label is a
+    *content* judgment, so the operator picks it when writing the
+    caption; this never replaces an existing one — a wrong label is for a human
+    to fix on ``/review/{id}``.
     Idempotent, and never touches the image.
     """
     cfg = cfg or load_config()
@@ -1555,18 +1143,11 @@ def status(cfg: dict | None = None) -> dict:
                 if upcoming
                 else None
             ),
-            "dna_file_set": bool(str(cfg.get("publish", {}).get("dna_file") or "").strip()),
-            "voices_set": bool(voice_choices(cfg)),
-            "voice_choices": voice_choices(cfg),
-            "default_voice": default_voice(cfg),
         },
         "ideas": {
-            # Idea seeds (original posts): how many systems are configured, and
-            # whether a batch has been asked for but not yet delivered.
-            "enabled": ideas_enabled(cfg),
+            # Idea seeds (original posts): how many systems are configured.
             "source": ideas_source_name(cfg),
             "topics": len(load_topics(cfg)),
-            "requested": bool(load_ideas_request(cfg).get("requested_at")),
         },
         "images": {
             "with_image": sum(1 for draft in drafts if draft.image),
@@ -1584,7 +1165,7 @@ def publish_draft(
     skip_private_today: bool = False,
     manual: bool = False,
 ) -> dict:
-    """Publish an approved/rewritten item to its destinations.
+    """Publish an approved item to its destinations.
 
     Human-gated by construction: callers only reach here from an explicit
     approval action. ``dry_run`` prints the request and mutates nothing.
@@ -1613,7 +1194,7 @@ def publish_draft(
     if not draft.can_publish():
         raise ValueError(
             f"draft {draft_id!r} is in state {draft.state!r}; "
-            "run the rewrite (or approve it) before publishing"
+            "save a caption (then approve it) before publishing"
         )
 
     if not draft.destinations:

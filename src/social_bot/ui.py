@@ -452,11 +452,6 @@ a.permalink { font-size: .82rem; }
 .rail-block p { margin: .4rem 0; }
 .notes { background: var(--surface-2); border-radius: var(--radius); padding: .75rem;
          font-size: .85rem; color: var(--ink-2); }
-details.dna, details.voice { border: 1px solid var(--border); border-radius: var(--radius); padding: .6rem .9rem; }
-details.dna summary, details.voice summary { cursor: pointer; font-size: .85rem; font-weight: 650; }
-details.dna pre, details.voice pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 20rem;
-        overflow: auto; margin: .6rem 0 0; font-size: .78rem; line-height: 1.55;
-        color: var(--fg); }
 .post-preview { border: 1px solid var(--border); border-radius: var(--radius-lg); overflow: hidden;
               background: var(--surface); }
 .post-preview .head { display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem; }

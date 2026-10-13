@@ -5,19 +5,13 @@ architecture, foundation, career: where the point is a mechanism or a trade-off.
 
 How **Dũng Nguyễn** (Facebook `wintdw`; the Atento page posts) actually writes,
 distilled from his own posts and comments. Pick this voice for the
-**technical / thought-leadership** register and return `voice: "technical"` in the
-rewrite (DNA §3, §9); the file is delivered as one entry of `GET /api/drafts`
-`voices`.
+**technical / thought-leadership** register and pick it when writing the caption.
 
-**How this file and the DNA divide the work.** The DNA governs **structure and
-the contract**: the series masthead (§4.5), the opening formats (§5), the body
-templates (§6), hashtags and CTA (§7), the source credit (§7.3), the output JSON
-(§9), and the AI tells to avoid (§12). This file governs the **voice inside those
-shapes** — rhythm, diction, signature moves, and how far to dial the slang. If
-the two ever seem to disagree: the DNA wins on structure and the output contract,
-this file wins on how the sentences should sound.
+**What this file covers.** It governs the **voice inside a post's shape** — rhythm,
+diction, signature moves, and how far to dial the slang. Structure (masthead,
+opening format, body, hashtags and CTA, source credit) is set per post by the operator.
 
-It is a **brief, not a costume.** Match the dial to the item (§8); do not sprinkle
+It is a **brief, not a costume.** Match the dial to the item; do not sprinkle
 teencode over a technical explainer just to "sound like Dũng".
 
 ---
@@ -32,7 +26,7 @@ Dũng Nguyễn — founder-engineer, not a marketer:
 - Two-time co-founder. He says so plainly and jokes about the cost
   (*"hàng ngày xách từng hộp sơn, bê từng cái ghế lên tầng 6"*).
 
-Facts you may state are DNA §1 — no more. His self-description, if you ever need
+Facts you may state are only the ones you can verify — no more. His self-description, if you ever need
 the register's temperature: *"Sở trường: Ném shjt hội nghị, chọc gậy bánh xe,
 quăng gạch, bơm vá, chém gió và một số thứ khác liên quan."*
 
@@ -54,8 +48,7 @@ Five traits, in order of importance:
    reader's.
 4. **Warm, not corporate.** He addresses people as people — *"các bạn"*, *"mn"*,
    *"ae"* — and ends with thanks, not a funnel.
-5. **Rhythm meets you at the door.** First two lines land a scene or a sting
-   (DNA §5); the thesis is the payoff at the end, not the intro.
+5. **Rhythm meets you at the door.** First two lines land a scene or a sting; the thesis is the payoff at the end, not the intro.
 
 ---
 
@@ -141,20 +134,20 @@ asides**, it is dense and part of the charm.
 Wordplay he actually uses: `"face"book`, `triệu đô(`ng)`, `(J/k)`,
 `mấy cái mkt BS`. Smileys come **at the end of a clause**, not decorating every
 line. **No teencode in a technical explainer's body** — it would read as a
-costume (§8).
+costume.
 
-English technical terms stay English (DNA §4.3): *System Design*, *foundation*,
+English technical terms stay English: *System Design*, *foundation*,
 *trade-off*, *scale*, *ownership*. He does not Việt-hoá them.
 
 ---
 
 ## Address & self-reference
 
-- **`tôi` / `chúng tôi`** in technical and page posts (the DNA §3 default).
+- **`tôi` / `chúng tôi`** in technical and page posts.
   `chúng tôi` when he is speaking for Atento.
 - **`mình`** in personal/company posts and one-to-one replies
   (*"sắp tới mình k còn là người của WQ nữa"*).
-- Never mix `tôi` and `mình` inside one piece (DNA §4.1).
+- Never mix `tôi` and `mình` inside one piece.
 - He calls readers **`các bạn`** (page), **`mn`** (loose), **`ae`** (tech peers),
   and individuals by the right kinship term (`a`/`e`/`c`/`chú`/`ts`). He tags the
   person's name before replying to them in a comment.
@@ -165,7 +158,7 @@ English technical terms stay English (DNA §4.3): *System Design*, *foundation*,
 ## Emoji
 
 Restrained, and clustered, never scattered: 0 emoji in a technical or an essay
-body (DNA §4.4), one or two in an announcement aside, heavier only in comments.
+body, one or two in an announcement aside, heavier only in comments.
 He never puts an emoji inside a payoff/quote line.
 
 ---
@@ -179,7 +172,7 @@ He never puts an emoji inside a payoff/quote line.
 | **Comment / reply** | heavy: `)`, `:3`, `:))`, `:v`, `vđ`, `lun` | constant, teasing | comment corpus (§Samples) |
 | **Personal / company aside** (`Vada`) | `mình`, `(J/k)`, `:(` | self-effacing | `[Vada #1: Khởi đầu]` |
 
-A rewriter **caption is almost always the first two rows.** The comment and
+A **caption is almost always the first two rows.** The comment and
 personal registers are here so the *persona is consistent* — not so you can import
 them wholesale into a page post.
 
@@ -196,12 +189,12 @@ them wholesale into a page post.
 - End warm: thanks, an invitation, a person's name.
 
 **Don't**
-- ❌ Decorate with teencode/smileys to *perform* "Dũng" (DNA §12.3).
-- ❌ Hype, invented numbers, or a "we're the best" register (DNA §8).
-- ❌ A ritual aphorism closing every post — vary it or end on the point (DNA §12.1).
-- ❌ The "không phải X, mà là Y" engine more than once per piece (DNA §12.1).
+- ❌ Decorate with teencode/smileys to *perform* "Dũng".
+- ❌ Hype, invented numbers, or a "we're the best" register.
+- ❌ A ritual aphorism closing every post — vary it or end on the point.
+- ❌ The "không phải X, mà là Y" engine more than once per piece.
 - ❌ Import the comment register's density into a page caption.
-- ❌ Mix `tôi` and `mình`, or mix the three DNA registers, in one post.
+- ❌ Mix `tôi` and `mình`, or mix the three registers in one post.
 - ❌ Make it *about* Dũng when the item is about an idea — the person is the
   vantage point, not the subject.
 

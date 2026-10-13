@@ -1,8 +1,7 @@
 """HTML-to-PNG via a headless Chromium (stdlib only, no new dependency).
 
 The renderer runs on the **host**, not in the container — the image is
-python-slim with no browser, the same reason the app never runs the rewriter
-itself (see ``scripts/rewrite_worker.py``). Resolution order for the binary:
+python-slim with no browser. Resolution order for the binary:
 
 1. ``SOCIAL_BOT_CHROMIUM`` env (explicit path),
 2. a Playwright browser cache (``~/.cache/ms-playwright``),

@@ -7,7 +7,7 @@ import json
 import pathlib
 import sys
 
-from . import __version__, media, voice
+from . import __version__, media
 from .config import load_config, validate
 from .destinations import names as destination_names
 from .destinations import publisher_for
@@ -21,7 +21,6 @@ from .destinations.facebook import (
 from .draft_pipeline import (
     apply_masthead,
     backfill_destinations,
-    idea_brief,
     ideas_topics_path,
     load_topics,
     localize_images,
@@ -29,8 +28,6 @@ from .draft_pipeline import (
     publish_scheduled,
     queue_ideas,
     queue_view,
-    render_diagrams,
-    request_ideas,
     reset_queue_order,
     scan_sources,
 )
@@ -108,24 +105,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         help="max new drafts per source (default: blog.max_scan)",
     )
     p_scan.set_defaults(func=_cmd_blog_scan)
-
-    p_diagram = blog_sub.add_parser(
-        "diagram", help="render code-drawn diagrams for queued drafts (never posts)"
-    )
-    p_diagram.add_argument(
-        "--draft",
-        action="append",
-        metavar="ID",
-        help="only this draft id (repeatable; default: all diagram drafts)",
-    )
-    p_diagram.add_argument("--limit", type=int, default=None, help="max drafts to process")
-    p_diagram.add_argument(
-        "--overwrite",
-        action="store_true",
-        help="replace existing images too (default: only fill drafts without one)",
-    )
-    p_diagram.add_argument("--json", action="store_true", help="print the summary as JSON")
-    p_diagram.set_defaults(func=_cmd_blog_diagram)
 
     p_localize = blog_sub.add_parser(
         "localize-images",
@@ -213,25 +192,13 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p_topics.add_argument("--json", action="store_true", help="print the topics as JSON")
     p_topics.set_defaults(func=_cmd_blog_topics)
 
-    p_ideas = blog_sub.add_parser(
-        "ideas",
-        help="show the idea brief, or ask the worker to propose a batch (never posts)",
-    )
-    p_ideas.add_argument(
-        "--request",
-        action="store_true",
-        help="mark that a fresh batch of idea seeds was requested (the worker picks it up)",
-    )
-    p_ideas.add_argument("--json", action="store_true", help="print the brief as JSON")
-    p_ideas.set_defaults(func=_cmd_blog_ideas)
-
     p_add_idea = blog_sub.add_parser(
         "add-idea",
-        help="queue one original-post idea by hand (never rewrites or posts)",
+        help="queue one original-post idea by hand (never posts)",
     )
     p_add_idea.add_argument("title", help="the idea, as the post's hook or angle")
     p_add_idea.add_argument("--topic", default="", help="the system/theme it belongs to")
-    p_add_idea.add_argument("--excerpt", default="", help="a short outline for the rewriter")
+    p_add_idea.add_argument("--excerpt", default="", help="a short outline for the caption")
     p_add_idea.add_argument("--json", action="store_true", help="print the summary as JSON")
     p_add_idea.set_defaults(func=_cmd_blog_add_idea)
 
@@ -273,32 +240,6 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     )
     p_serve.set_defaults(func=_cmd_serve)
 
-    p_voice = sub.add_parser(
-        "voice",
-        help="the operator's own voice: index the corpus and search it",
-    )
-    voice_sub = p_voice.add_subparsers(dest="voice_command", required=True)
-
-    p_vindex = voice_sub.add_parser(
-        "index", help="embed the corpus into the vector index (needs the [voice] extra)"
-    )
-    p_vindex.set_defaults(func=_cmd_voice_index)
-
-    p_vsearch = voice_sub.add_parser(
-        "search", help="show which of the operator's own messages a topic retrieves"
-    )
-    p_vsearch.add_argument("query", help="the topic text to search for")
-    p_vsearch.add_argument(
-        "--k", type=int, default=None, help="how many examples (default: voice.top_k)"
-    )
-    p_vsearch.add_argument(
-        "--show", action="store_true", help="print the MY VOICE block exactly as the worker would"
-    )
-    p_vsearch.set_defaults(func=_cmd_voice_search)
-
-    p_vstatus = voice_sub.add_parser("status", help="show the voice config and corpus state")
-    p_vstatus.add_argument("--json", action="store_true", help="print the status as JSON")
-    p_vstatus.set_defaults(func=_cmd_voice_status)
     return parser.parse_args(argv)
 
 
@@ -475,32 +416,6 @@ def _cmd_blog_scan(args: argparse.Namespace) -> int:
     return 1 if result["errors"] else 0
 
 
-def _cmd_blog_diagram(args: argparse.Namespace) -> int:
-    cfg = _load_config(args)
-    try:
-        result = render_diagrams(
-            cfg,
-            draft_ids=args.draft,
-            limit=args.limit,
-            overwrite=args.overwrite,
-        )
-    except ValueError as exc:
-        print(f"blog diagram: {exc}", file=sys.stderr)
-        return 2
-    except OSError as exc:
-        where = getattr(exc, "filename", None) or "the drafts directory"
-        print(f"blog diagram: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
-        print(_DATA_DIR_HINT, file=sys.stderr)
-        return 1
-    if args.json:
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-    else:
-        print(f"Rendered {result['rendered']} diagram(s) ({result['candidates']} candidate(s)).")
-        for draft_id in result["ids"]:
-            print(f"  - {draft_id}")
-    return 0
-
-
 def _cmd_blog_localize(args: argparse.Namespace) -> int:
     cfg = _load_config(args)
     try:
@@ -655,45 +570,8 @@ def _cmd_blog_topics(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_blog_ideas(args: argparse.Namespace) -> int:
-    """Show the idea brief, and optionally ask the worker for a fresh batch."""
-    cfg = _load_config(args)
-    if args.request:
-        try:
-            request_ideas(cfg)
-        except ValueError as exc:
-            print(f"blog ideas: {exc}", file=sys.stderr)
-            return 2
-        except OSError as exc:
-            where = getattr(exc, "filename", None) or "the ideas directory"
-            print(f"blog ideas: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
-            print(_DATA_DIR_HINT, file=sys.stderr)
-            return 1
-    try:
-        brief = idea_brief(cfg)
-    except OSError as exc:
-        where = getattr(exc, "filename", None) or "the ideas directory"
-        print(f"blog ideas: cannot read {where}: {exc.strerror or exc}", file=sys.stderr)
-        return 1
-    if args.json:
-        print(json.dumps(brief, indent=2, ensure_ascii=False))
-        return 0
-    if args.request:
-        print("Ideas requested — the Command Code worker will propose a batch.")
-    print(f"enabled:  {brief['enabled']}")
-    print(f"source:   {brief['source_name']}  (the `source` on generated drafts)")
-    print(f"per run:  {brief['per_run']}")
-    print(f"topics:   {len(brief['topics'])} (in {ideas_topics_path(cfg)})")
-    print(f"queued:   {len(brief['existing'])} existing idea(s)")
-    if brief["requested"]:
-        print(f"pending:  requested {brief['requested_at']}")
-    if brief["error"]:
-        print(f"error:    {brief['error']}", file=sys.stderr)
-    return 0
-
-
 def _cmd_blog_add_idea(args: argparse.Namespace) -> int:
-    """Queue one original-post idea by hand (a seed for the normal rewrite flow)."""
+    """Queue one original-post idea by hand (a seed for the normal caption flow)."""
     cfg = _load_config(args)
     try:
         result = queue_ideas(
@@ -717,85 +595,6 @@ def _cmd_blog_add_idea(args: argparse.Namespace) -> int:
     reason = result["skipped_ideas"][0]["reason"] if result["skipped_ideas"] else "not added"
     print(f"Skipped: {reason}", file=sys.stderr)
     return 1
-
-
-def _cmd_voice_index(args: argparse.Namespace) -> int:
-    """Embed the corpus into the vector index (the keyword backend needs none)."""
-    cfg = _load_config(args)
-    try:
-        count = voice.build_index(cfg)
-    except ImportError as exc:
-        print(f"voice index: the [voice] extra is not installed ({exc})", file=sys.stderr)
-        print('  install it where the worker runs: pip install -e ".[voice]"', file=sys.stderr)
-        return 2
-    except ValueError as exc:
-        print(f"voice index: {exc}", file=sys.stderr)
-        return 2
-    except (RuntimeError, OSError) as exc:
-        print(f"voice index: {exc}", file=sys.stderr)
-        return 1
-    if voice.backend(cfg) == "keyword":
-        print(f"keyword backend: {count} record(s) ready (no vector index needed)")
-    else:
-        print(f"Indexed {count} record(s) into {voice.index_dir(cfg)}")
-    return 0
-
-
-def _cmd_voice_search(args: argparse.Namespace) -> int:
-    """Retrieve — and optionally print — what the worker would attach for a topic."""
-    cfg = _load_config(args)
-    if args.show:
-        if not voice.enabled(cfg):
-            print("voice is off, or the corpus is missing (see `voice status`).", file=sys.stderr)
-            return 1
-        print(voice.examples_block(cfg, {"title": args.query}) or "(no examples and no profile)")
-        return 0
-    try:
-        hits = voice.search(cfg, args.query, args.k)
-    except ImportError as exc:
-        print(f"voice search: the [voice] extra is not installed ({exc})", file=sys.stderr)
-        print('  install it where the worker runs: pip install -e ".[voice]"', file=sys.stderr)
-        return 2
-    except (ValueError, RuntimeError, OSError) as exc:
-        print(f"voice search: {exc}", file=sys.stderr)
-        return 1
-    if not hits:
-        print(f"No matches above the gate (min_similarity={voice.min_similarity(cfg)}).")
-        return 0
-    for index, hit in enumerate(hits, start=1):
-        who = "me" if hit.get("is_me") else (hit.get("author") or "other")
-        text = " ".join(str(hit.get("text", "")).split())
-        similarity = hit.get("_similarity")
-        score = f"sim={similarity:.3f}" if isinstance(similarity, (int, float)) else "sim=n/a"
-        # The sim is printed so the gate can be tuned against real results: lower
-        # `voice.min_similarity` to let weaker matches through, raise it for less.
-        print(f"[{index}] {score} · {hit.get('chat', '?')} · {who} · {hit.get('timestamp', '')}")
-        print(f"    {text[:200]}")
-    return 0
-
-
-def _cmd_voice_status(args: argparse.Namespace) -> int:
-    cfg = _load_config(args)
-    snapshot = voice.status(cfg)
-    if args.json:
-        print(json.dumps(snapshot, indent=2, ensure_ascii=False))
-        return 0
-    print(f"enabled:  {snapshot['enabled']}")
-    print(f"backend:  {snapshot['backend']}")
-    print(
-        f"corpus:   {snapshot['corpus_dir']} "
-        f"({snapshot['records']} records, {snapshot['mine']} from you)"
-    )
-    print(f"index:    {snapshot['index_dir']}")
-    print(
-        f"profile:  {snapshot['profile_file']} ({'present' if snapshot['profile'] else 'absent'})"
-    )
-    print(f"top_k:    {snapshot['top_k']} (only_me={snapshot['only_me']})")
-    print(
-        f"gate:     min_similarity={snapshot['min_similarity']} "
-        f"min_example_words={snapshot['min_example_words']}"
-    )
-    return 0
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:

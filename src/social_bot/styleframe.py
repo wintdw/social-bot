@@ -66,28 +66,6 @@ _SVG = (
 )
 _THUMB = "data:image/svg+xml;base64," + base64.b64encode(_SVG.encode("utf-8")).decode("ascii")
 
-_DNA = (
-    "# Atento DNA — brand voice & content playbook\n"
-    "The single source of truth for how Atento sounds.\n\n"
-    "- Masthead on line 1, one register per post, technical terms in English.\n"
-    "- Format D (the crowd, then the turn): open on a shared belief, then complicate it.\n"
-    "- No engagement bait, no hype numbers, name the trade-off.\n"
-)
-
-_VOICE_HINTS = {
-    "technical": "a calm, two-sided engineer (the Dũng register). System Design / architecture.",
-    "essay": "a personal, self-deprecating first person (the Đạt register). Essays / mindset.",
-    "announcement": "Atento's warm, low-drama page voice. Khai giảng, seminar, community.",
-    "funny": "a deadpan, mock-serious satirist. A platform in-joke told with a straight face.",
-}
-
-_VOICE = (
-    '# technical — the "DW" register\n'
-    "Voice: a calm, two-sided engineer (the Dũng register).\n\n"
-    "Open on a concrete moment; keep the thesis for the payoff.\n"
-    "Give every claim its cost — the trade-off is the credibility.\n"
-)
-
 # --- sample pipeline state (shaped exactly like draft_pipeline.status) --------
 
 _STATS = {
@@ -144,10 +122,6 @@ _STATS = {
             "source": "bytebytego",
             "has_image": False,
         },
-        "dna_file_set": True,
-        "voices_set": True,
-        "voice_choices": ["technical", "essay", "announcement", "funny"],
-        "default_voice": "technical",
     },
     "images": {"with_image": 3},
 }
@@ -456,19 +430,10 @@ def render_pages() -> list[tuple[str, str]]:
             "Draft",
             render_draft_html(
                 _DETAIL,
-                dna=_DNA,
-                # The rewriter is on in the sample so the Draft tab shows the
-                # whole Compose panel: the image tools *and* the caption rewrite,
-                # both grouped above the terminal-only action bar.
-                rewrite_enabled=True,
                 # The sample's picture is a stand-in for a diagram, so the
                 # "Restore source image" control the detail page shows for a post
                 # whose own cover was replaced is part of the preview too.
                 image_generated=True,
-                voices=["technical", "essay", "announcement", "funny"],
-                default_voice="technical",
-                voice_hints=_VOICE_HINTS,
-                voice_text=_VOICE,
                 next_id="do-you-even-need-a-presentation",
                 scheduling=True,
                 next_post="2026-09-10 19:51",
@@ -657,7 +622,7 @@ def _foundations() -> str:
         '<span class="step-name">Extracted<span class="small">queued from bytebytego</span></span>'
         "</div>"
         '<div class="step is-now"><span class="step-dot" aria-hidden="true">●</span>'
-        '<span class="step-name">AI draft<span class="small">rewritten · waiting on you</span></span>'
+        '<span class="step-name">AI draft<span class="small">caption written · waiting on you</span></span>'
         "</div>"
         '<div class="step"><span class="step-dot" aria-hidden="true">·</span>'
         '<span class="step-name">Approved<span class="small">not yet</span></span></div>'

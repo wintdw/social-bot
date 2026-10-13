@@ -70,10 +70,7 @@ DEFAULTS: dict[str, Any] = {
         "seen_name": "seen.json",
     },
     # Publishing is human-gated: destinations are what a review-page approval
-    # may post to. `dna_file` is an optional path to your brand-voice brief and
-    # `voices` an optional menu of per-post voice briefs (key -> file);
-    # both are surfaced to the rewriter through
-    # GET /api/drafts. `dir` + `log_name` are the append-only audit log shown on
+    # may post to. `dir` + `log_name` are the append-only audit log shown on
     # /publish.
     "publish": {
         "enabled": True,
@@ -102,25 +99,14 @@ DEFAULTS: dict[str, Any] = {
         # API's way to test posting without going public. Private sends are
         # audited but don't consume drafts or count toward interval_days.
         "private": False,
-        # Series masthead on line 1 of every caption (see the DNA §4.5). The
-        # label is a content judgment, not a source default: the rewriter picks
-        # one of `choices` per post (worth learning vs just information);
-        # `default` is only the fallback the pipeline prepends when it doesn't.
+        # Series masthead on line 1 of every caption. The label is a content judgment, not a source default: you pick one of
+        # `choices` per post (worth learning vs just information); `default` is
+        # what `blog masthead` backfills onto captions that have none.
         # Empty `choices` + `default` disables the masthead.
         "mastheads": {"choices": [], "default": ""},
-        "dna_file": "",
-        # One file per voice under docs/voices/ (key -> path):
-        # the rewriter picks a key per post and returns it as `voice`, and each
-        # file's brief + samples ride along in GET /api/drafts `voices`. The DNA
-        # stays the structural contract; a voice refines how one register sounds.
-        # `default_voice` is the fallback key when the rewriter omits one. Empty
-        # `voices` disables the menu.
-        "voices": {},
-        "default_voice": "",
-        # How many recently-written captions to hand the rewriter alongside the
-        # open drafts (GET /api/drafts `recent`), so it can avoid repeating the
-        # same opener/closer/vocabulary across posts (the pipeline lints against
-        # the same set). 0 sends none.
+        # How many recently-written captions the caption lint compares a new one
+        # against, so a repeated opener/closer/vocabulary across posts is flagged.
+        # 0 disables the comparison.
         "recent_captions": 12,
         "dir": "data/publish",
         "log_name": "published.jsonl",
@@ -143,72 +129,14 @@ DEFAULTS: dict[str, Any] = {
     # Idea seeds: the systems/architectures *original* Atento posts are drawn
     # from — NOT `sources[]` (those are feeds to repost). Nothing is fetched:
     # `topics_file` is a plain list of themes (Elasticsearch, ClickHouse, Loki,
-    # MySQL, …) the rewriter agent turns into original posts from each system's
-    # own architecture and documentation. The app only holds the themes and
-    # accepts the agent's ideas as drafts (see draft_pipeline.queue_ideas).
+    # MySQL, …) to write about. Ideas are written in Claude and queued by hand
+    # (`social-bot blog add-idea`); the app only holds the themes and the dedupe
+    # ledger (see draft_pipeline.queue_ideas).
     "ideas": {
-        "enabled": False,  # opt-in, like rewrite/voice
         "topics_file": "data/ideas/topics.md",  # one system/theme per line
-        "source_name": "atento-original",  # the `source` on generated drafts
-        "dir": "data/ideas",  # dedupe ledger + request state
+        "source_name": "atento-original",  # the `source` on idea drafts
+        "dir": "data/ideas",  # dedupe ledger
         "seen_name": "seen.json",
-        "state_name": "state.json",
-        "per_run": 3,  # how many ideas one agent run should propose
-    },
-    # Rewriter worker (scripts/rewrite_worker.py). When enabled, /review/{id}
-    # offers a "Rewrite with Command Code" button that marks the draft; a
-    # host-side worker runs the Command Code CLI headlessly for it and posts the
-    # result back to the JSON API. The bot itself never runs the agent, so the
-    # CLI's auth and permission model stay on the host (the container has no
-    # Node). `api_base` is where the worker reaches this app; the rest tunes the
-    # agent run.
-    "rewrite": {
-        "enabled": False,
-        "command": "commandcode",  # the CLI to run (alias: `cmd`)
-        "model": "",  # passed to `-m`; "" uses the CLI's own default
-        "max_turns": 40,  # `--max-turns` for the headless run
-        "timeout_seconds": 600.0,  # kill a run that hangs
-        "poll_seconds": 15.0,  # how often the worker asks for new requests
-        "api_base": "http://127.0.0.1:8083",  # this app, as the worker sees it
-    },
-    # The operator's own voice (src/social_bot/voice.py). When enabled, the
-    # rewriter worker retrieves the operator's own messages closest to the draft
-    # and hands them — plus the learned profile.md — to the agent as `MY VOICE`,
-    # on top of the DNA (structure) and the voice menu (register). The corpus is
-    # a directory of normalized JSONL (the twin's ingest shape), owned by this
-    # project under data/voice/; nothing imports the twin at runtime.
-    # `backend: vector | keyword | hybrid` (hybrid = BM25 + vector fused).
-    # The vector backends need the optional `[voice]` extra (lancedb, fastembed).
-    # Voice retrieval is an enhancement: a missing corpus or extra never blocks a
-    # rewrite, it just shortens the prompt.
-    "voice": {
-        "enabled": False,
-        "corpus_dir": "data/voice/normalized",  # the operator's messages (JSONL)
-        "index_dir": "data/voice/index",  # `social-bot voice index` writes here
-        "profile_file": "data/voice/profile.md",  # learned voice, folded in
-        "backend": "hybrid",  # vector | keyword | hybrid
-        "top_k": 8,  # how many of the operator's past messages to attach
-        "only_me": True,  # examples come only from the operator
-        # The gate that keeps junk out of the prompt: an example must reach this
-        # cosine similarity AND carry at least this many words. Measured on this
-        # corpus, unrelated chat sits at 0.46-0.50 while a genuine topical match
-        # reaches 0.55+ — so an English article whose topic the chat corpus does
-        # not cover yields no examples at all, and the block is just the profile.
-        # 0 disables the floor; 0 for min_example_words disables the length gate.
-        "min_similarity": 0.55,
-        "min_example_words": 3,
-        "max_examples_chars": 2000,  # cap on the rendered examples (0 = no cap)
-        "include_profile": True,  # attach the learned profile.md too
-        "hybrid_candidates": 60,  # per-ranker pool size when fusing
-        "embedding": {
-            "provider": "local",  # "local" (fastembed) or "openai" (HTTP endpoint)
-            "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
-            "base_url": "",  # only for provider: openai
-            "cache_dir": "",
-            "batch_size": 64,
-            "timeout_seconds": 120.0,
-            "api_key": "",  # populated by credentials.yaml, never config.yaml
-        },
     },
 }
 
@@ -351,40 +279,7 @@ def validate(cfg: dict) -> None:
         _hhmm_minutes(str(slot), "blog.scan_at")
 
     ideas = cfg.get("ideas", {})
-    if int(ideas.get("per_run", 3)) < 1:
-        raise ValueError("config: ideas.per_run must be >= 1")
     if not str(ideas.get("topics_file", "")).strip():
         raise ValueError("config: ideas.topics_file must not be empty")
     if not str(ideas.get("source_name", "")).strip():
         raise ValueError("config: ideas.source_name must not be empty")
-
-    rewrite = cfg.get("rewrite", {})
-    if float(rewrite.get("timeout_seconds", 600)) <= 0:
-        raise ValueError("config: rewrite.timeout_seconds must be positive")
-    if float(rewrite.get("poll_seconds", 15)) <= 0:
-        raise ValueError("config: rewrite.poll_seconds must be positive")
-    if int(rewrite.get("max_turns", 40)) < 1:
-        raise ValueError("config: rewrite.max_turns must be >= 1")
-    if not str(rewrite.get("api_base", "")).startswith(("http://", "https://")):
-        raise ValueError("config: rewrite.api_base must be an http(s) URL")
-    if not str(rewrite.get("command", "")).strip():
-        raise ValueError("config: rewrite.command must not be empty")
-
-    voice = cfg.get("voice", {})
-    if str(voice.get("backend", "vector")).lower() not in ("vector", "keyword", "hybrid"):
-        raise ValueError(f"config: unknown voice.backend {voice.get('backend')!r}")
-    if int(voice.get("top_k", 8)) < 1:
-        raise ValueError("config: voice.top_k must be >= 1")
-    if int(voice.get("max_examples_chars", 0)) < 0:
-        raise ValueError("config: voice.max_examples_chars must be >= 0")
-    if not 0.0 <= float(voice.get("min_similarity", 0.0)) <= 1.0:
-        raise ValueError("config: voice.min_similarity must be between 0 and 1")
-    if int(voice.get("min_example_words", 0)) < 0:
-        raise ValueError("config: voice.min_example_words must be >= 0")
-    if int(voice.get("hybrid_candidates", 60)) < 1:
-        raise ValueError("config: voice.hybrid_candidates must be >= 1")
-    embedding = voice.get("embedding") or {}
-    if str(embedding.get("provider", "local")).lower() not in ("local", "openai"):
-        raise ValueError(f"config: unknown voice.embedding.provider {embedding.get('provider')!r}")
-    if float(embedding.get("timeout_seconds", 120)) <= 0:
-        raise ValueError("config: voice.embedding.timeout_seconds must be positive")

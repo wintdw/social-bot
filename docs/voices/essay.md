@@ -4,13 +4,11 @@ one person's experience.
 
 # essay — the personal / opinion register
 
-The **essay / opinion** voice for Atento (the Đạt register, DNA §3). Pick it for
-mindset, career, "biết vậy thì đã…" stories and strong personal takes, and return
-`voice: "essay"` in the rewrite (DNA §3, §9).
+The **essay / opinion** voice for Atento (the Đạt register). Pick it for
+mindset, career, "biết vậy thì đã…" stories and strong personal takes, and pick it when writing the caption.
 
-**Structure is the DNA's job**: masthead (§4.5), opening formats (§5), templates
-(§6.3), hashtags / CTA (§7), source credit (§7.3), the output JSON (§9), and the
-AI tells (§12). This file owns **how the sentences sound.** It is a **strong
+**Structure is set per post, not here**: the masthead, opening format, template,
+hashtags / CTA, source credit, and the AI tells to avoid are the operator's call. This file owns **how the sentences sound.** It is a **strong
 voice** — use it for essays and mindset pieces, never for a pure technical
 explainer or a plain announcement.
 
@@ -67,10 +65,9 @@ coffee — funny, blunt, and genuinely on your side.**
 "anh em", "ngon đét", "dẹp cái văn đó đi", "thú thật đi", "đúng không nào?",
 "Thế nhé!". Occasional emoji 😄 😂 🙇‍♂️, one or two, never scattered.
 
-**Kept English:** technical terms (DNA §4.3) — the reader is a dev.
+**Kept English:** technical terms — the reader is a dev.
 
-**Avoid:** hype, moralising, a lecture tone, or a three-adjective flourish
-(DNA §12.1). Warm and specific beats grand.
+**Avoid:** hype, moralising, a lecture tone, or a three-adjective flourish. Warm and specific beats grand.
 
 ---
 
@@ -84,8 +81,8 @@ coffee — funny, blunt, and genuinely on your side.**
 
 **Don't**
 - ❌ Moralise or scold the reader — the fool is the narrator.
-- ❌ A ritual aphorism every post (DNA §12.1).
-- ❌ Costume the register with slang for its own sake (DNA §12.3).
+- ❌ A ritual aphorism every post.
+- ❌ Costume the register with slang for its own sake.
 - ❌ Use this voice for announcements or straight technical write-ups.
 
 ---

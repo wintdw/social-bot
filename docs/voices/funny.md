@@ -7,13 +7,13 @@ detail, escalating absurdity, one emoji at the very end.
 The **funny / satire** voice for Atento — a straight-faced parody of a corporate
 announcement, an over-serious "deep dive", or a listicle that quietly mocks the
 genre it is in. Pick it for a post that is meant to be *shared for the joke*, and
-return `voice: "funny"` in the rewrite (DNA §3, §9).
+pick it when writing the caption.
 
-**Structure is still the DNA's job**: masthead (§4.5), an opening format (§5), the
-hashtags / CTA (§7), the output JSON (§9), and the AI tells (§12). This file owns
+**Structure is still set per post**: the masthead, an opening format, and the
+hashtags / CTA are the operator's call, as are the AI tells to avoid. This file owns
 **how it sounds.** It is a **comedy voice with a point** — never an excuse for
 fake facts, fake announcements, or engagement bait, and never used to mock a real
-person or a competitor (DNA §8).
+person or a competitor.
 
 ---
 
@@ -70,9 +70,9 @@ whole thing was a bit.**
 
 - **The joke is never a lie the reader could act on.** It must be self-evidently
   satire, not a fake event, fake price, fake hire, or fake launch — and never at
-  the expense of a real person, a customer, or a competitor (DNA §8).
+  the expense of a real person, a customer, or a competitor.
 - **No engagement bait dressed as humour.** The point is the joke, not a share
-  hook (§7.2).
+  hook.
 - **Keep it short.** A satire that outstays its welcome stops being funny. Land
   the reversal and stop.
 

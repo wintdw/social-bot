@@ -1,8 +1,9 @@
 """Draft model, state machine, and persistence (pure logic).
 
-A draft moves: extracted -> ai_draft -> posted (or rejected). The AI rewrite
-(via Command Code) fills in the caption fields; a human approves on the review
-page, which triggers the publish. Nothing here talks to the network.
+A draft moves: extracted -> ai_draft -> approved -> posted (or rejected). The
+caption is written by the operator (in Claude, pasted into /review/{id}); saving
+it moves the draft to ai_draft, and a human approves it there, which queues the
+publish. Nothing here talks to the network.
 """
 
 from __future__ import annotations
@@ -21,17 +22,8 @@ REJECTED = "rejected"
 
 STATES = (EXTRACTED, AI_DRAFT, APPROVED, POSTED, REJECTED)
 
-# What a pending rewriter request asks for (``Draft.rewrite_mode``): the whole
-# rewrite (caption), or the same rewrite *in a voice the operator
-# picked* instead of one the agent chooses.
-REWRITE_CAPTION = "caption"
-REWRITE_CAPTION_VOICE = "caption-voice"
-REWRITE_MODES = (REWRITE_CAPTION, REWRITE_CAPTION_VOICE)
-
 # States a draft can be published from (an explicit human click implies approval).
 _PUBLISHABLE = (AI_DRAFT, APPROVED)
-# States a rewrite may land on (re-running the agent is fine).
-_REWRITABLE = (EXTRACTED, AI_DRAFT)
 
 
 def now_iso() -> str:
@@ -76,46 +68,20 @@ class Draft:
     excerpt: str = ""
     image: str = ""
     # The image the source post itself published, captured at scan time and
-    # never written by code-drawn diagrams — so /review/{id} can always put the
-    # source's own cover back after a diagram replaced it.
+    # never written by drawing a plate — so /review/{id} can always put the
+    # source's own cover back after a plate replaced it.
     source_image: str = ""
     published: str = ""
     lang: str = ""
     state: str = EXTRACTED
-    # Filled in by the AI rewrite (POST /api/drafts/{id}/rewrite).
+    # Written by the operator on /review/{id}.
     caption: str = ""
     hashtags: list[str] = field(default_factory=list)
     cta: str = ""
     commentary: str = ""
-    # Legacy AI-image fields, kept so old queue.json files still load.
-    # New code never writes them: images are the source post's own cover or a
-    # code-drawn diagram (see diagram.py). Editable on /review/{id} for now.
-    image_prompt: str = ""
-    # The visual treatment for the image, chosen per post by content and tone.
-    # Only "diagram" renders anything (the code-drawn explainer); any other
-    # value means "use the source image".
-    image_style: str = ""
-    # The voice/register key (publish.voices), chosen per post by the rewriter by
-    # content — like the masthead and image_style (DNA §3). Empty or unknown falls
-    # back to publish.default_voice when the API delivers the voice menu.
-    # Overridable on /review/{id}, and the pick can be *locked* for one rewrite by
-    # "Rewrite in this voice" (REWRITE_CAPTION_VOICE): the agent then writes in this
-    # register instead of choosing one of its own.
-    voice: str = ""
-    # A human asked the rewriter worker to rewrite this draft ("Rewrite with
-    # Command Code" or "Rewrite in this voice" on /review/{id}). An ISO timestamp
-    # while the request is open; the whole thing is the host-side worker's queue.
-    # Cleared when a rewrite lands (apply_rewrite) or the request is cancelled.
-    # `rewrite_error` carries the worker's last failure, so the operator can see why
-    # nothing came back instead of a request that waits forever.
-    rewrite_requested_at: str = ""
-    rewrite_error: str = ""
-    # What that open request asks for (REWRITE_CAPTION / REWRITE_CAPTION_VOICE);
-    # empty when nothing is pending.
-    rewrite_mode: str = ""
-    # Advisory AI-tell warnings from caption_lint, written at rewrite/edit time
-    # and shown on /review/{id}. Never blocks a rewrite or a post; empty when the
-    # caption reads clean. Each entry is {"code", "message"}.
+    # Advisory AI-tell warnings from caption_lint, written at each caption save
+    # and shown on /review/{id}. Never blocks a post; empty when the caption reads
+    # clean. Each entry is {"code", "message"}.
     lint: list[dict] = field(default_factory=list)
     # Publish bookkeeping. `posts` is keyed by destination name, one record per
     # platform the draft has been sent to, so a multi-destination draft keeps
@@ -152,53 +118,8 @@ class Draft:
 
     # -- state -----------------------------------------------------------
 
-    def can_receive_rewrite(self) -> bool:
-        return self.state in _REWRITABLE
-
-    def rewrite_kind(self) -> str:
-        """What the open rewriter request asks for ("" when nothing is pending).
-
-        A request written before this field existed has no mode and reads as a
-        full rewrite, which is what it was.
-        """
-        if not self.rewrite_requested_at:
-            return ""
-        return self.rewrite_mode if self.rewrite_mode in REWRITE_MODES else REWRITE_CAPTION
-
     def can_publish(self) -> bool:
         return self.state in _PUBLISHABLE
-
-    def apply_rewrite(
-        self,
-        *,
-        caption: str = "",
-        hashtags: list[str] | None = None,
-        cta: str = "",
-        commentary: str = "",
-        image_prompt: str = "",
-        image_style: str = "",
-        voice: str = "",
-    ) -> None:
-        if caption:
-            self.caption = caption
-        if hashtags is not None:
-            self.hashtags = [str(tag) for tag in hashtags]
-        if cta:
-            self.cta = cta
-        if commentary:
-            self.commentary = commentary
-        if image_prompt:
-            self.image_prompt = image_prompt
-        if image_style:
-            self.image_style = image_style
-        if voice:
-            self.voice = voice
-        # A rewrite fulfils any pending rewriter-worker request.
-        self.rewrite_requested_at = ""
-        self.rewrite_mode = ""
-        self.rewrite_error = ""
-        self.state = AI_DRAFT
-        self.touch()
 
     def approve(self) -> None:
         if not self.can_publish():
@@ -211,7 +132,7 @@ class Draft:
 
         Approval is reversible right up to the send: this returns a queued draft
         to ``ai_draft`` so the poster no longer sees it, while it stays on
-        /review for further edits, a rewrite, or another approval. The manual
+        /review for further edits or another approval. The manual
         queue position is dropped with it, so a later re-approval lands at the
         end of the queue rather than resurrecting a stale rank. A draft already
         posted publicly cannot be un-approved — a send cannot be undone.
@@ -335,7 +256,7 @@ def find(drafts: list[Draft], draft_id: str) -> Draft | None:
 
 # Decoded queue JSON keyed by path, validated against (mtime_ns, size). Every
 # request used to re-read and re-parse the whole file; on a warm queue that is
-# the dominant cost of /review, /api/drafts and /status. The cached value is the
+# the dominant cost of /review and /status. The cached value is the
 # raw decoded JSON, never Draft objects, so each caller still gets its own
 # mutable copies (publish mutates and re-saves them).
 _QUEUE_CACHE: dict[str, tuple[int, int, list[dict]]] = {}

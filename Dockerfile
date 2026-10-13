@@ -22,8 +22,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 
 # Runtime config; keep it a thin layer so overriding it is a cheap bind mount.
 COPY config.yaml ./
-# Docs (incl. the Atento DNA and the voices/ briefs referenced by
-# publish.dna_file / publish.voices) so the image is self-contained;
+# Docs (voice briefs, design preview) so the image is self-contained;
 # compose bind-mounts ./docs over this for live edits.
 COPY docs ./docs
 

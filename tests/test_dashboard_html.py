@@ -43,10 +43,6 @@ STATS = {
             "source": "atento-blog",
             "has_image": True,
         },
-        "dna_file_set": True,
-        "voices_set": True,
-        "voice_choices": ["technical", "essay", "announcement", "funny"],
-        "default_voice": "technical",
     },
 }
 

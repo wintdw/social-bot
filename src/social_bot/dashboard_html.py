@@ -953,10 +953,6 @@ def render_status_html(
         ["next up", html.escape(_next_draft_label(publish) or "—")],
         ["post at", html.escape(_post_at_label(publish) or "—")],
         ["post per slot", html.escape(str(publish.get("post_per_slot", "")))],
-        ["DNA file set", str(bool(publish.get("dna_file_set")))],
-        ["Voices set", str(bool(publish.get("voices_set")))],
-        ["Voice choices", html.escape(", ".join(publish.get("voice_choices") or []) or "—")],
-        ["Default voice", html.escape(str(publish.get("default_voice") or "—"))],
     ]
 
     schedules = _run_line("Feed refresh", refresh) + _run_line("Source scan", scan)

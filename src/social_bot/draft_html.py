@@ -11,8 +11,8 @@ falling back to the source's own title while the draft is still unwritten. The
 detail page reads as a production sheet — image hero, editable caption, a live
 Facebook-style preview, a pipeline stepper, and one clearly primary action. Its
 secondary controls are grouped in the Compose panel under the fields they act on
-(the image tools, then the caption rewrites), so the sticky action bar carries only
-the terminal actions that move the draft: post, approve & schedule, save, reject.
+(the image tools), so the sticky action bar carries only the terminal actions that
+move the draft: post, approve & schedule, save, reject.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ import urllib.parse
 from .caption import display_title, leading_masthead
 from .destinations import label_for, labels_for
 from .destinations import names as destination_names
-from .drafts import REWRITE_CAPTION_VOICE, Draft, parse_when
+from .drafts import Draft, parse_when
 from .ui import BRAND_EYEBROW, badge, fmt_when, layout
 
 # Human labels for the status filter chips (the badge shows the raw state).
@@ -81,10 +81,9 @@ _DETAIL_SCRIPT = """<script>
     if (form.dataset.submitting === '1') { event.preventDefault(); return; }
     var button = event.submitter;
     // What a submit *does* is read off where it goes, not off a list of button
-    // names: the compose tool (Rewrite in
-    // this voice) and Save each override the form's action with formaction, so only
-    // a submit of the form's own action publishes — and only that one asks for the
-    // posting confirmation. A submit with no button (Enter in a field) counts as a post.
+    // names: Save overrides the form's action with formaction, so only a submit of
+    // the form's own action publishes — and only that one asks for the posting
+    // confirmation. A submit with no button (Enter in a field) counts as a post.
     var target = (button && button.getAttribute('formaction')) || form.getAttribute('action');
     var posts = target === form.getAttribute('action');
     var isApprove = !!button && button.name === 'approve';
@@ -105,7 +104,6 @@ _DETAIL_SCRIPT = """<script>
     // The button's own name is only a cue for which verb to show.
     if (isApprove) button.textContent = 'Approving\u2026';
     else if (button.name === 'save') button.textContent = 'Saving\u2026';
-    else if (button.name === 'diagram') button.textContent = 'Rendering\u2026';
     else if (posts) button.textContent = 'Posting\u2026';
   });
   var reject = document.getElementById('reject-form');
@@ -114,42 +112,6 @@ _DETAIL_SCRIPT = """<script>
       event.preventDefault();
     }
   });
-  // Swap the guidance as the image style or the voice changes; the server
-  // renders the selected hint, so this only keeps it in step without a reload.
-  function wireHint(selectId, hintId) {
-    var select = document.getElementById(selectId);
-    var hint = document.getElementById(hintId);
-    if (!select || !hint) return;
-    select.addEventListener('change', function () {
-      var option = select.options[select.selectedIndex];
-      var text = option && option.getAttribute('data-hint');
-      if (text) hint.textContent = text;
-    });
-  }
-  wireHint('voice', 'voice_hint');
-  // The rewriter runs on an external worker, so its request stays open until a
-  // rewrite lands (or the worker reports a failure); reload when it clears.
-  var rewrite = document.getElementById('rewrite-job');
-  if (rewrite) {
-    var rtries = 0;
-    var checkRewrite = function () {
-      if (++rtries > 240) return;
-      fetch('/api/status').then(function (r) { return r.json(); }).then(function (data) {
-        var ids = (data && data.rewrite && data.rewrite.requested) || [];
-        if (ids.indexOf(rewrite.getAttribute('data-draft-id')) >= 0) {
-          window.setTimeout(checkRewrite, 5000);
-          return;
-        }
-        if (dirty) {
-          rewrite.className = 'notice notice-ok';
-          rewrite.textContent = 'Rewrite ready \u2014 reload to see it.';
-          return;
-        }
-        window.location.href = window.location.pathname;
-      }).catch(function () { window.setTimeout(checkRewrite, 8000); });
-    };
-    window.setTimeout(checkRewrite, 5000);
-  }
 })();
 </script>"""
 
@@ -378,8 +340,6 @@ def render_drafts_html(
     page: dict | None = None,
     q: str = "",
     sort: str = "",
-    ideas_enabled: bool = False,
-    ideas_request: dict | None = None,
 ) -> str:
     """Render the draft queue as a standalone HTML list page.
 
@@ -402,27 +362,11 @@ def render_drafts_html(
     per_page = int((page or {}).get("per_page") or 0)
     filtered = total != matched or bool(q)
     count_text = f"{matched} of {total} open draft(s)" if filtered else f"{matched} open draft(s)"
-    # Idea seeds: a batch of *original* post ideas is proposed by the host-side
-    # worker (like a rewrite). While one is pending the button gives way to a
-    # status pill, so it is not asked for twice.
-    ideas_tools = ""
-    if ideas_enabled:
-        if (ideas_request or {}).get("requested_at"):
-            ideas_tools = (
-                '<span class="pill" title="The Command Code worker is composing a batch">'
-                '<span class="dot dot-warn" aria-hidden="true"></span>ideas requested</span>'
-            )
-        else:
-            ideas_tools = (
-                '<form method="post" action="/review/request-ideas">'
-                '<button type="submit" class="btn">Generate ideas</button></form>'
-            )
     header = (
         "<header><div><h1>Review queue</h1>"
         f'<div class="sub">{count_text} · generated '
         f"{html.escape(generated_at.astimezone().strftime('%Y-%m-%d %H:%M %Z'))}</div></div>"
         '<div class="cmdbar">'
-        f"{ideas_tools}"
         '<form method="post" action="/scan">'
         '<button type="submit" class="btn-primary">Scan sources now</button></form>'
         "</div></header>"
@@ -470,7 +414,7 @@ def render_drafts_html(
 
 
 def _lint_notice(draft: Draft) -> str:
-    """The advisory AI-tell warnings on a rewritten caption ('' when clean).
+    """The advisory AI-tell warnings on a caption ('' when clean).
 
     Lint is advice, never a gate: it never blocks an approval or a post, so it
     renders as a warning notice above the caption the reviewer is about to edit.
@@ -505,7 +449,7 @@ def _stepper(draft: Draft) -> str:
         if key == "extracted" and draft.source:
             note = f"queued from {draft.source}"
         elif key == "ai_draft" and draft.state == "ai_draft":
-            note = "rewritten · waiting on you"
+            note = "caption written · waiting on you"
         elif key == "posted" and draft.post_id:
             note = draft.permalink or draft.post_id
         rows.append(
@@ -519,16 +463,10 @@ def _stepper(draft: Draft) -> str:
 def render_draft_html(
     draft: Draft,
     *,
-    dna: str = "",
     message: str = "",
     message_kind: str = "info",
     private: bool = False,
-    rewrite_enabled: bool = False,
     image_generated: bool = False,
-    voices: list[str] | None = None,
-    default_voice: str = "",
-    voice_hints: dict[str, str] | None = None,
-    voice_text: str = "",
     generated_at: dt.datetime | None = None,
     next_id: str | None = None,
     scheduling: bool = False,
@@ -565,95 +503,20 @@ def render_draft_html(
             "</figure>"
         )
 
-    # Images are the source post's own cover or a code-drawn diagram —
+    # Images are the source post's own cover or a drawn plate —
     # nothing is generated in the background anymore.
     image_note = ""
     if not draft.image:
-        image_note = (
-            '<p class="muted">No image yet — the post will publish without one. '
-            "Use “Render diagram” below for a code-drawn explainer.</p>"
-        )
+        image_note = '<p class="muted">No image yet — the post will publish without one.</p>'
     elif image_generated:
         image_note = (
-            '<p class="muted">A code-drawn diagram, not the source post’s own — '
+            '<p class="muted">A drawn plate, not the source post’s own — '
             "“Restore source image” below puts the original back.</p>"
         )
-
-    # A requested rewrite is run by an external worker (scripts/rewrite_worker.py),
-    # so the page can only report that the request is open — and, when the worker
-    # fails, why nothing came back. The poll script reloads once the request clears.
-    rewrite_note = ""
-    if rewrite_enabled and draft.can_receive_rewrite():
-        kind = draft.rewrite_kind()
-        if kind:
-            if kind == REWRITE_CAPTION_VOICE:
-                # Say *which* of the two caption buttons is running: the difference
-                # between them is the one thing the operator wants to see here.
-                what = html.escape(f"Rewriter requested in voice “{draft.voice}”")
-                pending = "This page refreshes when a rewrite lands."
-            else:
-                what = "Rewriter requested"
-                pending = "This page refreshes when a rewrite lands."
-            rewrite_note = (
-                '<div class="notice" id="rewrite-job" role="status" '
-                f'data-draft-id="{html.escape(draft.id)}">'
-                '<span class="dot dot-warn" aria-hidden="true"></span>'
-                f" {what} {html.escape(fmt_when(draft.rewrite_requested_at))} — waiting for "
-                f"the Command Code worker. {pending}</div>"
-            )
-        elif draft.rewrite_error:
-            rewrite_note = (
-                '<div class="notice notice-error">Rewriter failed: '
-                f"{html.escape(draft.rewrite_error)}</div>"
-            )
 
     caption = html.escape(draft.caption or "")
     tags = html.escape(" ".join(draft.hashtags))
     action = html.escape(f"/review/{draft.id}")
-
-    # The voice menu (publish.voices): the rewriter picks one register per post
-    # like the masthead; an operator can override it here. The hint under it is
-    # the chosen voice file's own "when to use" line, so the page says what each
-    # register is for instead of keeping a second copy of the docs.
-    #
-    # Whether the override can be *acted on* right now ("Rewrite in this voice"),
-    # computed once here and reused by the button below: the generic hint names that
-    # control, so it must not point at one the draft's state does not offer.
-    voice_locked_available = bool(
-        rewrite_enabled
-        and voices
-        and draft.can_receive_rewrite()
-        and not draft.rewrite_requested_at
-    )
-    voice_field = ""
-    if voices:
-        hints = voice_hints or {}
-        chosen = draft.voice if draft.voice in voices else (default_voice or "")
-        # The register the caption was actually rewritten in. A draft with no
-        # voice yet (still `extracted`) has none applied, so the default is the
-        # pending choice but claims nothing. The applied voice is the default
-        # selection *and* is labelled, so it stays identifiable after a
-        # different one is picked.
-        applied = chosen if draft.voice in voices else ""
-        options = "".join(
-            f'<option value="{html.escape(key)}"{" selected" if key == chosen else ""}'
-            f' data-hint="{html.escape(hints.get(key, ""))}">{html.escape(key)}'
-            f"{' (current)' if key == applied else ''}</option>"
-            for key in voices
-        )
-        hint = hints.get(chosen) or (
-            "Voice (register) for this caption, chosen per post by the rewriter. "
-            "Override it, then “Rewrite in this voice” to redraft the same idea in it."
-            if voice_locked_available
-            else "Voice (register) for this caption, chosen per post by the rewriter."
-        )
-        voice_field = (
-            '<div class="field"><label for="voice">Voice</label>'
-            '<select id="voice" name="voice" '
-            f'aria-describedby="voice_hint">{options}</select>'
-            f'<div class="field-hint" id="voice_hint">{html.escape(hint)}</div>'
-            "</div>"
-        )
 
     # Where this post goes. One checkbox chip per known destination, submitted
     # with whichever button is pressed, so the picker saves alongside the
@@ -709,17 +572,9 @@ def render_draft_html(
         '<div class="field-hint">Appended to the caption when posted. '
         "Space or comma separated.</div></div>"
         f"{dest_picker}"
-        f"{voice_field}"
         "</form>"
     )
 
-    # The diagram is drawn from code (diagram.py + diagram_html.py): its own
-    # form, so rendering never saves or posts the caption edits.
-    image_button = (
-        f'<form id="diagram-form" method="post" action="{action}/diagram">'
-        '<button type="submit" name="diagram" value="1" class="btn btn-quiet">'
-        "Render diagram</button></form>"
-    )
     # The current image is a diagram, so the source post's own picture is
     # still available (stored on the draft, or read back from the source page).
     # Its own form: restoring the image must not save or post the caption edits.
@@ -729,37 +584,6 @@ def render_draft_html(
             f'<form id="restore-image-form" method="post" action="{action}/restore-image">'
             '<button type="submit" class="btn btn-quiet">Restore source image</button>'
             "</form>"
-        )
-    # "Rewrite with Command Code": marks the draft for the host-side worker, which
-    # rewrites it and posts the result back. Its own form (like Restore image), so
-    # it never carries compose edits — the rewrite replaces the caption anyway.
-    rewrite_button = ""
-    if rewrite_enabled and draft.can_receive_rewrite():
-        if draft.rewrite_requested_at:
-            rewrite_button = (
-                f'<form id="rewrite-form" method="post" action="{action}/cancel-rewrite">'
-                '<button type="submit" class="btn btn-quiet">Cancel rewrite</button>'
-                "</form>"
-            )
-        else:
-            rewrite_button = (
-                f'<form id="rewrite-form" method="post" action="{action}/request-rewrite">'
-                '<button type="submit" class="btn">Rewrite with Command Code</button>'
-                "</form>"
-            )
-    # "Rewrite in this voice": the same full rewrite, except the register is the one
-    # picked in the Voice field above instead of the agent's own choice. Unlike the
-    # button before it, this one *submits the compose form* — the pick is the whole
-    # request, and a field-less form dropped it twice over: here (never saved) and at
-    # the worker (which then chose a register of its own). Offered wherever a full
-    # rewrite can be asked for, which is exactly where the other one is — while a
-    # caption rewrite is already pending both give way to Cancel.
-    voice_rewrite_button = ""
-    if voice_locked_available:
-        voice_rewrite_button = (
-            f'<button type="submit" form="publish-form" '
-            f'formaction="{action}/request-voice-rewrite" class="btn">'
-            "Rewrite in this voice</button>"
         )
     # Timed posting: a human approves here, the serve scheduler posts later.
     # The button submits the caption form too, so edits are saved with the
@@ -783,24 +607,13 @@ def render_draft_html(
             '<button type="submit" class="btn btn-quiet">Unapprove</button></form>'
         )
 
-    # The compose-local tools live under the fields they act on, each group under
-    # its own label, so the sticky action bar below carries only the actions that
-    # move the draft (post / approve / save / reject). The voice rewrite reaches
-    # back into the publish form with form= (its pick lives there); the rest keep
-    # a field-less form of their own and carry nothing.
     tool_groups = ""
-    image_tools = image_button + restore_button
+    image_tools = restore_button
     if image_tools:
         tool_groups += (
             '<div class="toolgroup" role="group" aria-label="Image tools">'
             '<span class="toolgroup-label">Image</span>'
             f'<div class="cmdbar">{image_tools}</div></div>'
-        )
-    if rewrite_button or voice_rewrite_button:
-        tool_groups += (
-            '<div class="toolgroup" role="group" aria-label="Rewrite caption">'
-            '<span class="toolgroup-label">Rewrite caption</span>'
-            f'<div class="cmdbar">{rewrite_button}{voice_rewrite_button}</div></div>'
         )
 
     masthead = leading_masthead(draft.caption)
@@ -813,7 +626,7 @@ def render_draft_html(
         '<section class="panel">'
         '<div class="panel-head"><span class="label">Compose</span>'
         f"{masthead_pill}</div>"
-        f'<div class="composer">{_lint_notice(draft)}{image_note}{rewrite_note}'
+        f'<div class="composer">{_lint_notice(draft)}{image_note}'
         f"{form}{tool_groups}</div></section>"
     )
 
@@ -868,7 +681,7 @@ def render_draft_html(
     else:
         target = f"This publishes to {pending_text or dest_text}."
     # The bar carries only the terminal actions — post, approve, save, reject.
-    # The compose-local tools (image, rewrite) are grouped up in the Compose
+    # The compose-local tools (image) are grouped up in the Compose
     # panel, under the fields they act on.
     action_bar = (
         '<div class="action-bar">'
@@ -938,7 +751,7 @@ def render_draft_html(
     rail_parts.append("</div>")
     if draft.commentary:
         rail_parts.append(
-            '<div class="rail-block"><span class="section-label">Rewriter notes</span>'
+            '<div class="rail-block"><span class="section-label">Notes</span>'
             f'<p class="notes">{html.escape(draft.commentary)}</p></div>'
         )
     if draft.cta:
@@ -946,19 +759,6 @@ def render_draft_html(
             '<div class="rail-block"><span class="section-label">CTA · review only, '
             "not posted</span>"
             f'<p class="excerpt">{html.escape(draft.cta)}</p></div>'
-        )
-    if dna:
-        rail_parts.append(
-            '<div class="rail-block"><details class="dna">'
-            "<summary>Atento DNA · brand voice</summary>"
-            f"<pre>{html.escape(dna)}</pre></details></div>"
-        )
-    if voice_text:
-        voice_label = draft.voice if draft.voice in (voices or []) else (default_voice or "default")
-        rail_parts.append(
-            '<div class="rail-block"><details class="voice">'
-            f"<summary>Voice · {html.escape(voice_label)}</summary>"
-            f"<pre>{html.escape(voice_text)}</pre></details></div>"
         )
     rail = '<aside class="panel">' + "".join(rail_parts) + "</aside>"
 

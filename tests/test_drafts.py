@@ -7,10 +7,7 @@ import json
 import pytest
 
 from social_bot.drafts import (
-    AI_DRAFT,
     POSTED,
-    REWRITE_CAPTION,
-    REWRITE_CAPTION_VOICE,
     Draft,
     append_audit,
     find,
@@ -29,66 +26,6 @@ def _draft(**kw):
     }
     base.update(kw)
     return Draft(**base)
-
-
-class TestState:
-    def test_apply_rewrite_moves_to_ai_draft(self):
-        draft = _draft()
-        draft.apply_rewrite(
-            caption="Hello",
-            hashtags=["#a", "#b"],
-            image_prompt="a long ledger",
-            image_style="sketch",
-            voice="technical",
-        )
-        assert draft.state == AI_DRAFT
-        assert draft.caption == "Hello"
-        assert draft.hashtags == ["#a", "#b"]
-        assert draft.image_prompt == "a long ledger"
-        assert draft.image_style == "sketch"
-        assert draft.voice == "technical"
-        assert draft.updated_at  # touched
-
-    def test_apply_rewrite_clears_a_pending_rewrite_request(self):
-        draft = _draft(rewrite_requested_at="2026-09-10T08:00:00+00:00", rewrite_error="boom")
-        draft.apply_rewrite(caption="Hello")
-        assert draft.rewrite_requested_at == ""
-        assert draft.rewrite_error == ""
-
-    def test_apply_rewrite_clears_the_request_kind_too(self):
-        draft = _draft(
-            rewrite_requested_at="2026-09-10T08:00:00+00:00", rewrite_mode=REWRITE_CAPTION
-        )
-        draft.apply_rewrite(caption="Hello")
-        assert draft.rewrite_kind() == ""
-
-
-class TestRewriteKind:
-    def test_rewrite_kind_reads_the_mode_and_defaults_to_caption(self):
-        assert _draft().rewrite_kind() == ""
-        # A mode with no timestamp is not a pending request.
-        assert _draft(rewrite_mode=REWRITE_CAPTION).rewrite_kind() == ""
-        # A request written before the field existed — or with a mode this build
-        # does not know — reads as the full rewrite it was.
-        stamp = "2026-09-10T08:00:00+00:00"
-        assert _draft(rewrite_requested_at=stamp).rewrite_kind() == REWRITE_CAPTION
-        assert (
-            _draft(rewrite_requested_at=stamp, rewrite_mode="nonsense").rewrite_kind()
-            == REWRITE_CAPTION
-        )
-        assert (
-            _draft(rewrite_requested_at=stamp, rewrite_mode=REWRITE_CAPTION).rewrite_kind()
-            == REWRITE_CAPTION
-        )
-
-    def test_rewrite_kind_reports_a_voice_locked_caption_rewrite(self):
-        # Membership in REWRITE_MODES is what keeps this from being normalized to
-        # REWRITE_CAPTION — which would read as the auto-pick button everywhere.
-        stamp = "2026-09-10T08:00:00+00:00"
-        assert (
-            _draft(rewrite_requested_at=stamp, rewrite_mode=REWRITE_CAPTION_VOICE).rewrite_kind()
-            == REWRITE_CAPTION_VOICE
-        )
 
 
 class TestParseWhen:
@@ -129,7 +66,7 @@ class TestPersistence:
         save_drafts(path, [_draft(title="two")])
         assert load_drafts(path)[0].title == "two"
 
-    def test_cache_reflects_external_rewrite(self, tmp_path):
+    def test_cache_reflects_external_write(self, tmp_path):
         path = tmp_path / "queue.json"
         save_drafts(path, [_draft(title="one")])
         load_drafts(path)  # warm the cache
@@ -154,11 +91,6 @@ class TestPersistence:
         assert Draft(id="x").lint == []
         draft = Draft(id="x", lint=[{"code": "hype", "message": "m"}])
         assert Draft.from_dict(draft.to_dict()).lint == [{"code": "hype", "message": "m"}]
-
-    def test_voice_defaults_to_empty_and_round_trips(self):
-        assert Draft(id="x").voice == ""
-        draft = Draft(id="x", voice="funny")
-        assert Draft.from_dict(draft.to_dict()).voice == "funny"
 
     def test_from_dict_migrates_legacy_flat_post_fields(self):
         draft = Draft.from_dict(

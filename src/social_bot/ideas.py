@@ -4,9 +4,9 @@
 credits an external author. ``ideas`` is a different input on purpose: a plain
 markdown list of systems and architectures (Elasticsearch, ClickHouse, Loki,
 Grafana, MySQL, MongoDB, …). Nothing is fetched and nothing is reposted — the
-rewriter agent draws *original* Atento posts from each system's own
-architecture and documentation, and the app only holds the themes and accepts
-the generated ideas as drafts.
+operator writes *original* Atento posts about each system, drawing on its own
+architecture and documentation, and the app only holds the themes and queues the
+ideas as drafts.
 
 This module is pure: it parses that topics file and turns an idea's title into a
 stable draft id. No network, no filesystem.

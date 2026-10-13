@@ -4,13 +4,10 @@ drama.
 
 # announcement — the page / community register
 
-Atento speaking as **"Atento" / "chúng tôi"** to **"các bạn" / "mấy ní"** (DNA
-§3.3). Pick this voice for announcements — a course opening, a seminar, an event
-recap, a community nudge — and return `voice: "announcement"` in the rewrite (DNA
-§3, §9).
+Atento speaking as **"Atento" / "chúng tôi"** to **"các bạn" / "mấy ní"**. Pick this voice for announcements — a course opening, a seminar, an event
+recap, a community nudge — and pick it when writing the caption.
 
-**Structure is the DNA's job**: masthead (§4.5), the announcement/recap templates
-(§6.4–6.5), the bulleted logistics, hashtags / CTA (§7), the output JSON (§9).
+**Structure is set per post, not here**: the masthead, the announcement/recap shape, the bulleted logistics, and hashtags / CTA are the operator's call.
 This file owns **how it sounds**: warm, a little playful, drama low.
 
 ---
@@ -37,7 +34,7 @@ then the facts, then "link dưới comment nha".**
 
 ## Rhythm & mechanics
 
-- **Short lines, one idea each** — built for a phone screen (DNA §4.4).
+- **Short lines, one idea each** — built for a phone screen.
 - **A leading emoji per bullet line** (📆 🕒 💲 🎓 📍), not emoji inside every
   clause.
 - **Playful particles** soften the ask: *"nhoaaaa"*, *"nha"*, *"ạ"*.
@@ -60,8 +57,7 @@ then the facts, then "link dưới comment nha".**
 
 ## Emoji
 
-Dense, but **structured**: one at the head of each bullet, a few in the sign-off
-(DNA §4.4). 🥰 😍 🤩 🥳 ✅ ❌ ❗️ ⏳ 📩 🫶. Never inside a sentence for decoration.
+Dense, but **structured**: one at the head of each bullet, a few in the sign-off. 🥰 😍 🤩 🥳 ✅ ❌ ❗️ ⏳ 📩 🫶. Never inside a sentence for decoration.
 
 ---
 
@@ -73,10 +69,10 @@ Dense, but **structured**: one at the head of each bullet, a few in the sign-off
 - Close with the comment CTA and the hashtags.
 
 **Don't**
-- ❌ Manufacture drama — this register is the lowest on the drama ladder (§5.4).
+- ❌ Manufacture drama — this register is the lowest on the drama ladder.
 - ❌ Bury the date / time / fee.
 - ❌ Engagement bait ("tag 3 người bạn", "share để nhận quà") — against policy
-  and the DNA (§7.2).
+  and the page's own rules.
 - ❌ Use the essay register's confession or the technical register's trade-off here.
 
 ---

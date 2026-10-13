@@ -27,8 +27,7 @@ and [development](docs/development.md).
 | `social-bot refresh` | Fetch the feed and cache it as HTML/JSON under `feed.dir`. |
 | `social-bot blog scan` | Scan the configured source feeds and queue new drafts for review (never posts). |
 | `social-bot blog topics` | List the idea-seed systems original posts are drawn from (`ideas.topics_file`). |
-| `social-bot blog ideas [--request]` | Show the idea brief, or ask the worker for a batch of original post ideas. |
-| `social-bot blog add-idea "<title>"` | Queue one original-post idea by hand (same rewrite + approval flow). |
+| `social-bot blog add-idea "<title>"` | Queue one original-post idea you wrote (same caption + approval flow). |
 | `social-bot blog publish` | Post the human-approved queue now (add `--dry-run` to preview). |
 | `social-bot blog queue` | Show the approved post queue in the order it will post. |
 | `social-bot blog move <id> up\|down\|top\|bottom` | Move one approved draft in the post queue. |
@@ -39,7 +38,7 @@ and [development](docs/development.md).
 Every command takes `--page-id` (overrides config) and `--token` (overrides
 the environment). `serve` refreshes the cached feed and scans source feeds on a
 schedule, and posts approved drafts at the `publish.post_at` slots. It **never
-approves or rewrites anything**: a draft must first be approved on `/review`
+approves anything**: a draft must first be approved on `/review`
 ("Approve & schedule", or "Post now" to send immediately). `publish.post_at: []`
 disables timed posting, leaving approval as the only publish path, and
 `publish.interval_days` enforces a minimum gap between *scheduled* public posts
@@ -157,7 +156,7 @@ docker compose logs -f                # follow refresh/scan runs
 |---|---|
 | `GET /` | **Dashboard** — refresh/scan controls, open-draft and published counts, scheduler state, the next post (time + which draft), and the cached feed. |
 | `GET /review` | **Review queue** — open drafts, newest first (with a **Scan sources now** button). Paged (`?page=`, `?per_page=`, default 20). |
-| `GET /review/{id}` | One draft: editable caption + hashtags, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set (and **Unapprove** on a draft already approved), a **Rewrite with Command Code** button when `rewrite.enabled` is set, **Render diagram** (a code-drawn explainer), **Restore source image** when the image is a diagram, the DNA brief. |
+| `GET /review/{id}` | One draft: editable caption + hashtags, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set (and **Unapprove** on a draft already approved), **Restore source image** when the image is a diagram. |
 | `GET /queue` | **Post queue** — the approved drafts in the order they will post, the one going out next marked, with drag / Top-Up-Down reorder controls and a **Post approved now** button. |
 | `GET /publish` | **Published** — the audit log (public and private sends, with permalinks). |
 | `GET /status` | **Status** — sources, drafts by state, publish settings (min interval, days remaining, next up), and scheduler runs. |
@@ -171,10 +170,7 @@ docker compose logs -f                # follow refresh/scan runs
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only; `approve=1` queues the draft for the next slot instead). |
 | `POST /review/{id}/unapprove` | Pull an approved draft back out of the queue (back to `ai_draft`); never posts. |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
-| `POST /review/{id}/diagram` | Render the code-drawn diagram for the draft (SVG + PNG); never posts. |
 | `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a diagram. |
-| `POST /review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (needs `rewrite.enabled`); never rewrites itself. |
-| `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request (either kind). |
 
 All five pages share the same top navigation, so you can move between them
 without editing URLs; `/drafts` redirects to `/review` for old bookmarks.
@@ -218,20 +214,17 @@ enters the image and `destinations.facebook.account_id` edits need no rebuild.
 ## Content pipeline (source feeds → human-approved posts)
 
 Beyond the page feed, `serve` hosts a draft review workflow. Nothing is ever
-auto-posted: the AI rewrite is a suggestion, and only a human approval publishes
-— immediately ("Post now") or via the posting schedule ("Approve & schedule").
-An approval stays reversible (**Unapprove** on `/review/{id}`) until the post
-actually goes out, so a draft queued by mistake can be pulled back.
+auto-posted: every caption is one you write and approve — immediately ("Post now")
+or via the posting schedule ("Approve & schedule"). An approval stays reversible
+(**Unapprove** on `/review/{id}`) until the post actually goes out, so a draft
+queued by mistake can be pulled back.
 
 ```
 source feeds ── blog scan ──▶ drafts (extracted)
-                                  │  GET  /api/drafts   ──▶ you run Command Code
-                                  │  POST /api/drafts/{id}/rewrite  (Atento DNA)
-                                  │  — or click "Rewrite with Command Code": the host
-                                  │    worker (scripts/rewrite_worker.py) polls
-                                  │    GET /api/rewrite-queue and posts the rewrite back
+                                  │  write the caption in Claude,
+                                  │  paste it on GET /review/{id} and save
                                    ▼  drafts (ai_draft)
-                            GET /review/{id}  ── edit caption ──▶ Post now  ──▶ Facebook Page
+                            GET /review/{id}  ── Post now  ──▶ Facebook Page
                                    │                                (destinations in config)
                                    └─ Approve & schedule ──▶ approved ──post_at slot / blog publish──▶
 ```
@@ -260,42 +253,20 @@ still-remote non-source image keep it until you run
 
 **Original posts, not just reposts.** Besides `sources:` (feeds to repost),
 `ideas:` lists **systems** in a plain file — `data/ideas/topics.md`, one per line
-(Elasticsearch, ClickHouse, Loki, MySQL, …), optionally `| <docs url>`. Click
-**Generate ideas** on `/review` (or run `social-bot blog ideas --request`): the
-same host worker proposes specific angles from those systems and queues each as an
-`extracted` draft with `source: atento-original` and no URL, then the ordinary
-rewrite + approval flow publishes it. The app never fetches or scrapes the
-systems' docs — the agent draws on its own knowledge — and `social-bot blog
-topics` lists the themes. (You can also seed one by hand: `social-bot blog
-add-idea "Vì sao ClickHouse chọn MergeTree?" --topic "ClickHouse architecture"`.)
-
-Then, with `serve` running, hand the drafts to your rewriter and approve:
+(Elasticsearch, ClickHouse, Loki, MySQL, …), optionally `| <docs url>`. Write an
+angle on one of them in Claude, then queue it:
 
 ```sh
-curl localhost:8083/api/drafts                          # drafts + your DNA text
-curl -X POST localhost:8083/api/drafts/post-one/rewrite \
-     -H 'content-type: application/json' \
-     -d '{"caption":"...","hashtags":["#Atento"]}'
-open http://localhost:8083/review                       # edit + Post now / Approve & schedule
+.venv/bin/social-bot blog add-idea "Vì sao ClickHouse chọn MergeTree?" --topic "ClickHouse architecture"
 ```
 
-Or let a host-side worker do it: click **Rewrite with Command Code** on
-`/review/{id}` (needs `rewrite.enabled: true`), and run
-`.venv/bin/python scripts/rewrite_worker.py` beside the service. The app only
-*marks* the draft; the worker polls `GET /api/rewrite-queue`, runs the Command
-Code CLI headlessly on the host, and POSTs the result back to
-`/api/drafts/{id}/rewrite` — the app never runs the agent itself (the container
-has no Node). See [operations](docs/operations.md) for running it as a service.
+It lands as an `extracted` draft with `source: atento-original` and no URL, then
+follows the ordinary caption + approval flow. The app never fetches or generates
+ideas, and `social-bot blog topics` lists the themes.
 
-**In your own voice.** On top of the brand DNA and the voice menu, the worker can
-also hand the agent *your* voice: the messages you actually wrote that are closest
-to the draft, plus a learned `profile.md`, as a `MY VOICE` section — style only,
-never a fact. Drop the corpus under `data/voice/` and install the extra
-(`pip install -e ".[voice]"`); see what a topic retrieves with
-`social-bot voice search "System Design là gì" --show`. With no corpus the worker
-writes from the DNA and the voice menu exactly as before — voice is an
-enhancement, never a gate. See
-[content-pipeline §2c](docs/content-pipeline.md).
+**Writing captions.** You write each caption in Claude. Paste the caption and hashtags on `/review/{id}` and save: saving moves the
+draft to `ai_draft`, ready to approve. The app makes no model calls and keeps no
+retrieval index.
 
 State lives under `data/review/`: `queue.json` (the queue) and `seen.json`
 (dedupe); the publish audit is `data/publish/published.jsonl`. Set
@@ -311,7 +282,7 @@ The queue posts **oldest first** by default, but you can override the order on t
 posting order, with the one that goes out next marked, and you reorder by
 dragging a row or using its Top / Up / Down buttons. `blog queue` lists the order
 and `blog move <id> <direction>` reorders from the CLI. Ordering only changes
-*which* approved draft goes next — it never approves, rewrites, or posts.
+*which* approved draft goes next — it never approves or posts.
 
 **Private mode (testing).** `publish.private: true` makes every approval an
 **unpublished** post — a real Graph call (`published=false`) that only page
@@ -331,22 +302,15 @@ never blocks the timer-driven poster, and the interval never refuses you.
 |---|---|
 | `GET /` | Dashboard: controls + counts + scheduler state + cached feed. |
 | `GET /review` | HTML review list of open drafts (with a **Scan sources now** button). |
-| `GET /review/{id}` | HTML detail with an editable caption and hashtags + Approve/Reject (and Unapprove on an approved draft, Render diagram, Restore source image). |
+| `GET /review/{id}` | HTML detail with an editable caption and hashtags + Approve/Reject (and Unapprove on an approved draft, Restore source image). |
 | `GET /publish` | HTML audit log of what has been posted (public and private). |
 | `GET /status` | HTML status page (sources, drafts by state, publish settings, runs). |
 | `POST /scan` | Trigger a source scan now (`{"started": true}`, or `409` if one is running). |
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only). |
 | `POST /review/{id}/unapprove` | Pull an approved draft back out of the queue (back to `ai_draft`); never posts. |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
-| `POST /review/{id}/diagram` | Render the code-drawn diagram for the draft (SVG + PNG); never posts. |
 | `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a diagram. |
-| `POST /review/{id}/request-rewrite` | Mark the draft for the host-side rewriter worker (`rewrite.enabled`); never rewrites itself. |
-| `POST /review/{id}/cancel-rewrite` | Drop a pending rewrite request (either kind). |
-| `GET /api/drafts` | JSON: open drafts + your `publish.dna_file` contents (`dna`) + the voice menu `publish.voices` (`voices` = `{key: brief+samples}`, with `voice_choices`/`default_voice`) + `recent` captions, for the rewriter. Paged (`?limit=`, `?offset=`, default 100; body has `total`/`has_more`/`next_offset`). |
-| `GET /api/rewrite-queue` | JSON: the drafts a human asked to rewrite + the brand context (DNA, voices, mastheads, `recent` captions), polled by the host-side rewriter worker. Each draft carries `rewrite_mode` (`caption` or `caption-voice`). |
 | `GET /api/status` | JSON: full pipeline snapshot — sources, drafts by state, seen, published, schedules, lifecycle. `publish.next_draft` names the oldest approved draft the poster will send next (`publish.approved` counts them, `publish.interval_remaining` is the days still to wait). |
-| `POST /api/drafts/{id}/rewrite` | JSON: store the rewrite (`caption`, `hashtags`, `cta`, `commentary`, `voice`). |
-| `POST /api/drafts/{id}/rewrite-error` | JSON: record the rewriter worker's failure and close the request (shown on `/review/{id}`). |
 
 **Destinations** are pluggable: each platform is a package under
 `src/social_bot/destinations/` and is registered in `destinations/registry.py`.

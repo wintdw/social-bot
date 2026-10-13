@@ -143,6 +143,3 @@ Each `_cmd_*` returns the code; `main` never lets an exception traceback.
    `ai_draft`), so one approved by mistake can be recovered before the slot.
 7. Only then a real public approve — and only deliberately.
 
-For the optional rewriter worker: with `rewrite.enabled: true`, **Rewrite with
-Command Code** on `/review/{id}` marks the draft; `scripts/rewrite_worker.py
---once` (or the `deploy/` service) rewrites it and the request clears.

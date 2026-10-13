@@ -7,10 +7,10 @@ status page at `/status`. It runs three container-local schedules — a feed
 refresh (`--refresh-at`), a source scan (`--scan-at`), and timed posting
 (`--publish-at`, from `publish.post_at`). Ordering the post queue
 (`/queue/order`, `/queue/reset`, `/queue/{id}/move`) only reorders — it never
-approves, rewrites, or posts — while each row's own Post buttons
+approves or posts — while each row's own Post buttons
 (`/queue/{id}/publish`) send that one draft now, like Post now on /review/{id}.
 Scanning only *queues* drafts, and the poster only posts drafts a human has
-already approved on `/review/{id}` — it never approves or rewrites anything.
+already approved on `/review/{id}` — it never approves anything.
 fastapi is an optional [server] extra, imported defensively so this module still
 loads without it.
 
@@ -67,12 +67,9 @@ except ImportError:  # pragma: no cover
 DEFAULT_REFRESH_TIMES = ["07:00", "19:00"]
 DEFAULT_SCAN_TIMES = ["06:00"]
 
-# Paging defaults. The review list pages in the UI; the JSON API is bounded too,
-# so a caller (the rewriter agent) can't pull an unbounded queue in one request.
+# Paging defaults for the review list.
 REVIEW_PER_PAGE = 20
 REVIEW_MAX_PER_PAGE = 200
-API_DEFAULT_LIMIT = 100
-API_MAX_LIMIT = 500
 
 # How long shutdown waits for an in-flight publish to finish before cancelling
 # the background loops. Keep below uvicorn's --timeout-graceful-shutdown.
@@ -347,45 +344,9 @@ def _writable_dir(path) -> bool:
     return os.access(candidate, os.W_OK)
 
 
-def rewrite_view(enabled: bool, drafts: list) -> dict:
-    """Serialize the pending rewriter requests for /api/status (pure).
-
-    ``drafts`` is ``draft_pipeline.rewrite_queue``'s list. ``requested`` is the
-    ids still awaiting a rewrite: the detail page's poll script reloads once its
-    own id drops out of that list (a rewrite landed, or the worker failed).
-    """
-    ids = [draft.id for draft in drafts if draft.rewrite_requested_at]
-    return {"enabled": enabled, "count": len(ids), "requested": ids}
-
-
-def rewriter_context(cfg: dict) -> dict:
-    """The brand context both rewriter APIs serve, so neither duplicates it.
-
-    What a rewriter needs to *write* rather than guess: the DNA, the voice menu,
-    plus what it must not repeat — the recent captions.
-    """
-    choices = pipeline.voice_choices(cfg)
-    return {
-        "dna": pipeline.dna_text(cfg),
-        "voices": {key: pipeline.voice_text(cfg, key) for key in choices},
-        "voice_choices": choices,
-        "default_voice": pipeline.default_voice(cfg),
-        "recent": [
-            {"id": draft.id, "source": draft.source, "caption": draft.caption}
-            for draft in pipeline.recent_captions(cfg)
-        ],
-    }
-
-
 def compose_edits(form) -> dict:
-    """The compose form's own fields, for the review actions that save-then-act.
-
-    The voice-locked rewrite submits the compose form (``form="publish-form"``),
-    so the Voice pick is saved with the request.
-    """
-    return {
-        name: str(form.get(name) or "") for name in ("caption", "hashtags", "voice") if name in form
-    }
+    """The compose form's own fields, for the review actions that save-then-act."""
+    return {name: str(form.get(name) or "") for name in ("caption", "hashtags") if name in form}
 
 
 def safe_local_path(value: str, default: str = "/") -> str:
@@ -439,14 +400,6 @@ def create_app(
     post_schedule = pipeline.post_schedule(cfg, default=shared_slots)
     post_times = list(dict.fromkeys(slot for slots in post_schedule.values() for slot in slots))
     private = bool(cfg.get("publish", {}).get("private", False))
-    # The rewriter runs on a host-side worker (scripts/rewrite_worker.py); this
-    # only gates the button that requests one, and the status the worker reports.
-    rewrite_enabled = bool(pipeline.rewrite_config(cfg).get("enabled"))
-    # Idea seeds (systems to draw *original* posts from) are a separate input
-    # from `sources[]`. The button needs the host-side worker to fulfil it, so it
-    # also requires the rewriter; the passive JSON API only needs ideas.enabled.
-    ideas_feature = pipeline.ideas_enabled(cfg)
-    ideas_on = ideas_feature and rewrite_enabled
     # The account reader for the enabled destinations (facebook today). None when
     # no enabled destination can read a feed, so the feed panels and the
     # page/token loops stay off rather than failing.
@@ -881,10 +834,6 @@ def create_app(
         """When the next post actually goes out, or '' when posting is disabled."""
         return str(_post_runtime().get("next_post") or "")
 
-    def _rewrite_runtime() -> dict:
-        """Pending rewriter-worker requests (draft ids) for /api/status."""
-        return rewrite_view(rewrite_enabled, pipeline.rewrite_queue(cfg))
-
     def _page(markup: str, status_code: int = 200) -> HTMLResponse:
         return HTMLResponse(markup, status_code=status_code, headers={"Cache-Control": "no-cache"})
 
@@ -907,7 +856,7 @@ def create_app(
 
     @app.get("/images/{name}")
     async def stored_image(name: str):
-        """A locally stored post image: a code-drawn diagram or a source cover copy.
+        """A locally stored post image: a drawn plate or a source cover copy.
 
         Static by design: rendering happens outside the request (the CLI writes
         into the bind-mounted images dir), so a new image never needs a rebuild.
@@ -915,7 +864,7 @@ def create_app(
         never escape the images directory.
         """
         safe = media.valid_name(name)
-        path = pipeline.diagram_dir(cfg) / name if safe else None
+        path = media.images_dir(cfg) / name if safe else None
         data = None
         if path is not None:
             try:
@@ -1054,7 +1003,6 @@ def create_app(
                 "post": _post_runtime(),
                 "token": _token_runtime(),
                 "linkedin": linkedin,
-                "rewrite": await asyncio.to_thread(_rewrite_runtime),
                 "lifecycle": {
                     "shutting_down": state["shutting_down"],
                     "inflight_publishes": state["inflight_publishes"],
@@ -1164,8 +1112,7 @@ def create_app(
 
     # -- post queue ordering + manual post (the Post queue tab) --------------
     # The queue is the order the poster drains, so it is set on `/queue` beside
-    # it. The order routes only ever reorder: they never approve, rewrite, or
-    # post — which draft goes next changes, never whether a slot fires. Each
+    # it. The order routes only ever reorder: they never approve or post — which draft goes next changes, never whether a slot fires. Each
     # row's Post buttons are the exception that sends: one platform per button
     # for that single draft, a human action like Post now on /review/{id}.
 
@@ -1226,8 +1173,7 @@ def create_app(
     async def queue_destinations(draft_id: str, request: Request):
         """Retarget one approved draft's destinations, without leaving the queue.
 
-        Ordering-only guardrails still hold: this never approves, rewrites, or
-        posts — it only changes *where* the draft will post. A destination with
+        Ordering-only guardrails still hold: this never approves or posts — it only changes *where* the draft will post. A destination with
         a public post cannot be dropped (a send cannot be undone); use
         /review/{id} for anything else.
         """
@@ -1270,7 +1216,7 @@ def create_app(
         from the queue. Like every manual send it works while the timed poster
         is paused (the pause only holds back the unattended scheduler), it is not
         gated by ``publish.interval_days`` and does not pace it, and it
-        never approves, rewrites, or reorders — it only sends this draft.
+        never approves or reorders — it only sends this draft.
         """
         form = await request.form()
         target = safe_local_path(str(form.get("next", "") or ""), default="/queue#post-queue")
@@ -1353,8 +1299,6 @@ def create_app(
                 page=page_info,
                 q=q,
                 sort=sort,
-                ideas_enabled=ideas_on,
-                ideas_request=await asyncio.to_thread(pipeline.load_ideas_request, cfg),
             )
         )
 
@@ -1363,16 +1307,11 @@ def create_app(
         def _load():
             draft = pipeline.get_draft(cfg, draft_id)
             if draft is None:
-                return None, [], "", ""
+                return None, []
             open_ids = [d.id for d in pipeline.list_drafts(cfg, pipeline.REVIEW_STATES)]
-            return (
-                draft,
-                open_ids,
-                pipeline.dna_text(cfg),
-                pipeline.voice_text(cfg, draft.voice),
-            )
+            return draft, open_ids
 
-        draft, open_ids, dna, voice_text = await asyncio.to_thread(_load)
+        draft, open_ids = await asyncio.to_thread(_load)
         if draft is None:
             return _page(render_message_html("Draft not found", f"No draft {draft_id!r}."), 404)
         next_id = None
@@ -1381,16 +1320,10 @@ def create_app(
         return _page(
             render_draft_html(
                 draft,
-                dna=dna,
                 message=message,
                 message_kind=kind,
                 private=private,
-                rewrite_enabled=rewrite_enabled,
                 image_generated=pipeline.image_is_generated(cfg, draft),
-                voices=pipeline.voice_choices(cfg),
-                default_voice=pipeline.default_voice(cfg),
-                voice_hints=pipeline.voice_hints(cfg),
-                voice_text=voice_text,
                 next_id=next_id,
                 scheduling=bool(post_times),
                 next_post=_next_post_label(),
@@ -1420,7 +1353,6 @@ def create_app(
                 draft_id,
                 caption=str(form.get("caption", "") or ""),
                 hashtags=None if hashtags is None else str(hashtags),
-                voice=(str(form["voice"]) if "voice" in form else None),
                 destinations=destinations,
             )
             if approve:
@@ -1506,7 +1438,6 @@ def create_app(
                 draft_id,
                 caption=str(form.get("caption", "") or ""),
                 hashtags=None if hashtags is None else str(hashtags),
-                voice=(str(form["voice"]) if "voice" in form else None),
                 destinations=destinations,
             )
         except ValueError as exc:
@@ -1543,35 +1474,6 @@ def create_app(
             return _page(render_message_html("Cannot reject", str(exc)), 400)
         return RedirectResponse("/review", status_code=303)
 
-    @app.post("/review/{draft_id}/diagram")
-    async def review_diagram(draft_id: str):
-        """Render the code-drawn diagram for one draft (never posts).
-
-        Synchronous and local: the SVG (+ PNG via the host Chromium when
-        available) renders in milliseconds, so the request does the work
-        and redirects back to the draft. Never touches the caption.
-        """
-        target = f"/review/{urllib.parse.quote(draft_id)}"
-        if state["shutting_down"]:
-            text, kind = "Shutting down — try again shortly.", "warning"
-        else:
-            try:
-                await asyncio.to_thread(pipeline.edit_draft, cfg, draft_id, image_style="diagram")
-                result = await asyncio.to_thread(
-                    pipeline.render_diagrams, cfg, draft_ids=[draft_id], overwrite=True
-                )
-                if result["rendered"]:
-                    text = "Diagram rendered — the draft now points at it."
-                    kind = "success"
-                else:
-                    text = "Nothing rendered for this draft."
-                    kind = "warning"
-            except ValueError as exc:
-                text, kind = str(exc), "error"
-        return RedirectResponse(
-            f"{target}?message={urllib.parse.quote(text)}&kind={kind}", status_code=303
-        )
-
     @app.post("/review/{draft_id}/restore-image")
     async def review_restore_image(draft_id: str):
         """Put the source post's own image back, replacing a diagram.
@@ -1594,107 +1496,6 @@ def create_app(
             f"{target}?message={urllib.parse.quote('Restored the source post’s own image.')}"
             "&kind=success",
             status_code=303,
-        )
-
-    @app.post("/review/{draft_id}/request-rewrite")
-    async def review_request_rewrite(draft_id: str):
-        """Mark a draft for the host-side rewriter worker. Never rewrites itself.
-
-        The worker (scripts/rewrite_worker.py) picks the request up from
-        GET /api/rewrite-queue and posts the rewrite back; only a human approves
-        or posts.
-        """
-        target = f"/review/{urllib.parse.quote(draft_id)}"
-        if state["shutting_down"]:
-            text, kind = "Shutting down — try again shortly.", "warning"
-        elif not rewrite_enabled:
-            text, kind = "The rewriter is disabled (rewrite.enabled).", "error"
-        else:
-            try:
-                await asyncio.to_thread(pipeline.request_rewrite, cfg, draft_id)
-                text = "Rewrite requested — the Command Code worker will pick it up."
-                kind = "success"
-            except ValueError as exc:
-                text, kind = str(exc), "error"
-        return RedirectResponse(
-            f"{target}?message={urllib.parse.quote(text)}&kind={kind}", status_code=303
-        )
-
-    @app.post("/review/{draft_id}/request-voice-rewrite")
-    async def review_request_voice_rewrite(draft_id: str, request: Request):
-        """Mark a draft for a rewrite *in the voice chosen on this page*.
-
-        The "Rewrite in this voice" action: the same full rewrite as
-        /request-rewrite, except the register is the operator's pick rather than the
-        agent's. It submits the compose form, so the Voice select is saved with the request — a field-less
-        button dropped the pick twice over, once here and once at the worker, which
-        then chose a register of its own. The prompt names the key and forbids
-        another, and ``receive_rewrite`` re-asserts it when the result lands. Like
-        every rewriter request this only marks the draft: it never rewrites, approves,
-        or posts.
-        """
-        target = f"/review/{urllib.parse.quote(draft_id)}"
-        if state["shutting_down"]:
-            text, kind = "Shutting down — try again shortly.", "warning"
-        elif not rewrite_enabled:
-            text, kind = "The rewriter is disabled (rewrite.enabled).", "error"
-        else:
-            form = await request.form()
-            edits = compose_edits(form)
-            try:
-                if edits:
-                    await asyncio.to_thread(pipeline.edit_draft, cfg, draft_id, **edits)
-                draft = await asyncio.to_thread(pipeline.request_voice_rewrite, cfg, draft_id)
-                text = (
-                    f"Rewrite requested in voice “{draft.voice}” — "
-                    "the Command Code worker will pick it up."
-                )
-                kind = "success"
-            except ValueError as exc:
-                text, kind = str(exc), "error"
-        return RedirectResponse(
-            f"{target}?message={urllib.parse.quote(text)}&kind={kind}", status_code=303
-        )
-
-    @app.post("/review/{draft_id}/cancel-rewrite")
-    async def review_cancel_rewrite(draft_id: str):
-        """Drop a pending rewriter request (never touches the caption)."""
-        target = f"/review/{urllib.parse.quote(draft_id)}"
-        try:
-            await asyncio.to_thread(pipeline.cancel_rewrite, cfg, draft_id)
-        except ValueError as exc:
-            return RedirectResponse(
-                f"{target}?message={urllib.parse.quote(str(exc))}&kind=error", status_code=303
-            )
-        return RedirectResponse(
-            f"{target}?message={urllib.parse.quote('Rewrite request cancelled.')}&kind=success",
-            status_code=303,
-        )
-
-    @app.post("/review/request-ideas")
-    async def review_request_ideas():
-        """Ask the host-side worker for a fresh batch of original post ideas.
-
-        The idea-seed counterpart of "Rewrite with Command Code": it only
-        *marks* that a batch was asked for. The worker picks it up from
-        ``GET /api/ideas``, proposes ideas grounded in the `ideas.topics_file`
-        systems, and POSTs them back to ``/api/ideas`` — each lands as an
-        `extracted` draft awaiting a rewrite. Never generates, rewrites, or posts.
-        """
-        target = "/review"
-        if state["shutting_down"]:
-            text, kind = "Shutting down — try again shortly.", "warning"
-        elif not ideas_on:
-            text, kind = "Idea generation is off (ideas.enabled / rewrite.enabled).", "error"
-        else:
-            try:
-                await asyncio.to_thread(pipeline.request_ideas, cfg)
-                text = "Ideas requested — the Command Code worker will propose a batch."
-                kind = "success"
-            except ValueError as exc:
-                text, kind = str(exc), "error"
-        return RedirectResponse(
-            f"{target}?message={urllib.parse.quote(text)}&kind={kind}", status_code=303
         )
 
     # -- operator pages: publish log + status ----------------------------
@@ -1731,160 +1532,5 @@ def create_app(
     @app.get("/drafts/{draft_id}")
     async def draft_redirect(draft_id: str):
         return RedirectResponse(f"/review/{urllib.parse.quote(draft_id)}", status_code=307)
-
-    # -- JSON API for the rewriter agent (Command Code) ------------------
-
-    @app.get("/api/drafts")
-    async def api_drafts(limit: int = API_DEFAULT_LIMIT, offset: int = 0):
-        """Open drafts + the DNA brief and the voice menu, for the rewriter.
-
-        Newest first, bounded so a caller can't pull an unbounded queue in one
-        request; ``total``/``has_more``/``next_offset`` let it page through.
-        ``voices`` carries the configured voice menu (``publish.voices``, files in
-        docs/voices/) as ``{key: brief+samples}``, with ``voice_choices`` (the
-        ordered keys) and ``default_voice``; ``voice`` still carries the default
-        voice's text for convenience. ``recent`` carries the most recently
-        written captions (``publish.recent_captions``) so the rewriter can avoid
-        repeating an opener/closer/vocabulary across posts (DNA §12).
-        """
-        limit = _clamp(limit, 1, API_MAX_LIMIT, API_DEFAULT_LIMIT)
-        offset = max(0, offset)
-        drafts = await asyncio.to_thread(pipeline.list_drafts, cfg, pipeline.OPEN_STATES)
-        context = await asyncio.to_thread(rewriter_context, cfg)
-        total = len(drafts)
-        window = drafts[offset : offset + limit]
-        consumed = offset + len(window)
-        return JSONResponse(
-            {
-                **context,
-                "voice": context["voices"].get(context["default_voice"], ""),
-                "drafts": [d.to_dict() for d in window],
-                "total": total,
-                "offset": offset,
-                "limit": limit,
-                "returned": len(window),
-                "has_more": consumed < total,
-                "next_offset": consumed if consumed < total else None,
-            }
-        )
-
-    @app.post("/api/drafts/{draft_id}/rewrite")
-    async def api_rewrite(draft_id: str, request: Request):
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        if not isinstance(body, dict):
-            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
-        try:
-            draft = await asyncio.to_thread(pipeline.receive_rewrite, cfg, draft_id, body)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return JSONResponse({"draft": draft.to_dict()})
-
-    @app.get("/api/rewrite-queue")
-    async def api_rewrite_queue():
-        """The drafts a human asked to rewrite, plus the brand context a worker needs.
-
-        Polled by scripts/rewrite_worker.py: the draft's own fields, the DNA brief,
-        the voice menu, the masthead choices and the recent captions, so it
-        repeats neither a hook nor a subject. The worker runs the Command Code
-        CLI per draft and POSTs the result back to /api/drafts/{id}/rewrite;
-        a failure goes to /api/drafts/{id}/rewrite-error.
-        """
-
-        drafts = await asyncio.to_thread(pipeline.rewrite_queue, cfg)
-        context = await asyncio.to_thread(rewriter_context, cfg)
-        return JSONResponse(
-            {
-                "generated_at": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
-                "count": len(drafts),
-                **context,
-                "mastheads": pipeline.masthead_config(cfg),
-                "drafts": [draft.to_dict() for draft in drafts],
-            }
-        )
-
-    # -- JSON API for idea seeds (original posts) ------------------------
-
-    @app.get("/api/ideas")
-    async def api_ideas():
-        """The idea brief for the rewriter agent, plus whether a batch was asked for.
-
-        Polled by scripts/rewrite_worker.py: once a human asks for ideas
-        ("Generate ideas" on /review, or `blog ideas --request`), ``requested``
-        is true and the worker proposes a batch grounded in ``topics`` and POSTs
-        it to /api/ideas. A manual agent may read the same brief at any time.
-        """
-        brief = await asyncio.to_thread(pipeline.idea_brief, cfg)
-        return JSONResponse(
-            {
-                "generated_at": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
-                **brief,
-            }
-        )
-
-    @app.post("/api/ideas")
-    async def api_queue_ideas(request: Request):
-        """Queue agent-proposed original-post ideas as `extracted` drafts.
-
-        Body: ``{"ideas": [{"title", "topic", "excerpt"}, …]}`` (a single idea
-        object is accepted too). Each idea becomes a draft with
-        ``source: ideas.source_name`` and no URL, then flows through the normal
-        rewrite + human approval like any other. Duplicates are skipped, and any
-        pending request is closed. Never rewrites, approves, or posts.
-        """
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        if isinstance(body, dict) and isinstance(body.get("ideas"), list):
-            ideas = body["ideas"]
-        elif isinstance(body, dict) and body.get("title"):
-            ideas = [body]
-        else:
-            return JSONResponse(
-                {"error": 'body must be {"ideas": [...]} or a single idea object'},
-                status_code=400,
-            )
-        try:
-            result = await asyncio.to_thread(pipeline.queue_ideas, cfg, ideas)
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        await asyncio.to_thread(pipeline.clear_ideas_request, cfg)
-        return JSONResponse(result)
-
-    @app.post("/api/ideas/error")
-    async def api_ideas_error(request: Request):
-        """Record the worker's idea-generation failure and close the request."""
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        error = str((body or {}).get("error", "") or "") if isinstance(body, dict) else ""
-        closed = await asyncio.to_thread(pipeline.clear_ideas_request, cfg, error=error)
-        return JSONResponse({"ok": True, "state": closed})
-
-    @app.post("/api/drafts/{draft_id}/rewrite-error")
-    async def api_rewrite_error(draft_id: str, request: Request):
-        """Record the rewriter worker's failure and close the request.
-
-        Clearing the request keeps it from waiting forever (the operator can ask
-        again); the error is stored on the draft and shown on /review/{id}. Never
-        approves, rewrites, or posts.
-        """
-        try:
-            body = await request.json()
-        except Exception:
-            return JSONResponse({"error": "invalid JSON body"}, status_code=400)
-        if not isinstance(body, dict):
-            return JSONResponse({"error": "body must be a JSON object"}, status_code=400)
-        try:
-            draft = await asyncio.to_thread(
-                pipeline.record_rewrite_error, cfg, draft_id, str(body.get("error", "") or "")
-            )
-        except ValueError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=400)
-        return JSONResponse({"draft": draft.to_dict()})
 
     return app

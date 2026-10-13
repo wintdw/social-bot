@@ -61,25 +61,6 @@ class TestRenderDraftsHtml:
         out = render_drafts_html([], generated_at=GENERATED)
         assert "Private mode" not in out
 
-    def test_generate_ideas_button_when_enabled(self):
-        out = render_drafts_html([], generated_at=GENERATED, ideas_enabled=True)
-        assert 'action="/review/request-ideas"' in out
-        assert "Generate ideas" in out
-
-    def test_no_generate_ideas_button_by_default(self):
-        out = render_drafts_html([], generated_at=GENERATED)
-        assert "/review/request-ideas" not in out
-
-    def test_pending_ideas_show_a_status_pill_not_the_button(self):
-        out = render_drafts_html(
-            [],
-            generated_at=GENERATED,
-            ideas_enabled=True,
-            ideas_request={"requested_at": "2026-09-10T10:00:00+07:00"},
-        )
-        assert "ideas requested" in out
-        assert "/review/request-ideas" not in out
-
 
 class TestReviewFilters:
     def test_card_shows_source_and_dates(self):
@@ -282,94 +263,21 @@ class TestRenderDraftHtml:
         draft = Draft(
             id="p", title="T", url="https://x/blog/p", caption="Body <x>", state="ai_draft"
         )
-        out = render_draft_html(draft, dna="Atento voice", generated_at=GENERATED)
+        out = render_draft_html(draft, generated_at=GENERATED)
         assert 'id="caption"' in out and 'name="caption"' in out
         assert 'lang="vi"' in out
         assert ">Body &lt;x&gt;</textarea>" in out
         assert "/review/p/publish" in out
         assert "/review/p/reject" in out
-        assert "Atento voice" in out
-
-    def test_voice_menu_renders_with_the_chosen_voice(self):
-        draft = Draft(id="p", title="T", caption="Body", state="ai_draft", voice="funny")
-        out = render_draft_html(
-            draft,
-            voices=["technical", "funny"],
-            default_voice="technical",
-            voice_hints={"technical": "calm engineer", "funny": "deadpan satirist"},
-            voice_text="# funny — deadpan satirist",
-        )
-        assert 'id="voice"' in out and 'name="voice"' in out
-        assert '<option value="funny" selected' in out
-        assert "deadpan satirist" in out  # the chosen voice's hint under the select
-        assert "Voice · funny" in out  # the rail block's summary
-
-    def test_voice_menu_absent_leaves_the_select_out(self):
-        out = render_draft_html(Draft(id="p", title="T", state="ai_draft"))
-        assert 'name="voice"' not in out
-
-    def test_voice_menu_marks_the_applied_voice_current(self):
-        # The applied register is the default selection *and* is labelled, so it
-        # stays identifiable after a different one is picked.
-        draft = Draft(id="p", title="T", caption="Body", state="ai_draft", voice="funny")
-        out = render_draft_html(
-            draft,
-            voices=["technical", "funny"],
-            default_voice="technical",
-            voice_hints={"technical": "calm engineer", "funny": "deadpan satirist"},
-        )
-        assert (
-            '<option value="funny" selected data-hint="deadpan satirist">funny (current)</option>'
-            in out
-        )
-        assert '<option value="technical" data-hint="calm engineer">technical</option>' in out
-
-    def test_voice_menu_selects_the_default_without_claiming_it_is_current(self):
-        # Not rewritten yet: the default is the pending choice, but no register
-        # has actually produced a caption, so none is labelled current.
-        out = render_draft_html(
-            Draft(id="p", title="T", state="extracted"),
-            voices=["technical", "funny"],
-            default_voice="technical",
-            voice_hints={"technical": "calm engineer"},
-        )
-        assert (
-            '<option value="technical" selected data-hint="calm engineer">technical</option>' in out
-        )
-        assert "(current)" not in out
-
-    def test_voice_hint_shows_the_selected_voices_guidance(self):
-        draft = Draft(id="p", title="T", caption="Body", state="ai_draft", voice="funny")
-        out = render_draft_html(
-            draft,
-            voices=["technical", "funny"],
-            default_voice="technical",
-            voice_hints={"funny": "deadpan satirist"},
-        )
-        assert 'data-hint="deadpan satirist"' in out
-        assert '<div class="field-hint" id="voice_hint">deadpan satirist</div>' in out
-
-    def test_no_image_prompt_field(self):
-        # Images are the source cover or a code-drawn diagram: nothing to prompt.
-        draft = Draft(id="p", title="T", image_prompt="a lone tree", state="ai_draft")
-        out = render_draft_html(draft)
-        assert 'name="image_prompt"' not in out
 
     def test_image_alt_is_the_title(self):
-        draft = Draft(id="p", title="T", image="https://img/x.jpg", image_prompt="a lone tree")
+        draft = Draft(id="p", title="T", image="https://img/x.jpg")
         out = render_draft_html(draft)
         assert 'alt="T"' in out
 
     def test_alt_falls_back_to_the_title_without_a_prompt(self):
         out = render_draft_html(Draft(id="p", title="Title", image="https://img/x.jpg"))
         assert 'alt="Title"' in out
-
-    def test_no_image_style_field(self):
-        # No AI treatments anymore: the only code-drawn look is the diagram,
-        # rendered by its own button rather than picked from a menu.
-        out = render_draft_html(Draft(id="p", title="T", image_style="diagram"))
-        assert 'name="image_style"' not in out
-        assert 'id="image_style"' not in out
 
     def test_detail_titles_the_hook_and_keeps_the_source_title_in_the_rail(self):
         draft = Draft(
@@ -502,19 +410,6 @@ class TestRenderDraftHtml:
         out = render_draft_html(draft)
         assert 'onerror="alert(1)"' not in out
 
-    def test_diagram_button_renders_the_code_drawn_diagram(self):
-        out = render_draft_html(Draft(id="p", title="T"))
-        # Its own form: rendering never saves or posts the caption edits.
-        assert '<form id="diagram-form" method="post" action="/review/p/diagram">' in out
-        assert 'name="diagram"' in out
-        assert "Render diagram" in out
-
-    def test_diagram_button_is_always_offered(self):
-        # Even with an image present: re-rendering replaces the source cover
-        # (which Restore puts back), so the button never hides.
-        out = render_draft_html(Draft(id="p", title="T", image="https://img/x.jpg"))
-        assert "Render diagram" in out
-
     def test_restore_button_for_a_generated_image(self):
         out = render_draft_html(
             Draft(id="p", title="T", image="https://gen/x.jpg"), image_generated=True
@@ -525,12 +420,12 @@ class TestRenderDraftHtml:
         )
         assert "Restore source image" in out
 
-    def test_restore_button_stands_beside_the_diagram_button(self):
+    def test_restore_button_is_offered_for_a_diagram(self):
         out = render_draft_html(
             Draft(id="p", title="T", image="https://gen/x.jpg"), image_generated=True
         )
-        assert "Render diagram" in out
         assert "Restore source image" in out
+        assert "Render diagram" not in out
 
     def test_no_restore_button_without_a_generated_image(self):
         out = render_draft_html(Draft(id="p", title="T", image="https://img/x.jpg"))
@@ -541,11 +436,11 @@ class TestRenderDraftHtml:
         out = render_draft_html(
             Draft(id="p", title="T", image="https://gen/x.jpg"), image_generated=True
         )
-        assert "A code-drawn diagram, not the source post’s own" in out
+        assert "A drawn plate, not the source post’s own" in out
 
     def test_no_generated_flag_for_a_source_image(self):
         out = render_draft_html(Draft(id="p", title="T", image="https://img/x.jpg"))
-        assert "A code-drawn diagram, not the source post’s own" not in out
+        assert "A drawn plate, not the source post’s own" not in out
 
     def test_no_ai_image_endpoints_remain(self):
         out = render_draft_html(Draft(id="p", title="T"))
@@ -557,7 +452,7 @@ class TestRenderDraftHtml:
     def test_image_note_when_not_started(self):
         out = render_draft_html(Draft(id="p", title="T"))
         assert "No image yet" in out
-        assert "Render diagram" in out
+        assert "Render diagram" not in out
 
     def test_no_image_note_when_image_ready(self):
         out = render_draft_html(Draft(id="p", title="T", image="https://img/x.jpg"))
@@ -679,11 +574,8 @@ class TestComposeToolGroups:
         )
         return render_draft_html(
             draft,
-            rewrite_enabled=True,
             image_generated=True,
             scheduling=True,
-            voices=["technical", "funny"],
-            default_voice="technical",
             **kwargs,
         )
 
@@ -698,40 +590,20 @@ class TestComposeToolGroups:
         assert ">Save</button>" in bar
         assert "Reject" in bar
         # None of the compose-local tools belong down here any more.
-        assert "/review/p/diagram" not in bar
         assert "/review/p/restore-image" not in bar
-        assert "/review/p/request-rewrite" not in bar
-        assert "/review/p/request-voice-rewrite" not in bar
 
     def test_image_tools_are_grouped_in_the_composer(self):
         out = self._out()
-        group = out[
-            out.index('aria-label="Image tools"') : out.index('aria-label="Rewrite caption"')
-        ]
+        group = out[out.index('aria-label="Image tools"') : out.index('<div class="action-bar">')]
         assert '<span class="toolgroup-label">Image</span>' in group
-        assert 'action="/review/p/diagram"' in group
-        assert "Render diagram" in group
         assert 'action="/review/p/restore-image"' in group
         # In the Compose panel, above the bar.
         assert out.index('aria-label="Image tools"') < out.index('<div class="action-bar">')
 
-    def test_the_rewrite_tools_are_grouped_in_the_composer(self):
-        out = self._out()
-        group = out[
-            out.index('aria-label="Rewrite caption"') : out.index('<div class="action-bar">')
-        ]
-        assert '<span class="toolgroup-label">Rewrite caption</span>' in group
-        assert 'action="/review/p/request-rewrite"' in group
-        assert "Rewrite with Command Code" in group
-        assert 'formaction="/review/p/request-voice-rewrite"' in group
-        assert "Rewrite in this voice" in group
-
-    def test_no_tool_groups_without_any_tool(self):
-        # The diagram button is always offered, so the Image group is always
-        # there; only the rewrite group disappears without a rewriter.
+    def test_no_image_tools_without_a_diagram_to_restore(self):
+        # With the diagram button gone, the Image group only exists to restore one.
         out = render_draft_html(Draft(id="p", title="T", caption="Hi", state="ai_draft"))
-        assert 'aria-label="Rewrite caption"' not in out
-        assert 'aria-label="Image tools"' in out
+        assert 'aria-label="Image tools"' not in out
 
 
 class TestDraftLint:
@@ -792,188 +664,23 @@ class TestNoQueueControlsOnReview:
         assert "/review/a/move" not in out
 
 
-class TestRewriteButton:
-    """The rewriter runs on a host worker; the button only marks the draft."""
-
-    def test_offers_the_button_for_an_open_draft(self):
-        out = render_draft_html(
-            Draft(id="p", title="T", state="extracted"),
-            rewrite_enabled=True,
-            generated_at=GENERATED,
-        )
-        assert 'action="/review/p/request-rewrite"' in out
-        assert "Rewrite with Command Code" in out
-
-    def test_hidden_when_the_rewriter_is_disabled(self):
-        out = render_draft_html(Draft(id="p", title="T", state="extracted"), generated_at=GENERATED)
-        assert "Rewrite with Command Code" not in out
-        assert "request-rewrite" not in out
-
-    def test_a_pending_request_shows_a_notice_and_cancel(self):
-        draft = Draft(
-            id="p",
-            title="T",
-            state="extracted",
-            rewrite_requested_at="2026-09-10T08:00:00+00:00",
-        )
-        out = render_draft_html(draft, rewrite_enabled=True, generated_at=GENERATED)
-        assert 'id="rewrite-job"' in out
-        assert 'action="/review/p/cancel-rewrite"' in out
-        assert "Rewrite with Command Code" not in out
-
-    def test_a_failure_is_shown(self):
-        draft = Draft(id="p", state="ai_draft", caption="c", rewrite_error="command not found")
-        out = render_draft_html(draft, rewrite_enabled=True, generated_at=GENERATED)
-        assert "Rewriter failed: command not found" in out
-
-    def test_the_error_is_escaped(self):
-        draft = Draft(id="p", state="ai_draft", caption="c", rewrite_error="<b>boom</b>")
-        out = render_draft_html(draft, rewrite_enabled=True, generated_at=GENERATED)
-        assert "&lt;b&gt;boom&lt;/b&gt;" in out
-
-    def test_no_button_for_an_approved_draft(self, tmp_path=None):
-        out = render_draft_html(
-            Draft(id="p", state="approved", caption="c"),
-            rewrite_enabled=True,
-            generated_at=GENERATED,
-        )
-        assert "Rewrite with Command Code" not in out
-
-
-class TestVoiceRewriteButton:
-    """The voice-locked rewrite: "Rewrite in this voice", beside the auto-pick one.
-
-    Rewrite with Command Code is deliberately its own field-less form; this one
-    submits the compose form, because the Voice select *is* the request — a
-    field-less button dropped the pick twice over, never saving it here and leaving
-    the worker to choose a register of its own.
-    """
-
-    def _out(self, draft=None, **kwargs):
-        return render_draft_html(
-            draft or Draft(id="p", title="T", state="extracted", voice="funny"),
-            rewrite_enabled=True,
-            voices=["technical", "funny"],
-            default_voice="technical",
-            generated_at=GENERATED,
-            **kwargs,
-        )
-
-    def test_offers_it_beside_rewrite_with_command_code(self):
-        out = self._out()
-        assert 'formaction="/review/p/request-voice-rewrite"' in out
-        assert "Rewrite in this voice" in out
-        assert "Rewrite with Command Code" in out  # the auto-pick twin stays
-
-    def test_it_carries_the_compose_form_holding_the_voice_picker(self):
-        out = self._out()
-        target = out.index("/review/p/request-voice-rewrite")
-        button = out[out.rindex("<button", 0, target) : out.index("</button>", target)]
-        assert 'form="publish-form"' in button
-        start = out.index('id="publish-form"')
-        assert 'name="voice"' in out[start : out.index("</form>", start)]
-
-    def test_hidden_when_the_rewriter_is_disabled(self):
-        out = render_draft_html(
-            Draft(id="p", title="T", state="extracted"),
-            voices=["technical", "funny"],
-            generated_at=GENERATED,
-        )
-        assert "request-voice-rewrite" not in out
-
-    def test_hidden_without_a_voice_menu(self):
-        # No registers to choose from: there is nothing to lock.
-        out = render_draft_html(
-            Draft(id="p", title="T", state="extracted"),
-            rewrite_enabled=True,
-            generated_at=GENERATED,
-        )
-        assert "request-voice-rewrite" not in out
-
-    def test_no_button_for_an_approved_draft(self):
-        out = self._out(Draft(id="p", state="approved", caption="c", voice="funny"))
-        assert "request-voice-rewrite" not in out
-
-    def test_a_pending_caption_rewrite_gives_way_to_cancel(self):
-        draft = Draft(
-            id="p",
-            state="ai_draft",
-            caption="c",
-            voice="funny",
-            rewrite_requested_at="2026-09-10T08:00:00+00:00",
-            rewrite_mode="caption-voice",
-        )
-        out = self._out(draft)
-        assert "Cancel rewrite" in out
-        assert "request-voice-rewrite" not in out
-
-    def test_the_pending_notice_names_the_voice(self):
-        draft = Draft(
-            id="p",
-            state="ai_draft",
-            caption="c",
-            voice="funny",
-            rewrite_requested_at="2026-09-10T08:00:00+00:00",
-            rewrite_mode="caption-voice",
-        )
-        out = self._out(draft)
-        assert 'id="rewrite-job"' in out  # the poll script reloads on this id
-        assert "Rewriter requested in voice “funny”" in out
-        assert "New image prompt requested" not in out
-
-    def test_the_generic_hint_only_names_the_button_that_is_there(self):
-        # The fallback hint (no per-voice paragraph configured) points the operator
-        # at the control that acts on the pick. An approved draft has no such
-        # control, and a hint naming a missing button is worse than a plain one.
-        offered = self._out(Draft(id="p", title="T", state="ai_draft", voice="funny"))
-        assert "then “Rewrite in this voice”" in offered
-        approved = self._out(Draft(id="p", state="approved", caption="c", voice="funny"))
-        assert "then “Rewrite in this voice”" not in approved
-        assert 'id="voice_hint"' in approved  # the select itself is still there
-
-    def test_the_notice_escapes_a_hand_edited_voice(self):
-        draft = Draft(
-            id="p",
-            state="ai_draft",
-            caption="c",
-            voice="<b>funny</b>",
-            rewrite_requested_at="2026-09-10T08:00:00+00:00",
-            rewrite_mode="caption-voice",
-        )
-        out = self._out(draft)
-        assert "&lt;b&gt;funny&lt;/b&gt;" in out
-
-
 class TestPostConfirmation:
     """The "Post this publicly?" prompt follows where a submit *goes*.
 
-    The voice rewrite submits to its own endpoint (formaction) and Save does
-    too, so reading a submit as a post by the button's name meant every nameless
-    button asked for the posting
+    Save submits to its own endpoint (formaction), so reading a submit as a post
+    by the button's name would make every nameless button ask for the posting
     confirmation. The gate is the submit target against the form's own action.
     """
 
     def test_only_the_forms_own_action_is_confirmed(self):
         out = render_draft_html(
             Draft(id="p", state="ai_draft", caption="c"),
-            rewrite_enabled=True,
-            voices=["technical", "funny"],
-            default_voice="technical",
             generated_at=GENERATED,
         )
         script = out[out.index("<script>") : out.index("</script>")]
         assert "target === form.getAttribute('action')" in script
-        # The tools that must not be read as a post each post elsewhere: the
-        # voice rewrite overrides the compose form's action, the diagram and
-        # the rewrite use forms of their own.
-        assert 'formaction="/review/p/request-voice-rewrite"' in out
-        assert 'action="/review/p/diagram"' in out
-        assert 'action="/review/p/request-rewrite"' in out
+        # Save overrides the compose form's action, so it is not read as a post.
         assert 'formaction="/review/p/save"' in out
-
-
-class TestDestinationPickerStatus:
-    """The picker names each platform's send state, not just the tick."""
 
     def test_pending_and_posted_destinations_are_labelled(self):
         draft = Draft(

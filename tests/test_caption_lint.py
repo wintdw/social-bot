@@ -90,7 +90,7 @@ class TestCrossPostTells:
         assert "repeated-closer" not in _codes(caption, recent)
 
     def test_the_source_credit_is_not_a_closer(self):
-        # The credit line (DNA §7.3) repeats verbatim for a frequent source; it is
+        # The credit line repeats verbatim for a frequent source; it is
         # boilerplate, not the post's own closing move.
         credit = '\n\nNguồn: Sean Goedecke — "Some post".'
         recent = ["Mở bài một.\n\nChuyện con số thì để sau." + credit]

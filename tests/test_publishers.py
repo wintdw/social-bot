@@ -63,7 +63,8 @@ class TestFacebookPublisher:
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
         monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft(image="https://img/x.jpg")
-        draft.apply_rewrite(caption="Caption")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
         result = FacebookPublisher(_cfg()).publish(draft)
         assert fake.photo == ("123", "Caption", b"IMGDATA", "x.jpg", "image/jpeg", True)
         assert result.destination == "facebook"
@@ -76,7 +77,8 @@ class TestFacebookPublisher:
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
         monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft()
-        draft.apply_rewrite(caption="Caption")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
         FacebookPublisher(_cfg()).publish(draft)
         assert fake.status == ("123", "Caption", "https://atento.vn/blog/p", True)
 
@@ -85,7 +87,9 @@ class TestFacebookPublisher:
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
         monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft(image="https://img/x.jpg")
-        draft.apply_rewrite(caption="Caption", hashtags=["#a", "#b"])
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        draft.hashtags = ["#a", "#b"]
         FacebookPublisher(_cfg()).publish(draft)
         assert fake.photo == ("123", "Caption\n\n#a #b", b"IMGDATA", "x.jpg", "image/jpeg", True)
 
@@ -96,7 +100,8 @@ class TestFacebookPublisher:
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
         monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft(image="https://img/x.jpg")
-        draft.apply_rewrite(caption="Caption")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
         result = FacebookPublisher(cfg).publish(draft)
         assert fake.photo == ("123", "Caption", b"IMGDATA", "x.jpg", "image/jpeg", False)
         assert result.private is True
@@ -106,7 +111,8 @@ class TestFacebookPublisher:
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
         monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft(image="https://img/x.jpg")
-        draft.apply_rewrite(caption="Caption")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
         FacebookPublisher(_cfg()).publish(draft)
         assert fake.comment == ("123_9", "https://atento.vn/blog/p")
 
@@ -121,7 +127,8 @@ class TestFacebookPublisher:
             lambda cfg, url, **kw: (_ for _ in ()).throw(media.MediaError("gone")),
         )
         draft = _draft(image="https://img/x.jpg")
-        draft.apply_rewrite(caption="Caption")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
         with pytest.raises(PublisherError):
             FacebookPublisher(_cfg()).publish(draft)
 
@@ -132,7 +139,8 @@ class TestFacebookPublisher:
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
         monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft()
-        draft.apply_rewrite(caption="Caption")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
         FacebookPublisher(cfg).publish(draft)
         assert fake.status == ("123", "Caption", "https://atento.vn/blog/p", False)
 
@@ -153,7 +161,8 @@ class TestFacebookPublisher:
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
         monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft()
-        draft.apply_rewrite(caption="Caption")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
         FacebookPublisher(_cfg()).publish(draft)
         assert fake.comment == ("123_8", "https://atento.vn/blog/p")
 
@@ -162,7 +171,8 @@ class TestFacebookPublisher:
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
         monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft(url="")
-        draft.apply_rewrite(caption="Caption")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
         FacebookPublisher(_cfg()).publish(draft)
         assert fake.comment is None
 
@@ -178,7 +188,8 @@ class TestFacebookPublisher:
         monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
         monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
         draft = _draft()
-        draft.apply_rewrite(caption="Caption")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
         result = FacebookPublisher(_cfg()).publish(draft)
         assert result.post_id == "123_8"
 
@@ -227,7 +238,9 @@ class TestLinkedInPublisher:
 
         monkeypatch.setattr(li_mod.urllib.request, "urlopen", fake_urlopen)
         draft = _draft()
-        draft.apply_rewrite(caption="Hello", hashtags=["#a"])
+        draft.caption = "Hello"
+        draft.state = "ai_draft"
+        draft.hashtags = ["#a"]
         result = LinkedInPublisher(_cfg()).publish(draft)
         assert captured["url"] == "http://host.docker.internal:8082/post"
         assert captured["body"] == {"text": "Hello\n\n#a", "visibility": "PUBLIC"}
@@ -247,7 +260,8 @@ class TestLinkedInPublisher:
 
         monkeypatch.setattr(li_mod.urllib.request, "urlopen", fake_urlopen)
         draft = _draft()
-        draft.apply_rewrite(caption="Hi")
+        draft.caption = "Hi"
+        draft.state = "ai_draft"
         with pytest.raises(PublisherError):
             LinkedInPublisher(_cfg()).publish(draft)
 
@@ -268,7 +282,8 @@ class TestLinkedInPublisher:
             li_mod.urllib.request, "urlopen", lambda request, timeout=None: SlowResponse()
         )
         draft = _draft()
-        draft.apply_rewrite(caption="Hi")
+        draft.caption = "Hi"
+        draft.state = "ai_draft"
         with pytest.raises(PublisherError, match="did not respond"):
             LinkedInPublisher(_cfg()).publish(draft)
 
@@ -293,7 +308,8 @@ class TestLinkedInPublisher:
 
         monkeypatch.setattr(li_mod.urllib.request, "urlopen", fake_urlopen)
         draft = _draft(image="https://img/x.jpg")
-        draft.apply_rewrite(caption="Hello")
+        draft.caption = "Hello"
+        draft.state = "ai_draft"
         result = LinkedInPublisher(_cfg()).publish(draft)
         assert captured["body"]["text"] == "Hello"
         assert captured["body"]["image_content_type"] == "image/jpeg"
@@ -321,7 +337,8 @@ class TestLinkedInPublisher:
 
         monkeypatch.setattr(li_mod.urllib.request, "urlopen", fake_urlopen)
         draft = _draft()
-        draft.apply_rewrite(caption="Hello")
+        draft.caption = "Hello"
+        draft.state = "ai_draft"
         LinkedInPublisher(_cfg()).publish(draft)
         assert captured["body"] == {"text": "Hello", "visibility": "PUBLIC"}
 
@@ -355,7 +372,8 @@ class TestLinkedInPublisher:
             lambda cfg, url, **kw: (_ for _ in ()).throw(media.MediaError("gone")),
         )
         draft = _draft(image="https://img/x.jpg")
-        draft.apply_rewrite(caption="Hello")
+        draft.caption = "Hello"
+        draft.state = "ai_draft"
         with pytest.raises(PublisherError):
             LinkedInPublisher(_cfg()).publish(draft)
 

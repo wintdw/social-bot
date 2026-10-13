@@ -37,9 +37,9 @@ feed:
 
 # --- Content pipeline: source feeds -> drafts -> human-approved posts ---------
 # `social-bot blog scan` (or the `serve` scan schedule) fetches each source and
-# queues unseen items as drafts. An external rewriter (Command Code, applying your
-# Atento DNA) fills in the caption; a human approves on the /review page, which
-# is the only thing that publishes. Nothing here posts on a timer.
+# queues unseen items as drafts. You write each caption in Claude and paste it
+# on /review/{id}; a human approves there, which is the
+# only thing that publishes. Nothing here posts on a timer.
 
 sources:
   # One entry per feed to watch. type: sitemap | rss | index.
@@ -91,35 +91,18 @@ publish:
   # safe way to test the pipeline end to end. Set it back to false to go public.
   private: false
   # Series masthead on line 1 of every caption — the recognition cue a new
-  # reader learns. The rewriter picks one of `choices` per post by content
-  # (DNA §4.5): knowledge worth learning -> Học, merely informational -> Đọc
-  # báo, a one-idea nugget -> Mỗi ngày. `default` is only the fallback the
-  # pipeline prepends when the rewriter omits a label. Clear `choices` to
-  # disable the masthead.
+  # reader learns. You pick one of `choices` per post by content:
+  # knowledge worth learning -> Học, merely informational -> Đọc báo, a one-idea
+  # nugget -> Mỗi ngày. `default` is what `blog masthead` backfills onto captions
+  # that have none. Clear `choices` to disable the masthead.
   mastheads:
     choices:
       - "[Học cùng Atento]"            # kiến thức đáng học (khái niệm/kỹ năng/tư duy)
       - "[Đọc báo cùng Atento]"        # chỉ để biết tin (tin tức/thông báo/tổng hợp)
       - "[Mỗi ngày 1 kiến thức mới]"   # một mẩu kiến thức ngắn, một ý
     default: "[Đọc báo cùng Atento]"
-  dna_file: docs/atento-dna.md  # Atento brand-voice brief; surfaced via GET /api/drafts
-  # One file per voice under docs/voices/ (key -> path):
-  # the rewriter picks a key per post (by content and tone) and returns it as
-  # `voice`; the file's brief + samples are delivered in GET /api/drafts `voices`.
-  # The DNA above still owns the structure (masthead, formats, hashtags, CTA,
-  # output contract); a voice refines how one register sounds. `default_voice`
-  # is the fallback when the rewriter omits one; empty `voices` disables it.
-  voices:
-    technical: docs/voices/technical.md        # giọng Dũng — System Design, foundation
-    essay: docs/voices/essay.md                # giọng Đạt — essay / mindset
-    announcement: docs/voices/announcement.md  # khai giảng, seminar, cộng đồng
-    funny: docs/voices/funny.md                # trào phúng / hài (giọng VOZ)
-    natural: docs/voices/natural.md              # nói thường, như kể cho bạn nghe (bài test audience)
-  default_voice: technical
-  # How many recently-written captions to give the rewriter with the open drafts
-  # (GET /api/drafts `recent`) so it doesn't reopen the same way twice — and the
-  # same set the pipeline lints a new caption against (the tells shown on
-  # /review/{id}). 0 turns both off.
+  # How many recently-written captions the caption lint compares a new one
+  # against (the repeated-hook/closer tells shown on /review/{id}). 0 turns it off.
   recent_captions: 12
   dir: data/publish           # publish audit log (/publish)
   log_name: published.jsonl   # append-only publish audit
@@ -139,85 +122,13 @@ blog:
 
 # --- Idea seeds: original Atento posts (not reposts) --------------------------
 # `sources[]` above are feeds to *repost*. `ideas` is a different input: a list
-# of systems/architectures the rewriter agent turns into *original* Atento posts
-# grounded in each system's own documentation — nothing is fetched or reposted.
-# The seeds live in `topics_file` (one system per line, optional "| <docs url>");
-# the agent proposes specific ideas, POSTs them to /api/ideas, and each lands as
-# an `extracted` draft with `source: atento-original` (no URL), then flows
-# through the normal rewrite + human approval like any other draft. Request a
-# batch from /review's "Generate ideas" button (fulfilled by the host-side
-# scripts/rewrite_worker.py) or `social-bot blog ideas --request`.
+# of systems/architectures you write *original* Atento posts about, grounded in
+# each system's own documentation — nothing is fetched or reposted. The seeds
+# live in `topics_file` (one system per line, optional "| <docs url>"). Write an
+# idea in Claude, then queue it with `social-bot blog add-idea "<title>"`: it
+# lands as an `extracted` draft with `source: atento-original` (no URL), and goes
+# through the normal caption + human approval like any other draft.
 ideas:
-  enabled: true
   topics_file: data/ideas/topics.md   # edit live; one system/theme per line
-  source_name: atento-original        # the `source` on generated drafts
-  dir: data/ideas                     # dedupe ledger + request state
-  per_run: 3                          # ideas one agent run should propose
-
-# --- Rewriter worker ----------------------------------------------------------
-# When enabled, /review/{id} offers a "Rewrite with Command Code" button that
-# marks the draft. A host-side worker (scripts/rewrite_worker.py) polls
-# GET /api/rewrite-queue, runs the Command Code CLI headlessly for each request
-# (`commandcode -p`), and posts the result back to /api/drafts/{id}/rewrite —
-# which clears the request. The bot never runs the agent itself: Command Code and
-# its auth stay on the host (the container has no Node). Run the worker beside
-# the service, e.g. `python scripts/rewrite_worker.py`.
-rewrite:
-  enabled: true               # show the button; false hides it
-  command: commandcode        # the CLI to run (alias: `cmd`)
-  model: ""                   # `-m` value; "" uses the CLI's configured model
-  max_turns: 40               # `--max-turns` cap for one rewrite
-  timeout_seconds: 600.0      # kill a run that hangs
-  poll_seconds: 15.0          # how often the worker asks for new requests
-  api_base: http://127.0.0.1:8083  # where the worker reaches this app
-
-# --- The operator's own voice (src/social_bot/voice.py) -----------------------
-# On top of the DNA (which owns structure) and the voice menu (which owns the
-# register), the rewriter can be handed Dũng's *real* voice: the messages he
-# actually wrote that are closest to the post being drafted, plus the learned
-# profile.md. They are style only — the agent copies the diction and rhythm,
-# never the facts, and never a line verbatim.
-#
-# The corpus is a directory of normalized JSONL (the twin project's ingest shape)
-# migrated into this project under data/voice/ — nothing imports the twin at
-# runtime. Rebuild the index when the messages change (needs the [voice] extra):
-#   social-bot voice index                            # embed the corpus
-# Check what a topic would retrieve:
-#   social-bot voice search "System Design là gì" --show
-#   social-bot voice status                           # corpus + index state
-#
-# Vector/hybrid search needs the optional extra: pip install -e ".[voice]".
-# Voice retrieval is an enhancement, never a gate: with no corpus (or no extra)
-# the rewriter simply runs as before, without the MY VOICE block.
-voice:
-  enabled: true
-  corpus_dir: data/voice/normalized      # the operator's own messages (JSONL)
-  index_dir: data/voice/index            # LanceDB table; `voice index` writes it
-  profile_file: data/voice/profile.md    # the learned voice, folded into the prompt
-  backend: hybrid                        # vector | keyword | hybrid (BM25 + vector)
-  top_k: 20                              # how many past messages to attach (cap, not a target)
-  only_me: true                          # examples come only from Dũng
-  # The gate that keeps junk out of the prompt. An example must reach this cosine
-  # similarity AND have at least `min_example_words` words. Measured on this
-  # corpus: unrelated chat sits at 0.46–0.50, a vaguely-related match 0.55–0.60,
-  # and a clearly on-topic one 0.62+. 0.62 is deliberate — at 0.55 a top_k of 20
-  # fills its slots with weak matches ("để a đi mượn cái thước r đo là đc" for a
-  # post about scaling), and a topic the chat doesn't really cover (an English
-  # article) yields NO examples, leaving the block as profile.md alone. That is
-  # the honest answer — better than handing the model "in CZ we trust".
-  # Set to 0 to disable the floor.
-  min_similarity: 0.62
-  min_example_words: 3                   # 0 disables the length gate
-  max_examples_chars: 2000               # cap on the examples block (0 = no cap)
-  include_profile: true                  # attach profile.md as well as the examples
-  hybrid_candidates: 60                  # per-ranker pool size when fusing
-  embedding:
-    provider: local                      # "local" (fastembed) or "openai" (HTTP)
-    # Must match the model that built the index; a multilingual model is what
-    # lets an English source pull Vietnamese lines about the same idea.
-    model: sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2
-    base_url: ""                         # only for provider: openai
-    batch_size: 64
-    timeout_seconds: 120.0
-    # api_key lives in credentials.yaml (voice.embedding.api_key) or
-    # SOCIAL_BOT_VOICE_EMBEDDING_API_KEY — never here.
+  source_name: atento-original        # the `source` on idea drafts
+  dir: data/ideas                     # dedupe ledger

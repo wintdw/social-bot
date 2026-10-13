@@ -8,7 +8,6 @@ How to run, deploy, and debug social-bot.
 python3 -m venv .venv
 .venv/bin/pip install -e ".[dev]"          # CLI + tests
 .venv/bin/pip install -e ".[server]"       # + fastapi/uvicorn/python-multipart for `serve`
-.venv/bin/pip install -e ".[voice]"        # + lancedb/fastembed for the rewriter's MY VOICE block
 cp credentials.example.yaml credentials.yaml   # put the Page token in it (git-ignored)
 ```
 
@@ -24,8 +23,7 @@ resolution: `config.yaml` at the project root (or `--config`), with a
 .venv/bin/social-bot whoami                       # token + manageable pages
 .venv/bin/social-bot feed --limit 5
 .venv/bin/social-bot blog scan                    # queue new drafts (no token needed)
-.venv/bin/social-bot blog diagram --limit 1       # render code-drawn diagrams for drafts
-.venv/bin/social-bot blog publish --dry-run       # post the approved queue (needs a token)
+.venv/bin/.venv/bin/social-bot blog publish --dry-run       # post the approved queue (needs a token)
 .venv/bin/social-bot serve --port 8083            # dashboard + review UI + schedulers
 .venv/bin/social-bot post --dry-run --message "…" # then drop --dry-run to post
 ```
@@ -60,70 +58,9 @@ social-bot blog move <draft-id> top      # up | down | top | bottom
 social-bot blog queue --reset            # back to the default oldest-first order
 ```
 
-Ordering changes only *which* approved draft goes next. It never approves,
-rewrites, or posts, and `publish.post_per_slot` / `publish.interval_days` still
+Ordering changes only *which* approved draft goes next. It never approves or
+posts, and `publish.post_per_slot` / `publish.interval_days` still
 gate every send.
-
-## Run the rewriter worker
-
-The **Rewrite with Command Code** button on `/review/{id}` does not run an AI
-itself — it marks the draft. A host-side worker does the rewrite with the Command
-Code CLI and posts the result back (nothing here approves or posts). The
-request's own kind (`Draft.rewrite_mode`) tells a plain rewrite from one locked
-to the voice you picked.
-
-```sh
-.venv/bin/python scripts/rewrite_worker.py             # poll forever
-.venv/bin/python scripts/rewrite_worker.py --once       # drain the queue and exit
-.venv/bin/python scripts/rewrite_worker.py --draft <id>
-.venv/bin/python scripts/rewrite_worker.py --dry-run    # print the prompt, call nothing
-```
-
-It needs Command Code installed and logged in on the host (`cmd login`), and
-`rewrite.enabled: true` in `config.yaml` for the button to appear.
-`rewrite.api_base` defaults to `http://127.0.0.1:8083` (this app as the worker
-sees it); from another machine point it at the deployed URL — `site.user` /
-`site.password` in `credentials.yaml` are sent as HTTP basic auth.
-
-**Original post ideas (optional).** The same worker also fulfils **Generate
-ideas** on `/review` (and `blog ideas --request`): a batch of *original* post
-angles drawn from the systems in `ideas.topics_file`
-([content-pipeline.md](content-pipeline.md) §2d). It needs `ideas.enabled: true`;
-each proposed idea lands as an `extracted` draft on `/review`, and nothing posts
-without a human approval. List the systems with `blog topics`.
-
-**The operator's own voice (optional).** With `voice.enabled: true` the worker also
-attaches the operator's own messages closest to each draft, plus the learned
-`profile.md`, as `MY VOICE` (see [content-pipeline.md](content-pipeline.md) §2c).
-That needs the `[voice]` extra wherever the worker runs, and the corpus under
-`data/voice/`:
-
-```sh
-.venv/bin/pip install -e ".[voice]"          # lancedb + fastembed (pulls onnxruntime)
-.venv/bin/social-bot voice status            # corpus + index state
-.venv/bin/social-bot voice index             # rebuild after the corpus changes
-.venv/bin/social-bot voice search "System Design là gì" --show
-```
-
-The index is only valid for the embedding model that built it
-(`voice.embedding.model`), so re-run `voice index` after changing either the
-messages or the model. None of it is required: with no corpus (or no extra) the
-worker warns once per draft and rewrites without the block. The `serve` container
-never needs any of it.
-
-**Keep it running — a request only waits otherwise.** `deploy/social-bot-rewriter.service`
-is a ready `systemd --user` unit (the poll loop, restarts on failure):
-
-```sh
-mkdir -p ~/.config/systemd/user
-ln -sf ~/social-bot/deploy/social-bot-rewriter.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now social-bot-rewriter
-sudo loginctl enable-linger $USER        # survive logout/reboot (root, once)
-journalctl --user -u social-bot-rewriter -f
-```
-
-Exit codes: 0 ok, 1 a run/HTTP failure, 2 usage/config error.
 
 ## Deploy (Docker)
 
@@ -161,8 +98,6 @@ curl -X POST https://<host>/scan            # scan sources now
 curl -X POST https://<host>/publish/run     # post the approved queue now (even while paused)
 curl -X POST https://<host>/publish/pause   # pause the posting scheduler (persisted)
 curl -X POST https://<host>/publish/resume  # resume it
-curl -s  https://<host>/api/drafts          # open drafts (paged; ?limit=&offset=)
-curl -s  https://<host>/api/rewrite-queue   # drafts a human asked the worker to rewrite
 ```
 
 `/live` answers as long as the process is up; `/ready` returns **503** when the
@@ -187,13 +122,6 @@ above that window so a slow post is not killed mid-flight.
 | `data/review/seen.json` | Dedupe ledger (`source:slug`). |
 | `data/publish/published.jsonl` | Publish audit log. |
 | `data/state.json` | Last refresh/scan run and whether posting is paused (so the dashboard and the pause survive a restart). |
-| `data/voice/normalized/*.jsonl` | The operator's own messages — the corpus the rewriter's `MY VOICE` block is retrieved from (content-pipeline §2c). Private; `data/` is git-ignored. |
-| `data/voice/index/` | The LanceDB vector index over that corpus (`social-bot voice index`). |
-| `data/voice/profile.md` | The learned voice profile, attached to every rewrite. |
-
-Everything under `data/voice/` is used by the **worker on the host** (and by
-`social-bot voice …`), never by the `serve` container: the corpus is not mounted
-into the image and the container has no `[voice]` extra.
 
 Ownership: the container writes as **uid 1000** by default — the same as a
 typical host user — so `./data` needs no chown and the CLI run as your host user
@@ -213,10 +141,9 @@ same id.
 | Approved drafts never post on schedule | The poster is **paused** (dashboard **Pause posting** / `POST /publish/pause`; the **Post schedule** row reads `paused` and **Next post** shows `—`), `publish.post_at` is empty (timed posting off), `publish.enabled: false`, or `publish.interval_days` hasn't elapsed (a `2` means it skips until two days after the last *scheduled* public post — a manual **Post now** / `/queue` send is never counted, so it can't hold the queue back). The dashboard **Next post** card and the `/status` **Post schedule** line both name the draft (`publish.next_draft`; `publish.interval_remaining` counts the days still to wait), and the **Next post** card's time is the first slot that can actually send — so `in 1 day(s)` means today's wake will be skipped, not that it posts later today. |
 | Draft approved by mistake, or queued too early | **Unapprove** on `/review/{id}` (`POST /review/{id}/unapprove`) returns it to `ai_draft`: it leaves the post queue (the poster skips it) but stays on `/review` for another pass, with no caption change. It is refused once a destination has a *public* post (a send cannot be undone); a private test send still un-approves. `reject` is the other exit but throws the draft away. |
 | Hashtags missing from a post | Ensure the image includes the `Draft.post_text` fix (rebuild). Hashtags are appended to the caption at publish time. |
-| Draft stuck `extracted` | No rewrite yet — the external agent must `POST /api/drafts/{id}/rewrite`, or the rewriter worker (next row) must pick up a requested rewrite. |
-| **Rewrite with Command Code** does nothing | The host-side worker isn't running (or `rewrite.enabled` is off). The button only *marks* the draft; start `scripts/rewrite_worker.py`. `GET /api/status` → `rewrite.requested` lists what is waiting, and `/review/{id}` shows any worker error (a request never runs itself; a stuck one can be cancelled). |
-| Draft has no image | Expected unless the source post published a cover: use the source cover as-is, or press **Render diagram** on `/review/{id}` (or `social-bot blog diagram --overwrite`) for a code-drawn explainer. |
-| A diagram took a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. Only **Render diagram** / `blog diagram --overwrite` replaces a cover, deliberately. |
+| Draft stuck `extracted` | No caption yet. Write it in Claude, paste it on `/review/{id}`, and save: saving moves the draft to `ai_draft`, ready to approve. |
+| Draft has no image | Expected unless the source post published a cover: use the source cover as-is, or draw an HTML5 plate in `data/review/plates/` and screenshot it to a PNG. |
+| A plate replaced a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. Only `blog diagram --overwrite` replaces a cover, deliberately. |
 
 ## Security
 
@@ -230,16 +157,13 @@ or a shared-secret middleware you add in `web.py`).
 - The scan/refresh loops only refresh and scan, and the posting loop only posts.
   Posting only happens for drafts a human approved: the posting loop posts
   `approved` drafts at the `publish.post_at` slots (or on demand via **Post
-  approved now** / `blog publish`). It never approves or rewrites anything.
+  approved now** / `blog publish`). It never approves anything.
   `publish.post_at: []` disables timed posting.
 - `publish.enabled: false` disables publishing; `publish.interval_days`
   enforces a minimum gap between *scheduled* public posts (`1` = at most one per
   day). A manual send — a draft's **Post now**, a `/queue` platform button — is
   both exempt from the gate and left out of the count, so a person can always
   post and their post never holds the poster back.
-- The rewriter worker only *rewrites* (`POST /api/drafts/{id}/rewrite`); it never
-  approves or posts to the Page. `rewrite.enabled` only controls whether the
-  button appears; the human gate is unchanged.
 - Posting can be **paused** without changing config: **Pause posting** on the
   dashboard / `POST /publish/pause` (resume with `POST /publish/resume`). It stops
   only the scheduler — an explicit **Post approved now** / `blog publish` still

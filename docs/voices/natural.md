@@ -20,7 +20,7 @@ rõ.
   chêm tiếng lóng cho vui.
 - Xưng `mình`/`tôi` đều được, gọi người đọc là `bạn`. Chỉ cần nhất quán trong
   một bài.
-- Thuật ngữ kỹ thuật giữ tiếng Anh như mọi bài (DNA §4.3).
+- Thuật ngữ kỹ thuật giữ tiếng Anh như mọi bài.
 
 ## Không làm
 

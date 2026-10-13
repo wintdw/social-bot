@@ -1,4 +1,4 @@
-"""Pipeline orchestration: scan, rewrite intake, publish (no network)."""
+"""Pipeline orchestration: scan, caption edits, publish (no network)."""
 
 from __future__ import annotations
 
@@ -18,8 +18,6 @@ from social_bot.drafts import (
     EXTRACTED,
     POSTED,
     REJECTED,
-    REWRITE_CAPTION,
-    REWRITE_CAPTION_VOICE,
     Draft,
 )
 from social_bot.source_api import SourceError
@@ -126,26 +124,15 @@ def _set_mastheads(cfg, *, choices=(HOC, DOC_BAO, MOI_NGAY), default=DOC_BAO):
     return cfg
 
 
-def _set_voices(cfg, *, voices=None, default="technical"):
-    """Configure the publish.voices menu on a test config."""
-    cfg["publish"]["voices"] = (
-        voices if voices is not None else {"technical": "technical.md", "funny": "funny.md"}
-    )
-    cfg["publish"]["default_voice"] = default
-    return cfg
-
-
-def _set_ideas(cfg, tmp_path, *, topics=("ClickHouse architecture", "MySQL internals"), per_run=3):
+def _set_ideas(cfg, tmp_path, *, topics=("ClickHouse architecture", "MySQL internals")):
     """Configure the idea-seed block, writing a topics file under tmp_path."""
     path = tmp_path / "ideas" / "topics.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("\n".join(topics) + "\n", encoding="utf-8")
     cfg["ideas"] = {
         **DEFAULTS["ideas"],
-        "enabled": True,
         "topics_file": str(path),
         "dir": str(tmp_path / "ideas"),
-        "per_run": per_run,
     }
     return cfg
 
@@ -367,102 +354,13 @@ class TestScanMaxAge:
         assert [i["id"] for i in result["items"]] == ["fresh"]
 
 
-class TestRewriteIntake:
-    def test_receive_rewrite(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "Hello", "hashtags": ["#a"]})
-        assert draft.state == AI_DRAFT
-        assert draft.caption == "Hello"
-
-    def test_receive_rewrite_prepends_the_default(self, tmp_path):
-        cfg = _set_mastheads(_seed_draft(tmp_path))
-        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "Hello"})
-        assert draft.caption == f"{DOC_BAO}\n\nHello"
-        assert draft.post_text.startswith(DOC_BAO)
-
-    def test_keeps_the_rewriters_chosen_masthead(self, tmp_path):
-        """A post the rewriter judged worth learning keeps [Học] whatever its source."""
-        cfg = _set_mastheads(_seed_draft(tmp_path, source="seangoedecke"))
-        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": f"{HOC}\n\nHello"})
-        assert draft.caption == f"{HOC}\n\nHello"
-
-    def test_receive_rewrite_does_not_double_the_masthead(self, tmp_path):
-        cfg = _set_mastheads(_seed_draft(tmp_path))
-        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": f"{DOC_BAO}\n\nHello"})
-        assert draft.caption == f"{DOC_BAO}\n\nHello"
-        assert draft.caption.count(DOC_BAO) == 1
-
-    def test_unset_mastheads_leave_the_caption_alone(self, tmp_path):
-        cfg = _seed_draft(tmp_path)  # DEFAULTS: no mastheads configured
-        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "Hello"})
-        assert draft.caption == "Hello"
-
+class TestEditDraft:
     def test_edit_splits_hashtags(self, tmp_path):
         cfg = _seed_draft(tmp_path)
-        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c"})
+        pipeline.edit_draft(cfg, "post-one", caption="c")
         draft = pipeline.edit_draft(cfg, "post-one", caption="edited", hashtags="#a, #b")
         assert draft.caption == "edited"
         assert draft.hashtags == ["#a", "#b"]
-
-    def test_edit_sets_the_image_prompt(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c"})
-        draft = pipeline.edit_draft(cfg, "post-one", image_prompt="a lone tree")
-        assert draft.image_prompt == "a lone tree"
-
-    def test_edit_leaves_the_image_prompt_when_omitted(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "image_prompt": "a lone tree"})
-        draft = pipeline.edit_draft(cfg, "post-one", caption="edited")
-        assert draft.image_prompt == "a lone tree"
-
-    def test_receive_rewrite_stores_the_image_style_verbatim(self, tmp_path):
-        # No menu anymore: only "diagram" renders anything, anything else means
-        # "use the source image". The rewrite may still send one for compat.
-        cfg = _seed_draft(tmp_path)
-        draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "c", "image_style": "diagram"}
-        )
-        assert draft.image_style == "diagram"
-
-    def test_edit_sets_the_image_style(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c"})
-        draft = pipeline.edit_draft(cfg, "post-one", image_style="diagram")
-        assert draft.image_style == "diagram"
-
-    def test_edit_leaves_the_image_style_when_omitted(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "image_style": "diagram"})
-        draft = pipeline.edit_draft(cfg, "post-one", caption="edited")
-        assert draft.image_style == "diagram"
-
-    def test_receive_rewrite_keeps_a_valid_voice(self, tmp_path):
-        cfg = _set_voices(_seed_draft(tmp_path))
-        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "voice": "funny"})
-        assert draft.voice == "funny"
-
-    def test_receive_rewrite_falls_back_on_an_unknown_voice(self, tmp_path):
-        cfg = _set_voices(_seed_draft(tmp_path))
-        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "voice": "nonsense"})
-        assert draft.voice == "technical"
-
-    def test_receive_rewrite_drops_the_voice_when_no_menu_is_configured(self, tmp_path):
-        cfg = _seed_draft(tmp_path)  # DEFAULTS: no voices configured
-        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "voice": "funny"})
-        assert draft.voice == ""
-
-    def test_edit_sets_the_voice(self, tmp_path):
-        cfg = _set_voices(_seed_draft(tmp_path))
-        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c"})
-        draft = pipeline.edit_draft(cfg, "post-one", voice="funny")
-        assert draft.voice == "funny"
-
-    def test_edit_leaves_the_voice_when_omitted(self, tmp_path):
-        cfg = _set_voices(_seed_draft(tmp_path))
-        pipeline.receive_rewrite(cfg, "post-one", {"caption": "c", "voice": "funny"})
-        draft = pipeline.edit_draft(cfg, "post-one", caption="edited")
-        assert draft.voice == "funny"
 
     def test_edit_sets_the_destinations(self, tmp_path):
         cfg = _seed_draft(tmp_path)  # DEFAULTS route new drafts to facebook
@@ -489,13 +387,34 @@ class TestRewriteIntake:
         with pytest.raises(ValueError):
             pipeline.edit_draft(_seed_draft(tmp_path), "post-one", destinations=[])
 
+    def test_saving_a_caption_moves_an_extracted_draft_to_ai_draft(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        draft = pipeline.edit_draft(cfg, "post-one", caption="Một bài viết.")
+        assert draft.state == AI_DRAFT
+        assert pipeline.get_draft(cfg, "post-one").state == AI_DRAFT
+
+    def test_an_empty_caption_keeps_the_draft_extracted(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        draft = pipeline.edit_draft(cfg, "post-one", caption="   ")
+        assert draft.state == EXTRACTED
+
+    def test_a_written_caption_can_be_approved(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        pipeline.edit_draft(cfg, "post-one", caption="Một bài viết.")
+        assert pipeline.approve_draft(cfg, "post-one").state == APPROVED
+
+    def test_an_extracted_draft_cannot_be_approved_without_a_caption(self, tmp_path):
+        cfg = _seed_draft(tmp_path)
+        with pytest.raises(ValueError):
+            pipeline.approve_draft(cfg, "post-one")
+
     def test_reject(self, tmp_path):
         cfg = _seed_draft(tmp_path)
         assert pipeline.reject_draft(cfg, "post-one").state == REJECTED
 
     def test_unknown_draft_raises(self, tmp_path):
         with pytest.raises(ValueError):
-            pipeline.receive_rewrite(_cfg(tmp_path), "nope", {"caption": "x"})
+            pipeline.edit_draft(_cfg(tmp_path), "nope", caption="x")
 
 
 class TestRecentCaptions:
@@ -530,22 +449,20 @@ class TestRecentCaptions:
         assert pipeline.recent_captions(cfg) == []
 
 
-class TestRewriteLint:
+class TestCaptionLint:
     def test_stores_lint_on_the_draft(self, tmp_path):
         cfg = _seed_draft(tmp_path)
-        draft = pipeline.receive_rewrite(cfg, "post-one", {"caption": "Đây là một cuộc cách mạng."})
+        draft = pipeline.edit_draft(cfg, "post-one", caption="Đây là một cuộc cách mạng.")
         assert [w["code"] for w in draft.lint] == ["hype"]
         # The warnings round-trip through the queue, so /review/{id} can show them.
         assert pipeline.get_draft(cfg, "post-one").lint
 
     def test_clean_caption_has_no_warnings(self, tmp_path):
         cfg = _seed_draft(tmp_path)
-        draft = pipeline.receive_rewrite(
+        draft = pipeline.edit_draft(
             cfg,
             "post-one",
-            {
-                "caption": "Cuộc họp vừa bắt đầu.\n\nMột câu dài hơn hẳn ở đây để nhịp không đều chút nào."
-            },
+            caption="Cuộc họp vừa bắt đầu.\n\nMột câu dài hơn hẳn ở đây để nhịp không đều chút nào.",
         )
         assert draft.lint == []
 
@@ -563,15 +480,15 @@ class TestRewriteLint:
                 Draft(id="post-one", state=EXTRACTED, destinations=["facebook"]),
             ],
         )
-        draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "Cuộc họp vừa bắt đầu.\n\nMột thân bài hoàn toàn mới."}
+        draft = pipeline.edit_draft(
+            cfg, "post-one", caption="Cuộc họp vừa bắt đầu.\n\nMột thân bài hoàn toàn mới."
         )
         assert "repeated-hook" in [w["code"] for w in draft.lint]
 
     def test_edit_re_lints_the_caption(self, tmp_path):
         cfg = _seed_draft(tmp_path)
-        pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "Một câu sạch.\n\nThêm một dòng khác hẳn độ dài."}
+        pipeline.edit_draft(
+            cfg, "post-one", caption="Một câu sạch.\n\nThêm một dòng khác hẳn độ dài."
         )
         draft = pipeline.edit_draft(cfg, "post-one", caption="Đây là một cuộc cách mạng.")
         assert [w["code"] for w in draft.lint] == ["hype"]
@@ -967,15 +884,6 @@ class TestFileCaches:
         seen = pipeline.load_seen(cfg)
         seen.add("c")
         assert pipeline.load_seen(cfg) == {"a", "b"}
-
-    def test_dna_file_is_re_read_when_it_changes(self, tmp_path):
-        cfg = _cfg(tmp_path)
-        dna = tmp_path / "dna.md"
-        dna.write_text("voice one", encoding="utf-8")
-        cfg["publish"]["dna_file"] = str(dna)
-        assert pipeline.dna_text(cfg) == "voice one"
-        dna.write_text("voice two", encoding="utf-8")
-        assert pipeline.dna_text(cfg) == "voice two"
 
 
 class TestPublish:
@@ -1438,76 +1346,6 @@ class TestUnapprove:
             pipeline.unapprove_draft(cfg, "post-one")
 
 
-class TestDna:
-    def test_reads_file(self, tmp_path):
-        dna = tmp_path / "dna.md"
-        dna.write_text("Atento voice", encoding="utf-8")
-        cfg = _cfg(tmp_path)
-        cfg["publish"]["dna_file"] = str(dna)
-        assert pipeline.dna_text(cfg) == "Atento voice"
-
-    def test_absent_is_empty(self, tmp_path):
-        cfg = _cfg(tmp_path)
-        cfg["publish"]["dna_file"] = str(tmp_path / "nope.md")
-        assert pipeline.dna_text(cfg) == ""
-
-    def test_unset_is_empty(self, tmp_path):
-        assert pipeline.dna_text(_cfg(tmp_path)) == ""
-
-
-class TestVoice:
-    def _menu(self, tmp_path):
-        cfg = _cfg(tmp_path)
-        technical = tmp_path / "technical.md"
-        technical.write_text("Voice: calm engineer.\n\n# technical\nbrief", encoding="utf-8")
-        funny = tmp_path / "funny.md"
-        funny.write_text("Voice: deadpan satirist.\n\n# funny\nbrief", encoding="utf-8")
-        cfg["publish"]["voices"] = {"technical": str(technical), "funny": str(funny)}
-        cfg["publish"]["default_voice"] = "technical"
-        return cfg
-
-    def test_choices_are_the_menu_keys(self, tmp_path):
-        assert pipeline.voice_choices(self._menu(tmp_path)) == ["technical", "funny"]
-
-    def test_default_voice_is_config(self, tmp_path):
-        assert pipeline.default_voice(self._menu(tmp_path)) == "technical"
-
-    def test_text_uses_the_chosen_key(self, tmp_path):
-        assert "deadpan" in pipeline.voice_text(self._menu(tmp_path), "funny")
-
-    def test_blank_key_uses_the_default(self, tmp_path):
-        assert "calm engineer" in pipeline.voice_text(self._menu(tmp_path))
-
-    def test_unknown_key_falls_back_to_the_default(self, tmp_path):
-        cfg = self._menu(tmp_path)
-        assert pipeline.voice_text(cfg, "nope") == pipeline.voice_text(cfg, "technical")
-
-    def test_missing_file_is_empty(self, tmp_path):
-        cfg = _cfg(tmp_path)
-        cfg["publish"]["voices"] = {"gone": str(tmp_path / "nope.md")}
-        cfg["publish"]["default_voice"] = "gone"
-        assert pipeline.voice_text(cfg, "gone") == ""
-
-    def test_unset_menu_is_empty(self, tmp_path):
-        assert pipeline.voice_text(_cfg(tmp_path)) == ""
-        assert pipeline.voice_choices(_cfg(tmp_path)) == []
-
-    def test_hints_use_the_opening_line(self, tmp_path):
-        hints = pipeline.voice_hints(self._menu(tmp_path))
-        assert hints["technical"] == "calm engineer."
-        assert "deadpan" in hints["funny"]
-
-    def test_file_is_re_read_when_it_changes(self, tmp_path):
-        cfg = _cfg(tmp_path)
-        voice = tmp_path / "voice.md"
-        voice.write_text("voice one", encoding="utf-8")
-        cfg["publish"]["voices"] = {"technical": str(voice)}
-        cfg["publish"]["default_voice"] = "technical"
-        assert pipeline.voice_text(cfg) == "voice one"
-        voice.write_text("voice two", encoding="utf-8")
-        assert pipeline.voice_text(cfg) == "voice two"
-
-
 class TestLocalizeImages:
     def _draft_with(self, cfg, **fields):
         draft = pipeline.get_draft(cfg, "post-one")
@@ -1590,16 +1428,6 @@ class TestScanSourceImage:
         draft = pipeline.get_draft(cfg, "post-one")
         assert draft.source_image == "https://img/cover.jpg"
         assert draft.source_image == draft.image
-
-
-class TestImagePrompt:
-    def test_receive_rewrite_stores_image_prompt(self, tmp_path):
-        # Kept for old queue files: nothing new reads it (no AI generation).
-        cfg = _seed_draft(tmp_path)
-        draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "c", "image_prompt": "a long ledger"}
-        )
-        assert draft.image_prompt == "a long ledger"
 
 
 class TestImageIsGenerated:
@@ -1705,10 +1533,6 @@ class TestStatus:
         assert snapshot["drafts"]["by_state"]["extracted"] == 2
         assert snapshot["sources"][0]["name"] == "atento-blog"
         assert snapshot["publish"]["destinations"] == ["facebook", "linkedin"]
-        assert snapshot["publish"]["dna_file_set"] is False
-        assert snapshot["publish"]["voices_set"] is False
-        assert snapshot["publish"]["voice_choices"] == []
-        assert snapshot["publish"]["default_voice"] == ""
 
     def test_next_draft_is_the_oldest_approved(self, tmp_path):
         cfg = _cfg(tmp_path)
@@ -1960,133 +1784,6 @@ class TestQueueOrdering:
         assert [row["id"] for row in pipeline.queue_view(cfg)] == ["b", "a"]
 
 
-class TestRewriteRequests:
-    """A human marks a draft; the host worker rewrites it and posts it back."""
-
-    def test_request_marks_the_draft_for_the_worker(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        draft = pipeline.request_rewrite(cfg, "post-one")
-        assert draft.rewrite_requested_at
-        assert draft.rewrite_kind() == REWRITE_CAPTION
-        assert draft.rewrite_error == ""
-        assert [d.id for d in pipeline.rewrite_queue(cfg)] == ["post-one"]
-
-    def test_request_rejects_an_approved_draft(self, tmp_path):
-        # An approved draft is queued to post; rewriting it would undo that.
-        cfg = _seed_draft(tmp_path, state=APPROVED)
-        with pytest.raises(ValueError, match="cannot be rewritten"):
-            pipeline.request_rewrite(cfg, "post-one")
-
-    def test_request_rejects_an_unknown_draft(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        with pytest.raises(ValueError, match="no draft"):
-            pipeline.request_rewrite(cfg, "nope")
-
-    def test_queue_is_oldest_request_first(self, tmp_path):
-        cfg = _cfg(tmp_path)
-        pipeline.save_drafts(
-            pipeline.queue_path(cfg),
-            [
-                Draft(id="b", rewrite_requested_at="2026-09-02T10:00:00+00:00"),
-                Draft(id="a", rewrite_requested_at="2026-09-01T10:00:00+00:00"),
-                Draft(id="c"),  # never requested
-            ],
-        )
-        assert [d.id for d in pipeline.rewrite_queue(cfg)] == ["a", "b"]
-
-    def test_cancel_clears_the_request(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        pipeline.request_rewrite(cfg, "post-one")
-        draft = pipeline.cancel_rewrite(cfg, "post-one")
-        assert draft.rewrite_requested_at == ""
-        assert pipeline.rewrite_queue(cfg) == []
-
-    def test_error_closes_the_request_and_is_kept(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        pipeline.request_rewrite(cfg, "post-one")
-        draft = pipeline.record_rewrite_error(cfg, "post-one", "boom")
-        assert draft.rewrite_requested_at == ""
-        assert draft.rewrite_error == "boom"
-        assert pipeline.rewrite_queue(cfg) == []
-
-    def test_error_defaults_when_blank(self, tmp_path):
-        cfg = _seed_draft(tmp_path)
-        pipeline.request_rewrite(cfg, "post-one")
-        draft = pipeline.record_rewrite_error(cfg, "post-one", "  ")
-        assert draft.rewrite_error == "unknown error"
-
-    def test_a_landed_rewrite_clears_the_request(self, tmp_path):
-        cfg = _set_mastheads(_seed_draft(tmp_path))
-        pipeline.request_rewrite(cfg, "post-one")
-        draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": f"{HOC}\n\nMột caption.", "hashtags": ["#Atento"]}
-        )
-        assert draft.rewrite_requested_at == ""
-        assert draft.rewrite_error == ""
-        assert pipeline.rewrite_queue(cfg) == []
-
-
-class TestVoiceRewriteRequest:
-    """The voice-locked rewrite: the same task, in the register the operator picked.
-
-    The pick *is* the request: it reaches the pipeline from the compose form, the
-    worker's prompt names that one key, and this side re-asserts it when the result
-    lands — so a run that chose a register of its own cannot relabel the post.
-    """
-
-    def test_request_marks_it_as_a_voice_locked_rewrite(self, tmp_path):
-        cfg = _set_voices(_seed_draft(tmp_path))
-        draft = pipeline.request_voice_rewrite(cfg, "post-one")
-        assert draft.rewrite_requested_at
-        assert draft.rewrite_kind() == REWRITE_CAPTION_VOICE
-        assert draft.rewrite_error == ""
-        assert [d.id for d in pipeline.rewrite_queue(cfg)] == ["post-one"]
-
-    def test_request_resolves_the_register_the_lock_has_to_hold(self, tmp_path):
-        # Nothing picked yet: the lock still has to name a register that exists.
-        cfg = _set_voices(_seed_draft(tmp_path))
-        assert pipeline.request_voice_rewrite(cfg, "post-one").voice == "technical"
-
-    def test_request_keeps_the_voice_saved_with_it(self, tmp_path):
-        cfg = _set_voices(_seed_draft(tmp_path))
-        pipeline.edit_draft(cfg, "post-one", voice="funny")  # what the compose form sends
-        assert pipeline.request_voice_rewrite(cfg, "post-one").voice == "funny"
-
-    def test_request_rejects_an_approved_draft(self, tmp_path):
-        cfg = _set_voices(_seed_draft(tmp_path, state=APPROVED))
-        with pytest.raises(ValueError, match="cannot be rewritten"):
-            pipeline.request_voice_rewrite(cfg, "post-one")
-
-    def test_a_landed_rewrite_keeps_the_operators_voice(self, tmp_path):
-        cfg = _set_voices(_seed_draft(tmp_path))
-        pipeline.edit_draft(cfg, "post-one", voice="funny")
-        pipeline.request_voice_rewrite(cfg, "post-one")
-        # The run answered with a different register; the operator's pick wins.
-        draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "Một caption.", "voice": "technical"}
-        )
-        assert draft.voice == "funny"
-        assert draft.rewrite_requested_at == ""
-
-    def test_a_plain_rewrite_still_takes_the_agents_voice(self, tmp_path):
-        cfg = _set_voices(_seed_draft(tmp_path))
-        pipeline.edit_draft(cfg, "post-one", voice="funny")
-        pipeline.request_rewrite(cfg, "post-one")
-        draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "Một caption.", "voice": "technical"}
-        )
-        assert draft.voice == "technical"
-
-    def test_a_manual_rewrite_is_never_locked(self, tmp_path):
-        # The by-hand path: no request was ever made, so there is nothing to hold.
-        cfg = _set_voices(_seed_draft(tmp_path))
-        pipeline.edit_draft(cfg, "post-one", voice="funny")
-        draft = pipeline.receive_rewrite(
-            cfg, "post-one", {"caption": "Một caption.", "voice": "technical"}
-        )
-        assert draft.voice == "technical"
-
-
 class TestIdeaSeeds:
     """`ideas` is a different input from `sources[]`: systems, not articles."""
 
@@ -2094,10 +1791,9 @@ class TestIdeaSeeds:
         cfg = _set_ideas(_cfg(tmp_path), tmp_path, topics=("Loki architecture | https://x",))
         assert pipeline.load_topics(cfg) == [{"name": "Loki architecture", "url": "https://x"}]
 
-    def test_disabled_without_a_file(self, tmp_path):
+    def test_missing_topics_file_is_empty(self, tmp_path):
         cfg = _cfg(tmp_path)  # default ideas block, file does not exist
         cfg["ideas"]["topics_file"] = str(tmp_path / "missing.md")
-        assert pipeline.ideas_enabled(cfg) is False
         assert pipeline.load_topics(cfg) == []
 
     def test_queue_ideas_creates_original_drafts(self, tmp_path):
@@ -2149,51 +1845,6 @@ class TestIdeaSeeds:
         result = pipeline.queue_ideas(cfg, [{"title": "   "}, "not a dict", {}])
         assert result["added"] == 0
         assert result["skipped"] == 2  # the two empty-title dicts; a non-dict is ignored
-
-    def test_queue_ideas_is_disabled_by_default(self, tmp_path):
-        cfg = _cfg(tmp_path)
-        with pytest.raises(ValueError, match="ideas are disabled"):
-            pipeline.queue_ideas(cfg, [{"title": "x"}])
-
-    def test_request_ideas_needs_topics(self, tmp_path):
-        cfg = _cfg(tmp_path)
-        cfg["ideas"]["enabled"] = True  # enabled, but the file is missing
-        cfg["ideas"]["topics_file"] = str(tmp_path / "missing.md")
-        with pytest.raises(ValueError, match="no idea topics"):
-            pipeline.request_ideas(cfg)
-
-    def test_request_and_clear_round_trip(self, tmp_path):
-        cfg = _set_ideas(_cfg(tmp_path), tmp_path)
-        assert pipeline.load_ideas_request(cfg) == {}
-        pipeline.request_ideas(cfg)
-        state = pipeline.load_ideas_request(cfg)
-        assert state["requested_at"]
-        assert pipeline.idea_brief(cfg)["requested"] is True
-        pipeline.clear_ideas_request(cfg, error="boom")
-        closed = pipeline.idea_brief(cfg)
-        assert closed["requested"] is False
-        assert closed["error"] == "boom"
-
-    def test_brief_carries_themes_existing_and_dna(self, tmp_path):
-        cfg = _set_ideas(_cfg(tmp_path), tmp_path, topics=("Grafana architecture",))
-        cfg["publish"]["dna_file"] = str(tmp_path / "dna.md")
-        (tmp_path / "dna.md").write_text("DNA TEXT", encoding="utf-8")
-        pipeline.queue_ideas(cfg, [{"topic": "Grafana architecture", "title": "Grafana panels"}])
-        brief = pipeline.idea_brief(cfg)
-        assert brief["enabled"] is True
-        assert brief["source_name"] == "atento-original"
-        assert brief["per_run"] == 3
-        assert brief["topics"] == [{"name": "Grafana architecture", "url": ""}]
-        assert "Grafana panels" in brief["existing"]
-        assert brief["dna"] == "DNA TEXT"
-
-    def test_status_reports_ideas(self, tmp_path):
-        cfg = _set_ideas(_cfg(tmp_path), tmp_path, topics=("MySQL internals",))
-        pipeline.request_ideas(cfg)
-        ideas = pipeline.status(cfg)["ideas"]
-        assert ideas["enabled"] is True
-        assert ideas["topics"] == 1
-        assert ideas["requested"] is True
 
 
 class TestPerDestinationSchedule:
