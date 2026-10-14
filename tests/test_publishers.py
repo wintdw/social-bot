@@ -243,7 +243,11 @@ class TestLinkedInPublisher:
         draft.hashtags = ["#a"]
         result = LinkedInPublisher(_cfg()).publish(draft)
         assert captured["url"] == "http://host.docker.internal:8082/post"
-        assert captured["body"] == {"text": "Hello\n\n#a", "visibility": "PUBLIC"}
+        assert captured["body"] == {
+            "text": "Hello\n\n#a",
+            "visibility": "PUBLIC",
+            "comment": "https://atento.vn/blog/p",
+        }
         assert result.post_id == "urn:li:share:1"
         assert result.permalink == "https://x/1"
 
@@ -340,7 +344,46 @@ class TestLinkedInPublisher:
         draft.caption = "Hello"
         draft.state = "ai_draft"
         LinkedInPublisher(_cfg()).publish(draft)
-        assert captured["body"] == {"text": "Hello", "visibility": "PUBLIC"}
+        assert captured["body"] == {
+            "text": "Hello",
+            "visibility": "PUBLIC",
+            "comment": "https://atento.vn/blog/p",
+        }
+
+    def test_the_source_link_rides_as_the_first_comment(self, monkeypatch):
+        """The caption's CTA points at the comment, so the URL goes out as `comment`.
+
+        An idea draft has no source page, so it has no link to comment.
+        """
+        from social_bot.destinations.linkedin import publisher as li_mod
+
+        bodies = []
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"ok": true, "post_urn": "urn:li:share:9", "permalink": "https://x/9"}'
+
+        def fake_urlopen(request, timeout=None):
+            bodies.append(json.loads(request.data))
+            return FakeResponse()
+
+        monkeypatch.setattr(li_mod.urllib.request, "urlopen", fake_urlopen)
+        draft = _draft()
+        draft.caption = "Hello"
+        draft.state = "ai_draft"
+        LinkedInPublisher(_cfg()).publish(draft)
+        assert bodies[0]["comment"] == "https://atento.vn/blog/p"
+
+        idea = _draft(url="", title="", caption="Original idea")
+        idea.state = "ai_draft"
+        LinkedInPublisher(_cfg()).publish(idea)
+        assert "comment" not in bodies[1]
 
     def test_image_only_draft_can_publish(self, monkeypatch, fake_image):
         from social_bot.destinations.linkedin import publisher as li_mod

@@ -318,7 +318,10 @@ never blocks the timer-driven poster, and the interval never refuses you.
 (a sibling service that owns the LinkedIn OAuth token) via its `POST /post`
 gateway — the caption and, when the draft has one, the image (sent as base64) —
 so set `destinations.linkedin.base_url` to that gateway (internal network,
-e.g. `http://host.docker.internal:8082`).
+e.g. `http://host.docker.internal:8082`). A draft with a source URL has that URL
+posted as the new post's **first comment** right after it goes out (the caption's
+CTA points at the comment, and the feed deprioritizes a post carrying an outbound
+link) — the same thing `facebook` does.
 
 `publish.destinations` is only the routing default for **new** drafts. The review
 page owns the rest: a destination picker sets one draft's targets, and the action

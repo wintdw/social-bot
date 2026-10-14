@@ -13,6 +13,8 @@ from social_bot.web import (
     _writable_dir,
     apply_runtime_state,
     current_slot,
+    due_destinations,
+    due_slot,
     infer_last_runs,
     live_view,
     message_url,
@@ -142,6 +144,96 @@ class TestCurrentSlot:
         assert current_slot(["07:00", "19:00"], now) == "2026-09-09 19:00"
 
 
+class TestDueSlot:
+    """`due_slot` never returns a previous day — a fix for the stale-slot bug.
+
+    The poster wakes on the union of every destination's slots, so a wake for
+    one destination must not fire another whose slot time is still ahead.
+    """
+
+    def test_todays_most_recent_once_past(self):
+        now = dt.datetime(2026, 9, 10, 20, 0)
+        assert due_slot(["07:00", "19:00"], now) == "2026-09-10 19:00"
+
+    def test_none_before_todays_first_slot(self):
+        # 06:00 is before today's 07:00 → not due, unlike current_slot (yesterday).
+        now = dt.datetime(2026, 9, 10, 6, 0)
+        assert due_slot(["07:00", "19:00"], now) is None
+
+    def test_none_for_a_window_still_ahead(self):
+        now = dt.datetime(2026, 9, 10, 12, 0)
+        assert due_slot(["19:30-21:00"], now) is None
+
+    def test_window_is_due_inside_and_after_it(self):
+        inside = due_slot(["19:30-21:00"], dt.datetime(2026, 9, 10, 20, 0))
+        after = due_slot(["19:30-21:00"], dt.datetime(2026, 9, 10, 23, 0))
+        assert inside == after
+        assert inside is not None and inside.startswith("2026-09-10 ")
+        assert "2026-09-10 19:30" <= inside < "2026-09-10 21:00"
+
+    def test_union_wake_does_not_make_a_later_destination_due(self):
+        # The live bug: the loop woke at LinkedIn's 14:25 on 2026-10-14; the
+        # poster then fired Facebook too, with yesterday's 20:12 slot.
+        now = dt.datetime(2026, 10, 14, 14, 25)
+        schedule = {"facebook": ["20:00-20:30"], "linkedin": ["14:00-14:30"]}
+        assert due_slot(schedule["facebook"], now) is None  # ← was "2026-10-13 20:12"
+        assert due_slot(schedule["linkedin"], now) == "2026-10-14 14:25"
+
+    def test_empty_schedule_is_none(self):
+        assert due_slot([], dt.datetime(2026, 9, 10, 12, 0)) is None
+
+
+class TestDueDestinations:
+    """The posting loop's per-wake decision — the Oct 2026 stale-slot bug.
+
+    The loop sleeps until the union of every destination's slots, then asks
+    which are due. A wake for one destination must never fire another.
+    """
+
+    SCHEDULE = {"facebook": ["20:00-20:30"], "linkedin": ["14:00-14:30"]}
+
+    @staticmethod
+    def _seed(schedule, now):
+        """The startup seeding the loop does before its first wake."""
+        return {name: due_slot(slots, now) for name, slots in schedule.items() if slots}
+
+    def test_union_wake_fires_only_the_arrived_destination(self):
+        # Container up 2026-10-13 20:46; the next wake is LinkedIn's 14:25.
+        seed = self._seed(self.SCHEDULE, dt.datetime(2026, 10, 13, 20, 46))
+        due = due_destinations(self.SCHEDULE, seed, dt.datetime(2026, 10, 14, 14, 25))
+        assert due == [("linkedin", "2026-10-14 14:25")]
+        # The bug fired Facebook here too, labelled "scheduled 2026-10-13 20:12".
+
+    def test_facebook_still_fires_at_its_own_slot(self):
+        seed = self._seed(self.SCHEDULE, dt.datetime(2026, 10, 13, 20, 46))
+        markers = {**seed, "linkedin": "2026-10-14 14:25"}  # LinkedIn ran at 14:25
+        due = due_destinations(self.SCHEDULE, markers, dt.datetime(2026, 10, 14, 20, 1))
+        assert due == [("facebook", "2026-10-14 20:01")]
+
+    def test_restart_midday_does_not_refire_a_slot_that_already_ran(self):
+        seed = self._seed(self.SCHEDULE, dt.datetime(2026, 10, 14, 19, 50))
+        assert seed == {"facebook": None, "linkedin": "2026-10-14 14:25"}
+        assert due_destinations(self.SCHEDULE, seed, dt.datetime(2026, 10, 14, 19, 55)) == []
+        assert due_destinations(self.SCHEDULE, seed, dt.datetime(2026, 10, 14, 20, 1)) == [
+            ("facebook", "2026-10-14 20:01")
+        ]
+
+    def test_without_seeding_both_slots_read_due(self):
+        # Why the loop must seed: at 20:01 an unseeded map reads LinkedIn's
+        # already-past 14:25 slot as due and would re-post it.
+        now = dt.datetime(2026, 10, 14, 20, 1)
+        assert due_destinations(self.SCHEDULE, {}, now) == [
+            ("facebook", "2026-10-14 20:01"),
+            ("linkedin", "2026-10-14 14:25"),
+        ]
+
+    def test_disabled_destination_is_skipped(self):
+        schedule = {"facebook": ["20:00-20:30"], "linkedin": []}
+        assert due_destinations(schedule, {}, dt.datetime(2026, 10, 14, 20, 1)) == [
+            ("facebook", "2026-10-14 20:01")
+        ]
+
+
 class TestReadiness:
     def test_all_checks_pass(self):
         payload, status = readiness_view({"a": True, "b": True})
@@ -211,6 +303,27 @@ class TestRuntimeState:
         restored = {"post_paused": True}
         apply_runtime_state(restored, {"refresh": {}, "scan": {}})
         assert restored["post_paused"] is False
+
+    def test_post_slot_markers_round_trip(self):
+        state = {"post_slot": {"facebook": "2026-10-14 20:01", "linkedin": None}}
+        snap = runtime_state_snapshot(state)
+        assert snap["post"]["slot"] == {"facebook": "2026-10-14 20:01", "linkedin": None}
+        restored: dict = {}
+        apply_runtime_state(restored, snap)
+        assert restored["post_slot"] == {"facebook": "2026-10-14 20:01", "linkedin": None}
+
+    def test_post_slot_defaults_empty(self):
+        assert runtime_state_snapshot({})["post"]["slot"] == {}
+
+    def test_post_slot_absent_leaves_state_untouched(self):
+        restored = {"post_slot": {"facebook": "2026-10-14 20:01"}}
+        apply_runtime_state(restored, {"refresh": {}, "scan": {}, "post": {"paused": False}})
+        assert restored["post_slot"] == {"facebook": "2026-10-14 20:01"}
+
+    def test_bad_post_slot_payload_ignored(self):
+        restored = {"post_slot": {"facebook": "2026-10-14 20:01"}}
+        apply_runtime_state(restored, {"post": {"slot": "not a dict"}})
+        assert restored["post_slot"] == {"facebook": "2026-10-14 20:01"}
 
     def test_bad_payload_is_ignored(self):
         state = {"last_ok": True}

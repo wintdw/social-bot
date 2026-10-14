@@ -250,6 +250,14 @@ human approval.
   `blog publish` still send, because those are explicit human actions. (The
   *interval* draws its line elsewhere: the drain paths — **Post approved now**,
   `blog publish` — obey it, the two per-draft buttons don't.)
+- A slot fires **once, on its own day**. The loop wakes on the union of every
+  destination's slots, so it fires a destination only when that destination's
+  occurrence is *today* (`web.due_slot`) and differs from its marker in
+  `state["post_slot"]`. The markers are seeded at startup and persisted in
+  `data/state.json` (`post.slot`), so a restart can't re-fire a slot that already
+  ran today, and a destination whose slot is still ahead never fires at another
+  destination's wake. (Before this, a 14:25 wake for one destination could fire
+  another's *previous-day* slot, hours late.)
 - After a run that actually posted, `serve` also refreshes the feed cache
   (`refresh_feed`), so the new post shows on the dashboard immediately instead
   of waiting for the next `--refresh-at` slot. A run that posted nothing
@@ -345,8 +353,9 @@ register it in `destinations/registry.py`, and add its
 `config.validate` accepts any registered name. Its `posts[destination]` records
 and audit rows flow through unchanged. `linkedin/publisher.py` shows the shape of
 a destination that **delegates to another local service**: it calls linkin-bot's
-`POST /post` gateway (text + the image bytes as base64) instead of talking to the
-platform API, so no token/OAuth lives here.
+`POST /post` gateway (text + the image bytes as base64 + the source URL, which the
+gateway comments on the new post) instead of talking to the platform API, so no
+token/OAuth lives here.
 
 **Changing the caption text.** The published text is `Draft.post_text`
 (caption + hashtags). Keep hashtags in the `hashtags` field, not the caption.

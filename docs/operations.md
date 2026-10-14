@@ -121,7 +121,7 @@ above that window so a slow post is not killed mid-flight.
 | `data/review/queue.json` | The review queue. |
 | `data/review/seen.json` | Dedupe ledger (`source:slug`). |
 | `data/publish/published.jsonl` | Publish audit log. |
-| `data/state.json` | Last refresh/scan run and whether posting is paused (so the dashboard and the pause survive a restart). |
+| `data/state.json` | Last refresh/scan run, whether posting is paused, and each destination's last-run posting slot (so a restart neither resumes a pause nor re-fires a slot that already ran). |
 
 Ownership: the container writes as **uid 1000** by default — the same as a
 typical host user — so `./data` needs no chown and the CLI run as your host user

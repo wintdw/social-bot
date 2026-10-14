@@ -43,7 +43,7 @@ src/social_bot/
 │   ├── base.py       #   Publisher / AccountReader contracts, PublishResult, DestinationError
 │   ├── registry.py   #   PUBLISHERS / READERS, publisher_for(), reader_for(), describe_all()
 │   ├── facebook/     #   api.py (urllib Graph client), publisher.py, reader.py, feed.py, feed_html.py
-│   └── linkedin/     #   publisher.py (posts via linkin-bot's POST /post gateway; text + image)
+│   └── linkedin/     #   publisher.py (linkin-bot POST /post gateway; text + image + URL as first comment)
 └── __init__.py
 ```
 
@@ -121,6 +121,13 @@ Captions are written **by the operator in Claude**. The operator pastes the capt
   `published` date the scanner can't parse is kept, not dropped — an `index`
   item has none until enrichment, and an undated post can't be shown old.
 - **Idea seeds are a separate input from `sources[]`.** A source is a feed to *repost* (URL, fetch, author credit); an idea is a *system to write about* (`ideas.topics_file`), and the post is **original**. Nothing is fetched and nothing generates ideas: the operator writes each one in Claude and queues it by hand with `blog add-idea`. Ideas dedupe by title slug against `data/ideas/seen.json`, carry no `url` and no source image, so no source-credit line and no "đọc đầy đủ tại comment" CTA apply.
+- **The source link rides as the new post's first comment, per platform.** A
+  Facebook post comments `draft.url` right after `create_post` (`add_comment`,
+  a few seconds later for Graph propagation); a LinkedIn draft sends the same URL
+  to linkin-bot as the gateway's `comment` field, which types it into the new post
+  as the same Page. That is why the caption's CTA says the link is in the comment:
+  the body carries no URL (an outbound link is deprioritized). An idea draft has
+  no `url`, so nothing is commented.
 - **Photo posts upload the image bytes** (a multipart `source` part); they are
   never a `url` for Graph to fetch — a remote host may not serve the file to
   Graph at all. Images live locally under the served `/images/` dir
@@ -189,6 +196,20 @@ Captions are written **by the operator in Claude**. The operator pastes the capt
   private send deliberately
   leaves the draft in the queue, `publish_scheduled` also skips a draft already
   sent privately that day (otherwise it would re-post every slot).
+- **A slot only fires on its own day — never a stale one.** The posting loop
+  sleeps until the **union** of every destination's slots (`post_times`), then
+  asks which are due. A destination's slot is due only if its occurrence is
+  *today* (`web.due_slot`; `current_slot` is the refresh/scan variant and does
+  fall back to yesterday) **and** it differs from that destination's marker in
+  `state["post_slot"]`. The loop **seeds those markers at startup** (`{name:
+  due_slot(slots)}`) and they are **persisted in `data/state.json`** (`post.slot`,
+  written after every post run), so a restart can neither re-fire a slot that
+  already ran today nor fire a slot that passed before it started. Regression
+  (Oct 2026): a 14:25 LinkedIn wake also fired **Facebook**, logging
+  `scheduled 2026-10-13 20:12 facebook` — Facebook's *previous-day* slot, because
+  `current_slot` returned the most recent occurrence from any day and the empty
+  `post_slot` map let it through. Never replace `due_slot` with `current_slot` in
+  the poster loop, and never drop the startup seeding.
 - **The interval paces the machine, never a person.** `publish.interval_days` is
   about the unattended poster, so a **manual** send — a draft's **Post now** on
   `/review/{id}`, or a platform button on `/queue`; `web.py` passes

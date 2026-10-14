@@ -11,6 +11,12 @@ A draft with an image uploads the bytes here (``media.load`` — the same store 
 Facebook publisher uses) and hands them to the gateway as base64; the gateway
 runs LinkedIn's image register-then-PUT flow and attaches the result as media, so
 this adapter still holds no token and speaks no LinkedIn API.
+
+A draft with a source URL sends it as the post's **first comment** (the gateway's
+``comment`` field, typed into the new post right after it goes out, as the same
+Page) — the caption's CTA points at the link ("đọc bài gốc ở comment"), and the
+feed deprioritizes a post carrying an outbound link. Same reason the Facebook
+publisher comments the link (see ``facebook/publisher.py``).
 """
 
 from __future__ import annotations
@@ -68,6 +74,15 @@ class LinkedInPublisher(Publisher):
         if not text.strip() and not draft.image:
             raise PublisherError("linkedin: draft has no caption or image to post")
         payload: dict[str, str] = {"text": text, "visibility": self.visibility()}
+        if draft.url:
+            # The source link rides as the new post's **first comment**: the
+            # gateway types it into the post right after publishing, as the same
+            # Page. Keeping it out of the caption is deliberate — the caption's
+            # CTA says the link is in the comment, and a post carrying an outbound
+            # link is deprioritized by the feed (the reason Facebook comments the
+            # link too). A comment that fails does not fail the post: the gateway
+            # returns ok with commented=false, so the draft is still recorded sent.
+            payload["comment"] = draft.url
         if draft.image:
             # Upload the bytes; the gateway attaches them as the post's media. A
             # local image is read from disk, a remote source cover downloaded here.

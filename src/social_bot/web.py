@@ -189,6 +189,55 @@ def current_slot(times: list[str], now: dt.datetime | None = None) -> str | None
     return latest.strftime("%Y-%m-%d %H:%M") if latest else None
 
 
+def due_slot(times: list[str], now: dt.datetime | None = None) -> str | None:
+    """Today's most recent scheduled occurrence at/before now, else None.
+
+    Like ``current_slot`` but it never falls back to a previous day: a slot is
+    only *due* on the calendar day it is scheduled for. The poster wakes on the
+    **union** of every destination's slots (``post_times``), so a wake for one
+    destination must not fire another whose slot time is still ahead — with
+    ``current_slot`` that destination would report *yesterday's* occurrence and
+    run hours late (the Oct 2026 bug: a 14:25 LinkedIn wake posted Facebook's
+    stale 20:12 slot). ``current_slot`` is still right for the refresh/scan
+    loops, whose slots are single fixed times and whose wake *is* the slot.
+    """
+    now = now or dt.datetime.now()
+    latest: dt.datetime | None = None
+    for hhmm in times:
+        occurrence = _slot_time(hhmm, now.date())
+        if occurrence > now:
+            continue
+        if latest is None or occurrence > latest:
+            latest = occurrence
+    return latest.strftime("%Y-%m-%d %H:%M") if latest else None
+
+
+def due_destinations(
+    post_schedule: dict[str, list[str]],
+    post_slot: dict[str, str | None],
+    now: dt.datetime | None = None,
+) -> list[tuple[str, str]]:
+    """The destinations whose slot is due now and hasn't run, as (name, slot).
+
+    The posting loop's per-wake decision, kept pure so it is testable: each
+    destination's `due_slot` (today only), minus the markers in `post_slot`.
+    Sorted by name so firing order is deterministic (two destinations sharing a
+    slot both fire). The loop records each returned marker before sending, so a
+    destination fires once per slot.
+    """
+    now = now or dt.datetime.now()
+    due: list[tuple[str, str]] = []
+    for name, slots in post_schedule.items():
+        if not slots:
+            continue
+        slot = due_slot(slots, now)
+        if slot is None or post_slot.get(name) == slot:
+            continue
+        due.append((name, slot))
+    due.sort()
+    return due
+
+
 def _iso(value: dt.datetime | None) -> str | None:
     return value.strftime("%Y-%m-%d %H:%M:%S") if value else None
 
@@ -248,8 +297,15 @@ def runtime_state_snapshot(state: dict) -> dict:
             "added": state.get("last_added"),
         },
         # The pause survives a restart: a deploy must not silently resume a
-        # posting hold an operator set on purpose.
-        "post": {"paused": bool(state.get("post_paused"))},
+        # posting hold an operator set on purpose. The per-destination slot
+        # markers (`name -> "YYYY-MM-DD HH:MM"`, or None) are kept too, so a
+        # restart cannot re-fire a slot that already ran today — the loop also
+        # seeds these at startup (see `_posting_loop`), but persisting them
+        # keeps the guard durable across any restart timing.
+        "post": {
+            "paused": bool(state.get("post_paused")),
+            "slot": {str(k): v for k, v in (state.get("post_slot") or {}).items()},
+        },
     }
 
 
@@ -272,6 +328,12 @@ def apply_runtime_state(state: dict, data: dict) -> None:
     state["last_added"] = scan.get("added")
     post = data.get("post") or {}
     state["post_paused"] = bool(post.get("paused"))
+    slots = post.get("slot")
+    if isinstance(slots, dict):
+        value = {}
+        for name, marker in slots.items():
+            value[str(name)] = None if marker is None else str(marker)
+        state["post_slot"] = value
 
 
 def _read_state_file(path: pathlib.Path) -> dict:
@@ -662,6 +724,7 @@ def create_app(
             finally:
                 state["post_finished"] = dt.datetime.now()
                 state["post_busy"] = False
+        _persist_state()  # durable slot markers, so a restart can't re-fire a slot
         # A post lands in the feed, so refresh the cache right away instead of
         # waiting for the next --refresh-at slot: the dashboard shows it now.
         if posted and not state["shutting_down"]:
@@ -679,14 +742,18 @@ def create_app(
             f"[web] poster up: next wake {next_run_at(post_times):%Y-%m-%d %H:%M}",
             flush=True,
         )
+        # Seed the past slots as already-consumed before the first wake. The
+        # loop wakes on the union of every destination's slots, so without this
+        # a wake for one destination would fire every other destination whose
+        # slot marker is stale — and `due_slot` only ever returns *today's*
+        # occurrence, so a slot that already passed (or yesterday's) can never
+        # fire late. Mirrors the refresh/scan loops' startup seeding.
+        state["post_slot"] = {
+            name: due_slot(slots) for name, slots in post_schedule.items() if slots
+        }
         while True:
             await asyncio.sleep(seconds_until_any(post_times))
-            for name, slots in post_schedule.items():
-                if not slots:
-                    continue
-                slot = current_slot(slots)
-                if slot is None or state["post_slot"].get(name) == slot:
-                    continue  # this slot already ran (manual or a restart)
+            for name, slot in due_destinations(post_schedule, state["post_slot"]):
                 state["post_slot"][name] = slot
                 if state["post_paused"]:
                     # Paused: consume the slot anyway, so resuming posts from the
@@ -1076,7 +1143,7 @@ def create_app(
                 {"started": False, "reason": "posting already running"}, status_code=409
             )
         state["post_slot"] = {
-            name: current_slot(slots) for name, slots in post_schedule.items() if slots
+            name: due_slot(slots) for name, slots in post_schedule.items() if slots
         }
         _spawn(_post_job("manual"))
         if wants_html:

@@ -30,6 +30,10 @@ destinations:
     # gone out was reported as failed.
     timeout_seconds: 120.0
     visibility: PUBLIC         # PUBLIC | CONNECTIONS
+    # No comment setting: a draft with a source URL always has that link posted as
+    # the new post's first comment (the caption's CTA says the link is in the
+    # comment, and the feed deprioritizes posts with outbound links) — same as
+    # facebook. The gateway reports a failed comment without failing the post.
 
 feed:
   limit: 10            # default number of feed posts shown by `feed`

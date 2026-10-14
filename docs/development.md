@@ -104,7 +104,8 @@ Everything platform-specific lives in one package; the core never changes.
 4. Test the field mapping in `tests/test_publishers.py` with a fake transport;
    registry/config behaviour in `tests/test_destinations.py`.
 5. `linkedin/publisher.py` shows the delegate shape: it holds no token and calls
-   linkin-bot's `POST /post` gateway (text + optional image as base64) instead of
+   linkin-bot's `POST /post` gateway (text + optional image as base64 + the source
+   link, which the gateway posts as the new post's first comment) instead of
    the platform API. A destination that talks to the platform directly needs its
    own OAuth (LinkedIn: `w_member_social` for a profile, partner approval for a
    company page, and `POST https://api.linkedin.com/rest/posts`).
@@ -118,7 +119,9 @@ handlers' string annotations (e.g. `Request`). Mirror `/refresh` for
 fire-and-forget jobs (409 when busy) and `/scan`/`/publish/run` for the
 browser-vs-JSON response pattern. A new scheduled loop belongs in
 `create_app` beside `_scheduler_loop`/`_scanner_loop`/`_posting_loop`, keyed on a
-pure `HH:MM` helper + a `current_slot` dedupe.
+pure `HH:MM` helper + a `current_slot` dedupe (the poster uses `due_slot` +
+`due_destinations` instead, so a wake for one destination never fires another's
+slot — even yesterday's).
 
 ## Exit codes
 
