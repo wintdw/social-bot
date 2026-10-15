@@ -451,7 +451,12 @@ def _stepper(draft: Draft) -> str:
         elif key == "ai_draft" and draft.state == "ai_draft":
             note = "caption written · waiting on you"
         elif key == "posted" and draft.post_id:
-            note = draft.permalink or draft.post_id
+            if "facebook" in draft.posted_destinations():
+                note = draft.permalink or draft.post_id
+            else:
+                # The primary post is LinkedIn, whose URL is a read-back
+                # guess — don't present it as the post's link.
+                note = "posted"
         rows.append(
             f'<div class="{cls}"><span class="step-dot" aria-hidden="true">{mark}</span>'
             f'<span class="step-name">{html.escape(label)}'
@@ -723,6 +728,10 @@ def render_draft_html(
     posted_lines: list[str] = []
     for name, record in draft.posts.items():
         if record.get("private"):
+            continue
+        if name == "linkedin":
+            # LinkedIn's URL is a read-back guess, not the post's link.
+            posted_lines.append(f"Already posted to {html.escape(label_for(name))}.")
             continue
         link = str(record.get("permalink") or record.get("post_id") or "")
         posted_lines.append(

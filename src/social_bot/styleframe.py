@@ -170,7 +170,9 @@ _LINKEDIN = {
     "error": "",
     "status": "ok",
     "connected": True,
-    "oauth_summary": "oauth token: expires 2026-12-12 10:39 (59 day(s) left)",
+    "session_summary": "session: saved 2026-09-10 13:42 (20 cookie(s))",
+    "session_check": "ok (follow run reached LinkedIn, 2026-09-10T10:00:23)",
+    "page_url": "https://www.linkedin.com/company/125004230/admin/page-posts/published/",
     "kill_switch": False,
     "caps": [
         {

@@ -39,8 +39,9 @@ DEFAULTS: dict[str, Any] = {
             "token": "",  # populated by credentials.yaml (git-ignored)
         },
         "linkedin": {
-            # linkin-bot (a sibling service) owns the LinkedIn OAuth token and
-            # talks to LinkedIn; this app posts through its POST /post gateway.
+            # linkin-bot (a sibling service) owns the LinkedIn session
+            # (browser cookies) and talks to LinkedIn; this app posts through
+            # its POST /post gateway.
             # A draft with a source URL sends it as the `comment` field too: the
             # gateway types it into the new post right after publishing, as the
             # same Page (the caption's CTA points at the comment).

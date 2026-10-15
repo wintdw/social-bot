@@ -369,7 +369,9 @@ class TestRenderDraftHtml:
         )
         out = render_draft_html(draft)
         assert "Already posted to Facebook: https://x/fb" in out
-        assert "Already posted to LinkedIn: https://x/li" in out
+        assert "Already posted to LinkedIn." in out
+        assert "https://x/li" not in out
+        assert "li1" not in out
 
     def test_private_action_is_labelled_private(self):
         out = render_draft_html(Draft(id="p", title="T", caption="Hi"), private=True)

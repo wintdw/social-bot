@@ -1,10 +1,10 @@
 """LinkedIn gateway status — read linkin-bot's ``GET /status`` for the UI.
 
-linkin-bot (a sibling service) owns the LinkedIn OAuth token and the posting
-schedules; this app only posts through its ``POST /post`` gateway. Its
-``GET /status`` is the operator's view into that side: OAuth connectivity,
-daily/weekly caps, schedules, and recent flow runs. This module fetches and
-summarizes it so ``/status`` (and ``/api/status``) can display it.
+linkin-bot (a sibling service) owns the LinkedIn session (browser cookies) and
+the posting schedules; this app only posts through its ``POST /post`` gateway.
+Its ``GET /status`` is the operator's view into that side: session
+connectivity, daily/weekly caps, schedules, and recent flow runs. This module
+fetches and summarizes it so ``/status`` (and ``/api/status``) can display it.
 
 Network stays in ``fetch_payload``; ``summarize`` is pure (no network, no
 config) so it is testable without the gateway. ``get_status`` never raises —
@@ -79,9 +79,16 @@ def summarize(payload: dict) -> dict:
     Tolerant by design: linkin-bot owns this schema and may add keys, so every
     lookup has a default and an unexpected shape yields ``None``/``""`` rather
     than a ``KeyError``.
+
+    Connectivity comes from the ``session`` object (linkin-bot logs in with
+    browser cookies, not OAuth): ``present`` plus ``has_li_at`` (the auth
+    cookie). An old gateway may still send ``oauth`` instead — that is kept as
+    a fallback so either shape renders.
     """
     payload = payload if isinstance(payload, dict) else {}
     oauth = payload.get("oauth") if isinstance(payload.get("oauth"), dict) else {}
+    session = payload.get("session") if isinstance(payload.get("session"), dict) else {}
+    posts = payload.get("posts") if isinstance(payload.get("posts"), dict) else {}
     caps = payload.get("caps") if isinstance(payload.get("caps"), dict) else {}
     schedule = payload.get("schedule") if isinstance(payload.get("schedule"), dict) else {}
     next_run = payload.get("next_run") if isinstance(payload.get("next_run"), dict) else {}
@@ -106,10 +113,43 @@ def summarize(payload: dict) -> dict:
             return [str(item) for item in value]
         return [str(value)] if value else []
 
+    if session:
+        present = session.get("present")
+        has_li_at = session.get("has_li_at")
+        if present is False or has_li_at is False:
+            connected: bool | None = False
+        elif present is True:
+            connected = True
+        elif isinstance(oauth.get("connected"), bool):
+            connected = oauth.get("connected")
+        else:
+            connected = None
+        session_summary = str(session.get("summary") or "")
+        if not session_summary and isinstance(present, bool):
+            session_summary = (
+                "session: present" if present else "session: missing — re-login linkin-bot"
+            )
+        check = session.get("last_check") if isinstance(session.get("last_check"), dict) else {}
+        check_ok = check.get("ok")
+        state = "ok" if check_ok is True else ("failed" if check_ok is False else "")
+        detail = str(check.get("detail") or "")
+        at = str(check.get("at") or "")
+        joined = ", ".join(part for part in (detail, at) if part)
+        session_check = f"{state} ({joined})" if state and joined else (state or joined)
+    else:
+        connected = oauth.get("connected") if isinstance(oauth.get("connected"), bool) else None
+        session_summary = ""
+        session_check = ""
+
     return {
         "status": str(payload.get("status") or ""),
-        "connected": oauth.get("connected") if isinstance(oauth.get("connected"), bool) else None,
+        "connected": connected,
+        # Legacy key from the OAuth-shaped payload; new gateways send
+        # ``session`` instead, surfaced as ``session_summary`` below.
         "oauth_summary": str(oauth.get("summary") or ""),
+        "session_summary": session_summary,
+        "session_check": session_check,
+        "page_url": str(posts.get("page_url") or ""),
         "kill_switch": bool(payload.get("kill_switch", False)),
         "caps": cap_rows,
         "schedule": {str(k): _str_list(v) for k, v in schedule.items()},

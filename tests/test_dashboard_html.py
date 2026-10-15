@@ -403,6 +403,26 @@ class TestPublish:
         out = render_publish_html(RECORDS, generated_at=GENERATED)
         assert "122131563729359840" not in out
 
+    def test_linkedin_permalink_is_not_shown(self):
+        # LinkedIn's URL is a read-back guess, not the post's link.
+        out = render_publish_html(
+            [
+                {
+                    "id": "c",
+                    "source": "atento-blog",
+                    "url": "",
+                    "destination": "linkedin",
+                    "post_id": "urn:li:activity:123",
+                    "permalink": "https://www.linkedin.com/feed/update/urn:li:activity:123/",
+                    "posted_at": "2026-09-11T10:00:00+00:00",
+                }
+            ],
+            generated_at=GENERATED,
+        )
+        assert "linkedin.com" not in out
+        assert "urn:li:activity:123" not in out
+        assert "posted" in out
+
     def test_empty(self):
         out = render_publish_html([], generated_at=GENERATED)
         assert "Nothing published yet." in out

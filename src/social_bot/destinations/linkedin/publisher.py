@@ -1,9 +1,9 @@
 """LinkedIn destination — publishes through linkin-bot's ``POST /post`` gateway.
 
-linkin-bot (a separate sibling service) owns the LinkedIn OAuth token and is the
-only thing that talks to LinkedIn's Posts API. This adapter therefore holds no
-token and knows nothing about OAuth: it makes one HTTP call to linkin-bot, which
-posts as the connected member. Point ``destinations.linkedin.base_url`` at that
+linkin-bot (a separate sibling service) owns the LinkedIn session (browser
+cookies) and is the only thing that talks to LinkedIn. This adapter therefore
+holds no token and knows nothing about login: it makes one HTTP call to
+linkin-bot, which posts as the connected member. Point ``destinations.linkedin.base_url`` at that
 gateway (internal network — linkin-bot is not exposed publicly), e.g.
 ``http://host.docker.internal:8082``.
 

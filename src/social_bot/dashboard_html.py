@@ -228,11 +228,20 @@ def _linkedin_section(linkedin: dict | None) -> str:
         state = badge("invalid")
     else:
         state = badge("unknown")
-    summary = str(linkedin.get("oauth_summary") or "—")
+    summary = str(linkedin.get("session_summary") or linkedin.get("oauth_summary") or "—")
     kill = "on" if linkedin.get("kill_switch") else "off"
     rows = [
         ("Status", state),
-        ("OAuth", html.escape(summary)),
+        ("Session", html.escape(summary)),
+    ]
+    check = str(linkedin.get("session_check") or "")
+    if check:
+        rows.append(("Session check", html.escape(check)))
+    page_url = str(linkedin.get("page_url") or "")
+    if page_url:
+        link = f'<a href="{html.escape(page_url)}">{html.escape(page_url)}</a>'
+        rows.append(("Page posts", link))
+    rows += [
         ("Kill switch", html.escape(kill)),
         ("Checked", html.escape(checked or "—")),
     ]
@@ -862,17 +871,26 @@ def render_publish_html(
         source_cell = html.escape(source)
         if url:
             source_cell = f'<a href="{html.escape(url)}">{html.escape(source)}</a>'
+        destination = str(record.get("destination", "") or "")
         permalink = str(record.get("permalink", "") or "")
-        # A send with no feed story (e.g. a photo upload) returns no post —
-        # show no link rather than a bare id.
-        post_cell = (
-            f'<a href="{html.escape(permalink)}">{html.escape(permalink)}</a>' if permalink else ""
-        )
+        if destination == "linkedin":
+            # LinkedIn's post URL is a read-back guess from the Page's posts
+            # list, not the created post's id — it repeatedly points at the
+            # same old post. Don't present it as the post's link.
+            post_cell = '<span class="muted">posted</span>'
+        else:
+            # A send with no feed story (e.g. a photo upload) returns no post —
+            # show no link rather than a bare id.
+            post_cell = (
+                f'<a href="{html.escape(permalink)}">{html.escape(permalink)}</a>'
+                if permalink
+                else ""
+            )
         rows.append(
             [
                 html.escape(str(record.get("posted_at", "") or "")),
                 source_cell,
-                html.escape(str(record.get("destination", "") or "")),
+                html.escape(destination),
                 post_cell,
             ]
         )

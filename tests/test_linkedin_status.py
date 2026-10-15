@@ -92,6 +92,42 @@ class TestSummarize:
     def test_status_url(self):
         assert li_status.status_url(_cfg()) == "http://localhost:8082/status"
 
+    def test_session_payload_marks_connected(self):
+        out = li_status.summarize(
+            {
+                "status": "ok",
+                "session": {
+                    "present": True,
+                    "has_li_at": True,
+                    "summary": "session: saved 2026-10-13 13:42 (2.1 day(s) ago, 20 cookie(s))",
+                    "last_check": {
+                        "at": "2026-10-15T10:00:23",
+                        "ok": True,
+                        "detail": "follow run reached LinkedIn",
+                    },
+                },
+                "posts": {"page_url": "https://www.linkedin.com/company/1/admin/page-posts/"},
+            }
+        )
+        assert out["connected"] is True
+        assert "20 cookie(s)" in out["session_summary"]
+        assert "follow run reached LinkedIn" in out["session_check"]
+        assert out["page_url"].startswith("https://www.linkedin.com/")
+
+    def test_missing_session_marks_disconnected(self):
+        out = li_status.summarize({"session": {"present": False, "has_li_at": False}})
+        assert out["connected"] is False
+
+    def test_session_without_auth_cookie_marks_disconnected(self):
+        out = li_status.summarize({"session": {"present": True, "has_li_at": False}})
+        assert out["connected"] is False
+
+    def test_oauth_fallback_without_session(self):
+        out = li_status.summarize({"oauth": {"connected": True, "summary": "oauth token: x"}})
+        assert out["connected"] is True
+        assert out["oauth_summary"] == "oauth token: x"
+        assert out["session_summary"] == ""
+
 
 class TestSection:
     def _out(self, linkedin):
@@ -128,6 +164,39 @@ class TestSection:
         )
         assert "LinkedIn" in out
         assert "<boom>" not in out and "&lt;boom&gt;" in out
+
+    def test_session_panel(self, monkeypatch):
+        session_payload = {
+            "status": "ok",
+            "kill_switch": False,
+            "session": {
+                "present": True,
+                "has_li_at": True,
+                "summary": "session: saved 2026-10-13 13:42 (2.1 day(s) ago, 20 cookie(s))",
+                "last_check": {
+                    "at": "2026-10-15T10:00:23",
+                    "ok": True,
+                    "detail": "follow run reached LinkedIn",
+                },
+            },
+            "posts": {"page_url": "https://www.linkedin.com/company/1/admin/page-posts/"},
+            "caps": {
+                "follow": {"sent_today": 0, "day_remaining": 10, "week_remaining": 50},
+            },
+            "schedule": {"follow": ["10:00"]},
+            "next_run": {"follow": "2026-10-16 10:00"},
+        }
+        monkeypatch.setattr(
+            li_status.urllib.request,
+            "urlopen",
+            lambda req, timeout=None: _FakeResponse(session_payload),
+        )
+        out = self._out(linkedin_status(_cfg()))
+        assert "badge-valid" in out
+        assert "20 cookie(s)" in out
+        assert "follow run reached LinkedIn" in out
+        assert "linkedin.com" in out
+        assert "OAuth" not in out
 
     def test_none_renders_no_panel(self):
         out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
