@@ -91,6 +91,11 @@ DEFAULTS: dict[str, Any] = {
         # destination not listed here uses `post_at`. Each destination has its own
         # slots and its own interval_days pacing.
         "destination_post_at": {},
+        # Per-destination days the scheduled poster skips, e.g.
+        # {"linkedin": ["Sat", "Sun"]}. Weekday names (short or full,
+        # case-insensitive) or ints 0 (Mon) .. 6 (Sun). Only the unattended
+        # poster obeys it — a manual send still goes out any day.
+        "destination_skip_days": {},
         "post_per_slot": 1,
         # Minimum days between *scheduled* public posts (0 = no minimum).
         # Enforced by publish_draft on the unattended drain, so it paces the
@@ -219,6 +224,51 @@ def _check_post_slots(slots, field: str) -> None:
             _hhmm_minutes(text, field)
 
 
+# Weekday numbers follow datetime.weekday(): Monday is 0, Sunday is 6.
+WEEKDAY_NUMBERS = {
+    "mon": 0,
+    "monday": 0,
+    "tue": 1,
+    "tues": 1,
+    "tuesday": 1,
+    "wed": 2,
+    "wednesday": 2,
+    "thu": 3,
+    "thur": 3,
+    "thurs": 3,
+    "thursday": 3,
+    "fri": 4,
+    "friday": 4,
+    "sat": 5,
+    "saturday": 5,
+    "sun": 6,
+    "sunday": 6,
+}
+
+WEEKDAY_SHORT = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+
+def parse_skip_day(value, field: str) -> int:
+    """Parse one destination_skip_days entry into a weekday number (Mon=0..Sun=6)."""
+    if isinstance(value, bool):
+        raise ValueError(f"config: {field} has invalid weekday {value!r}")
+    if isinstance(value, int):
+        if 0 <= value <= 6:
+            return value
+        raise ValueError(f"config: {field} has invalid weekday {value!r} (want 0=Mon..6=Sun)")
+    number = WEEKDAY_NUMBERS.get(str(value).strip().lower())
+    if number is None:
+        raise ValueError(f"config: {field} has invalid weekday {value!r}")
+    return number
+
+
+def normalize_skip_days(values, field: str) -> set[int]:
+    """Parse a destination_skip_days list into a set of weekday numbers."""
+    if not isinstance(values, list):
+        raise ValueError(f"config: {field} must be a list of weekdays")
+    return {parse_skip_day(value, field) for value in values}
+
+
 def validate(cfg: dict) -> None:
     """Raise ValueError on obviously unusable configuration."""
     # Imported here (not at module scope) to avoid a config <-> destinations
@@ -268,6 +318,13 @@ def validate(cfg: dict) -> None:
         if name not in known:
             raise ValueError(f"config: unknown publish.destination_post_at destination {name!r}")
         _check_post_slots(slots, f"publish.destination_post_at.{name}")
+    skip_days = publish.get("destination_skip_days", {})
+    if not isinstance(skip_days, dict):
+        raise ValueError("config: publish.destination_skip_days must map destination -> weekdays")
+    for name, days in skip_days.items():
+        if name not in known:
+            raise ValueError(f"config: unknown publish.destination_skip_days destination {name!r}")
+        normalize_skip_days(days, f"publish.destination_skip_days.{name}")
 
     blog = cfg.get("blog", {})
     if float(blog.get("timeout_seconds", 30)) <= 0:

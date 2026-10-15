@@ -1884,3 +1884,20 @@ class TestPerDestinationSchedule:
         )
         assert pipeline.interval_remaining(cfg, "facebook") == 1
         assert pipeline.interval_remaining(cfg, "linkedin") == 0
+
+
+class TestDestinationSkipDays:
+    def test_names_parse_to_weekday_numbers(self):
+        cfg = {"publish": {"destination_skip_days": {"linkedin": ["Sat", "Sunday", 0]}}}
+        assert pipeline.destination_skip_days(cfg) == {"linkedin": {0, 5, 6}}
+
+    def test_empty_without_config(self):
+        assert pipeline.destination_skip_days({"publish": {}}) == {}
+
+    def test_skips_only_the_configured_day(self):
+        cfg = {"publish": {"destination_skip_days": {"linkedin": ["Sat", "Sun"]}}}
+        saturday = dt.date(2026, 10, 17)  # a Saturday
+        monday = dt.date(2026, 10, 19)  # a Monday
+        assert pipeline.destination_skips_day(cfg, "linkedin", saturday) is True
+        assert pipeline.destination_skips_day(cfg, "linkedin", monday) is False
+        assert pipeline.destination_skips_day(cfg, "facebook", saturday) is False

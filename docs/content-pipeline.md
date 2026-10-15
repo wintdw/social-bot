@@ -271,6 +271,12 @@ human approval.
   interval in both directions: never refused by it, never counted toward it, so
   a hand-made post can't hold the queue back (`publish_draft(..., manual=True)`,
   audited as `"manual": true`). The built-in default is `0` (no minimum).
+- `publish.destination_skip_days` holds back the scheduled poster on given
+  weekdays per destination (e.g. `linkedin: ["Sat", "Sun"]` — LinkedIn is a work
+  network, so no unattended weekend posts; Facebook still fires). Like the pause,
+  it only affects the unattended poster: manual sends go out any day, and the
+  dashboard **Next post** card walks past skipped days to the first slot that can
+  actually send.
 - The next send is knowable ahead of time: `status()` sets
   `publish.next_draft` (the first draft in posting order — exactly what
   `publish_scheduled` drains first), plus `publish.approved` and

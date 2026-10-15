@@ -103,10 +103,30 @@ def _next_draft_label(publish: dict) -> str:
 
 
 def _post_at_label(publish: dict) -> str:
-    """The posting slots per destination ('facebook 20:00-20:30 · linkedin 14:00-14:30')."""
+    """The posting slots per destination ('facebook 20:00-20:30 · linkedin 14:00-14:30').
+
+    A destination with skip days appends them ('linkedin 14:00-14:30 skips Sat, Sun'),
+    so the operator sees the weekend hold on the schedule row itself.
+    """
     schedule = (publish or {}).get("destination_post_at") or {}
+    skips = (publish or {}).get("destination_skip_days") or {}
     if schedule:
-        return " · ".join(f"{name} {', '.join(slots)}" for name, slots in schedule.items() if slots)
+        parts = []
+        for name, slots in schedule.items():
+            if not slots:
+                continue
+            text = f"{name} {', '.join(slots)}"
+            days = skips.get(name) or []
+            labels = []
+            for day in days:
+                try:
+                    labels.append(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")[int(day)])
+                except (ValueError, TypeError, IndexError):
+                    labels.append(str(day))
+            if labels:
+                text += f" (skips {', '.join(labels)})"
+            parts.append(text)
+        return " · ".join(parts)
     return ", ".join((publish or {}).get("post_at", []) or [])
 
 

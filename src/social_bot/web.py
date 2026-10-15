@@ -158,22 +158,39 @@ def next_post_at(
     *,
     interval_remaining: int = 0,
     now: dt.datetime | None = None,
+    skip: set[int] | frozenset[int] | None = None,
 ) -> dt.datetime | None:
     """The first slot that can actually post, honoring ``publish.interval_days``.
 
     The scheduler wakes at every slot, but the interval gate makes it skip the
     ones before the gap has elapsed — so the next *wake* is often not the next
     *post*. ``interval_remaining`` days out is the first day the gate lifts, and
-    that day's earliest slot is the one that sends. None when there is no
-    schedule.
+    that day's earliest slot is the one that sends. ``skip`` holds weekday
+    numbers (Mon=0..Sun=6, see ``publish.destination_skip_days``) the poster
+    stays silent on — those days are walked past, up to two weeks out. None
+    when there is no schedule.
     """
     if not times:
         return None
     now = now or dt.datetime.now()
+    skipped = set(skip or ())
+
+    def _earliest_on(day: dt.date) -> dt.datetime:
+        return min(_slot_time(slot, day) for slot in times)
+
     if interval_remaining <= 0:
-        return next_run_at(times, now)
-    day = now.date() + dt.timedelta(days=int(interval_remaining))
-    return min(_slot_time(slot, day) for slot in times)
+        wake = next_run_at(times, now)
+        if wake.date().weekday() not in skipped:
+            return wake
+        start = wake.date()
+    else:
+        start = now.date() + dt.timedelta(days=int(interval_remaining))
+    for offset in range(15):
+        day = start + dt.timedelta(days=offset)
+        if day.weekday() in skipped:
+            continue
+        return _earliest_on(day)
+    return None
 
 
 def current_slot(times: list[str], now: dt.datetime | None = None) -> str | None:
@@ -216,19 +233,25 @@ def due_destinations(
     post_schedule: dict[str, list[str]],
     post_slot: dict[str, str | None],
     now: dt.datetime | None = None,
+    skip_days: dict[str, set[int] | frozenset[int]] | None = None,
 ) -> list[tuple[str, str]]:
     """The destinations whose slot is due now and hasn't run, as (name, slot).
 
     The posting loop's per-wake decision, kept pure so it is testable: each
-    destination's `due_slot` (today only), minus the markers in `post_slot`.
+    destination's `due_slot` (today only), minus the markers in `post_slot`,
+    minus any destination whose weekday is in `skip_days`
+    (`publish.destination_skip_days` — the poster stays silent there).
     Sorted by name so firing order is deterministic (two destinations sharing a
     slot both fire). The loop records each returned marker before sending, so a
     destination fires once per slot.
     """
     now = now or dt.datetime.now()
+    skipped = skip_days or {}
     due: list[tuple[str, str]] = []
     for name, slots in post_schedule.items():
         if not slots:
+            continue
+        if now.weekday() in set(skipped.get(name) or ()):
             continue
         slot = due_slot(slots, now)
         if slot is None or post_slot.get(name) == slot:
@@ -732,10 +755,20 @@ def create_app(
 
     async def _posting_loop() -> None:
         await asyncio.sleep(1)  # let the server bind
+        skip_map = pipeline.destination_skip_days(cfg)
         for name, slots in post_schedule.items():
             if slots:
+                skipped = skip_map.get(name) or set()
+                suffix = ""
+                if skipped:
+                    names = ", ".join(
+                        day
+                        for n, day in enumerate(("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"))
+                        if n in skipped
+                    )
+                    suffix = f" (skips {names})"
                 print(
-                    f"[web] poster up: {name} post at {', '.join(slots)} container-local",
+                    f"[web] poster up: {name} post at {', '.join(slots)} container-local{suffix}",
                     flush=True,
                 )
         print(
@@ -753,7 +786,9 @@ def create_app(
         }
         while True:
             await asyncio.sleep(seconds_until_any(post_times))
-            for name, slot in due_destinations(post_schedule, state["post_slot"]):
+            for name, slot in due_destinations(
+                post_schedule, state["post_slot"], skip_days=skip_map
+            ):
                 state["post_slot"][name] = slot
                 if state["post_paused"]:
                     # Paused: consume the slot anyway, so resuming posts from the
@@ -874,11 +909,17 @@ def create_app(
 
     def _post_runtime() -> dict:
         # `next` is the next scheduler wake; `next_post` is the slot that can
-        # actually send (the interval gate may skip several wakes first).
-        # Each destination paces its own slots, so the next post is the earliest
-        # of the per-destination first sendable slots.
+        # actually send (the interval gate may skip several wakes first, and a
+        # destination's skip days stay silent). Each destination paces its own
+        # slots, so the next post is the earliest of the per-destination first
+        # sendable slots.
+        skip_map = pipeline.destination_skip_days(cfg)
         candidates = [
-            next_post_at(slots, interval_remaining=pipeline.interval_remaining(cfg, name))
+            next_post_at(
+                slots,
+                interval_remaining=pipeline.interval_remaining(cfg, name),
+                skip=skip_map.get(name, set()),
+            )
             for name, slots in post_schedule.items()
             if slots
         ]
@@ -892,6 +933,9 @@ def create_app(
             "last_finished": _iso(state["post_finished"]),
             "schedule": post_times,
             "destination_schedule": {name: slots for name, slots in post_schedule.items() if slots},
+            "destination_skip_days": {
+                name: sorted(days) for name, days in skip_map.items() if days
+            },
             "paused": state["post_paused"],
             "next": next_run_at(post_times).strftime("%Y-%m-%d %H:%M") if post_times else "",
             "next_post": next_post.strftime("%Y-%m-%d %H:%M") if next_post else "",

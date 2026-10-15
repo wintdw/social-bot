@@ -15,7 +15,7 @@ from . import ideas as idea_seeds
 from . import media
 from .caption import display_title
 from .caption_lint import lint_caption
-from .config import ROOT, load_config
+from .config import ROOT, load_config, normalize_skip_days
 from .destinations import (
     DestinationError,
     describe_all,
@@ -1035,6 +1035,24 @@ def post_schedule(cfg: dict, default: list[str] | None = None) -> dict[str, list
     }
 
 
+def destination_skip_days(cfg: dict) -> dict[str, set[int]]:
+    """Each destination's skipped weekdays (Mon=0..Sun=6) for the scheduled poster.
+
+    Only the unattended poster obeys it: a manual send (a draft's Post now, a
+    /queue platform button, POST /publish/run) still goes out any day.
+    """
+    raw = cfg.get("publish", {}).get("destination_skip_days") or {}
+    return {
+        str(name): normalize_skip_days(days, f"publish.destination_skip_days.{name}")
+        for name, days in raw.items()
+    }
+
+
+def destination_skips_day(cfg: dict, destination: str, day: dt.date) -> bool:
+    """True when the scheduled poster must skip ``destination`` on ``day``."""
+    return day.weekday() in destination_skip_days(cfg).get(destination, set())
+
+
 def _last_public_post_date(cfg: dict, destination: str | None = None) -> dt.date | None:
     """The local date of the most recent *pacing* post, or None if there is none.
 
@@ -1125,6 +1143,9 @@ def status(cfg: dict | None = None) -> dict:
             "destination_state": destination_state(cfg),
             "post_at": list(cfg.get("publish", {}).get("post_at", []) or []),
             "destination_post_at": post_schedule(cfg),
+            "destination_skip_days": {
+                name: sorted(days) for name, days in destination_skip_days(cfg).items()
+            },
             "post_per_slot": int(cfg.get("publish", {}).get("post_per_slot", 1)),
             "interval_days": interval_days(cfg),
             "interval_remaining": max(

@@ -131,6 +131,36 @@ def test_validate_accepts_a_configured_post_schedule():
     validate(cfg)  # should not raise
 
 
+def test_validate_accepts_destination_skip_days():
+    cfg = {
+        **DEFAULTS,
+        "publish": {
+            **DEFAULTS["publish"],
+            "destination_skip_days": {"linkedin": ["Sat", "Sun"]},
+        },
+    }
+    validate(cfg)  # should not raise
+
+
+@pytest.mark.parametrize(
+    "skip_days",
+    [
+        {"linkedin": ["Funday"]},
+        {"linkedin": [7]},
+        {"linkedin": "Sat"},
+        {"mastodon": ["Sat"]},
+    ],
+    ids=["bad-weekday", "out-of-range-weekday", "not-a-list", "unknown-destination"],
+)
+def test_validate_rejects_bad_skip_days(skip_days):
+    cfg = {
+        **DEFAULTS,
+        "publish": {**DEFAULTS["publish"], "destination_skip_days": skip_days},
+    }
+    with pytest.raises(ValueError):
+        validate(cfg)
+
+
 @pytest.mark.parametrize(
     "cfg",
     [

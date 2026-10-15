@@ -129,6 +129,22 @@ class TestNextPostAt:
         assert moment.date() == dt.date(2026, 9, 13)
         assert dt.datetime(2026, 9, 13, 19, 30) <= moment < dt.datetime(2026, 9, 13, 21, 0)
 
+    def test_skip_days_walk_past_the_weekend(self):
+        # Friday evening: the next wake is Saturday, but the skip holds to Monday.
+        now = dt.datetime(2026, 10, 16, 21, 0)  # Friday
+        assert next_post_at(["14:00"], now=now, skip={5, 6}) == dt.datetime(2026, 10, 19, 14, 0)
+
+    def test_skip_days_keep_a_weekday_wake(self):
+        now = dt.datetime(2026, 10, 14, 10, 0)  # Wednesday
+        assert next_post_at(["14:00"], now=now, skip={5, 6}) == dt.datetime(2026, 10, 14, 14, 0)
+
+    def test_skip_days_apply_past_the_interval(self):
+        # Interval lifts on Saturday -> the first sendable slot is Monday.
+        now = dt.datetime(2026, 10, 16, 10, 0)  # Friday
+        assert next_post_at(["14:00"], interval_remaining=1, now=now, skip={5, 6}) == (
+            dt.datetime(2026, 10, 19, 14, 0)
+        )
+
 
 class TestCurrentSlot:
     def test_most_recent_today(self):
@@ -232,6 +248,25 @@ class TestDueDestinations:
         assert due_destinations(schedule, {}, dt.datetime(2026, 10, 14, 20, 1)) == [
             ("facebook", "2026-10-14 20:01")
         ]
+
+    def test_skip_days_hold_back_only_that_destination(self):
+        # Saturday 2026-10-17: LinkedIn skips Sat/Sun, Facebook posts daily.
+        now = dt.datetime(2026, 10, 17, 14, 25)
+        schedule = {"facebook": ["14:00"], "linkedin": ["14:00"]}
+        assert due_destinations(schedule, {}, now) == [
+            ("facebook", "2026-10-17 14:00"),
+            ("linkedin", "2026-10-17 14:00"),
+        ]
+        assert due_destinations(schedule, {}, now, skip_days={"linkedin": {5, 6}}) == [
+            ("facebook", "2026-10-17 14:00")
+        ]
+
+    def test_skip_days_do_not_hold_back_a_weekday(self):
+        # Wednesday 2026-10-14: the same skip map lets LinkedIn fire.
+        now = dt.datetime(2026, 10, 14, 14, 25)
+        schedule = {"facebook": ["14:00"], "linkedin": ["14:00"]}
+        due = due_destinations(schedule, {}, now, skip_days={"linkedin": {5, 6}})
+        assert due == [("facebook", "2026-10-14 14:00"), ("linkedin", "2026-10-14 14:00")]
 
 
 class TestReadiness:

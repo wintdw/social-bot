@@ -80,6 +80,11 @@ publish:
   # 14:00-14:30 VNT; Facebook keeps the shared post_at above.
   destination_post_at:
     linkedin: ["14:00-14:30"]
+  # Per-destination weekdays the scheduled poster stays silent on (Mon..Sun names
+  # or 0=Mon..6=Sun). LinkedIn is a work network: no unattended posts Sat/Sun.
+  # Manual sends (Post now, /queue buttons, POST /publish/run) still go out any day.
+  destination_skip_days:
+    linkedin: ["Sat", "Sun"]
   post_per_slot: 1            # oldest approved drafts posted per slot
   # Minimum days between *scheduled* public posts, counted per destination (so
   # LinkedIn's 14:00 and Facebook's 20:00 don't block each other). 2 = one post
