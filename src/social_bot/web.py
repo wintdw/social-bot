@@ -430,11 +430,6 @@ def _writable_dir(path) -> bool:
     return os.access(candidate, os.W_OK)
 
 
-def compose_edits(form) -> dict:
-    """The compose form's own fields, for the review actions that save-then-act."""
-    return {name: str(form.get(name) or "") for name in ("caption", "hashtags") if name in form}
-
-
 def safe_local_path(value: str, default: str = "/") -> str:
     """A same-site path for a post-action redirect, or ``default``.
 

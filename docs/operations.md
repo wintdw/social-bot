@@ -129,7 +129,6 @@ wait only happens when a post is actually in flight.
 | `data/review/plates/` | Hand-written HTML5 plates, screenshotted to a PNG (not served). |
 | `data/review/videos/` | Attached clips, served at `/videos/`. |
 | `data/ideas/` | Idea-seed topics plus their dedupe ledger. |
-| `data/voice/` | Legacy local corpus from the removed retrieval/rewrite experiment; no code reads it, so it is safe to archive or delete. |
 | `data/publish/published.jsonl` | Publish audit log. |
 | `data/state.json` | Last refresh/scan run, whether posting is paused, and each destination's last-run posting slot (so a restart neither resumes a pause nor re-fires a slot that already ran). |
 
