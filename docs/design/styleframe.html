@@ -271,12 +271,13 @@ form { display: inline; }
                font-weight: 600; }
 .chip .count { font-size: .72rem; opacity: .75; font-variant-numeric: tabular-nums; }
 .chip-active .count { opacity: .88; }
-/* A chip that is a checkbox (e.g. the destination picker): the pill IS the
-   control, so the native box is visually hidden but stays focusable — :has()
-   still reads its checked state without a separate "active" class. */
+/* A chip that is a checkbox or radio (the destination and video-placement
+   pickers): the pill IS the control, so the native box is visually hidden but
+   stays focusable — :has() still reads its checked state without a separate
+   "active" class. */
 label.chip { cursor: pointer; position: relative; }
-label.chip input[type=checkbox] { position: absolute; opacity: 0; width: 1px;
-        height: 1px; margin: 0; }
+label.chip input[type=checkbox], label.chip input[type=radio] { position: absolute;
+        opacity: 0; width: 1px; height: 1px; margin: 0; }
 label.chip:has(input:checked) { background: var(--accent); border-color: var(--accent);
         color: var(--accent-fg); font-weight: 600; }
 label.chip:has(input:focus-visible) { outline: 2px solid var(--accent);
@@ -354,6 +355,12 @@ a.permalink { font-size: .82rem; }
           position: relative; background: linear-gradient(135deg, var(--surface-2),
                       color-mix(in srgb, var(--accent) 16%, var(--surface-2))); }
 .qthumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.qthumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* A video row is Reel or feed video: the clip paints its own first frame, and
+   the play glyph marks the row as motion at a glance. */
+.qthumb.video::after { content: "▶"; position: absolute; inset: 0; display: grid;
+        place-items: center; pointer-events: none; color: var(--accent-fg);
+        background: color-mix(in srgb, var(--bg) 22%, transparent); font-size: .8rem; }
 .qthumb.empty { background: repeating-linear-gradient(45deg, transparent, transparent 7px,
                       color-mix(in srgb, var(--border) 55%, transparent) 7px,
                       color-mix(in srgb, var(--border) 55%, transparent) 8px); }
@@ -407,6 +414,7 @@ a.permalink { font-size: .82rem; }
 /* Full image, never cropped: every post image is portrait 1080x1350, and the
    operator must see exactly what will post — a 16:9 cover cut the title off. */
 .hero img { display: block; width: 100%; height: auto; }
+.hero video { display: block; width: 100%; height: auto; background: var(--surface-2); }
 .composer { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
 .masthead { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; }
 .rail-block { padding: 1rem; border-bottom: 1px solid var(--border); }

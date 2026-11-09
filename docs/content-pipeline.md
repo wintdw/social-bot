@@ -116,6 +116,56 @@ never calls a model.
 - `blog localize-images` copies a still-remote non-source image into the local
   store (a migration for legacy AI-image drafts; it never renders anything).
 
+### 2c. Video — an opt-in Reel or feed video, Facebook only (`draft_pipeline.attach_video`)
+
+Video is **per-post, never a default**: most posts stay images, and only a draft
+the operator picks gets a clip. The clip is rendered on the **host** (a
+[hyperframes](https://hyperframes.dev) composition: HTML/CSS/JS → MP4), and the
+composition/node_modules stay out of git; only the finished file is copied into
+the served store:
+
+```
+social-bot blog attach-video <draft-id> clip.mp4 --mode reel   # or --mode post (default)
+social-bot blog video-mode <draft-id> post                     # re-route an attached clip
+social-bot blog detach-video <draft-id>                        # removes it, caption untouched
+```
+
+- **Placement is a content choice, not a source default.** `Draft.video_mode`
+  is `post` (an ordinary video post in the page feed, the default — Reels reach
+  poorly on this page) or `reel` (the Reels tab). The operator can switch it on
+  `/review/{id}` (**Publish video as** chips, saved with the caption) or set it
+  at attach — `draft_pipeline.set_video_mode` re-checks switching *to* a Reel.
+- **A Reel is checked before it is accepted** (`video_spec.py`, host `ffprobe`):
+  3–90s, 24–60fps, at least 540px on the short side, an aspect between 9:16 and
+  16:9, and h264/hevc/vp9/av1. A file that would fail those limits is refused
+  where it is cheap to re-render — at attach, or when a draft is switched to a
+  Reel. A **missing ffprobe never blocks** — the attach proceeds with a warning,
+  like a missing Chromium. A feed video (`post`) has none of these limits.
+- **A video draft is Facebook-only, by construction.** The routing list comes
+  from the registry (`video_names()` — every publisher with `supports_video`),
+  and attaching sets it. `edit_draft` refuses another platform, the `/review`
+  picker does not offer one, `backfill_destinations` skips video drafts, and
+  `publish_draft` refuses a destination without video support rather than
+  silently sending text. LinkedIn declares `supports_video = False`.
+- **A Reel publishes through the three-step Reels flow** (`/{page}/video_reels`
+  start → POST the bytes to `rupload.facebook.com` → finish), because the
+  session has an explicit `DRAFT` state (the video equivalent of
+  `published=false`) and the finish call returns a `post_id`. `publish.private:
+  true` finishes as `DRAFT`; otherwise `PUBLISHED`. A **feed video** is one
+  multipart POST of the clip to `/{page}/videos` (`published=false` when
+  private), which returns the video id only.
+- **One Reel is one post.** It appears in the page's feed (`status_type:
+  added_video`) *and* the Reels tab, so there is no second feed post. The
+  permalink is `https://www.facebook.com/reel/<video-id>/`. A feed video's
+  permalink is `https://www.facebook.com/<page-id>/videos/<video-id>/`.
+- The source link still rides as the **first comment**, on the composite
+  `<page-id>_<post-id>` (for a Reel, the finish call's post id; the bare id gives
+  a misleading "singular statuses API is deprecated" error). A feed video's
+  composite is `<page-id>_<video-id>`, with the video object itself as a
+  fallback. A private send skips the comment — it can never be seen — and a
+  public send retries while Graph propagates a still-processing video. A failed
+  comment never fails the publish.
+
 ### 2d. Idea seeds — original posts, not reposts (`draft_pipeline.queue_ideas`)
 
 `ideas.topics_file` lists the systems original posts are about (one per line,
@@ -317,6 +367,7 @@ The idea seeds (§2d) keep their own state under `ideas.dir`:
 | GET | `/review/{id}` | Review detail: editable caption and hashtags; the destination picker (per-platform chips) and one **Post to &lt;Platform&gt;** button per pending destination; Save / Reject, plus Approve & schedule when `publish.post_at` is set (+ Unapprove on an approved draft, + + Restore source image when the image is a diagram). |
 | GET | `/publish` | Publish audit log (public + private sends). |
 | GET | `/status` | Human-readable snapshot: token validity/expiry, schedules, sources. |
+| GET | `/videos/{name}` | A locally stored post video (the clip attached to a draft), served with Range support so the review player can seek. |
 | GET | `/drafts` | Redirect (307) to `/review` for old links. |
 | GET | `/health` | Liveness + last run info (JSON). |
 | GET | `/live` | Liveness probe: `{"status": "alive"}`, never touches state. |

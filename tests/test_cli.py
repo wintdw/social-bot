@@ -7,6 +7,7 @@ import json
 import pytest
 
 from social_bot import cli
+from social_bot.drafts import Draft
 
 PHOTO = "https://example.com/a.jpg"
 
@@ -413,3 +414,77 @@ class TestBlogPublishCommand:
         monkeypatch.setattr(cli, "publish_scheduled", boom)
         assert cli._cmd_blog_publish(cli._parse_args(["blog", "publish"])) == 2
         assert "publishing is disabled" in capsys.readouterr().err
+
+
+class TestBlogVideoCommands:
+    def test_attach_video_parses(self):
+        args = cli._parse_args(["blog", "attach-video", "post-one", "clip.mp4"])
+        assert args.draft == "post-one"
+        assert args.file == "clip.mp4"
+        assert args.func is cli._cmd_blog_attach_video
+
+    def test_detach_video_parses(self):
+        args = cli._parse_args(["blog", "detach-video", "post-one"])
+        assert args.draft == "post-one"
+        assert args.func is cli._cmd_blog_detach_video
+
+    def test_attach_video_mode_defaults_to_a_feed_video(self):
+        args = cli._parse_args(["blog", "attach-video", "post-one", "clip.mp4"])
+        assert args.mode == "post"
+        args = cli._parse_args(["blog", "attach-video", "post-one", "clip.mp4", "--mode", "reel"])
+        assert args.mode == "reel"
+
+    def test_video_mode_parses_and_prints_the_placement(self, stub_config, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli, "set_video_mode", lambda cfg, draft, mode: Draft(id=draft, video_mode=mode)
+        )
+        args = cli._parse_args(["blog", "video-mode", "post-one", "post"])
+        assert args.func is cli._cmd_blog_video_mode
+        assert cli._cmd_blog_video_mode(args) == 0
+        assert "post-one will publish as a video post" in capsys.readouterr().out
+
+    def test_video_mode_reports_a_refusal(self, stub_config, monkeypatch, capsys):
+        def refuse(cfg, draft, mode):
+            raise ValueError("this clip will not publish as a Reel: duration 600.0s")
+
+        monkeypatch.setattr(cli, "set_video_mode", refuse)
+        args = cli._parse_args(["blog", "video-mode", "post-one", "reel"])
+        assert cli._cmd_blog_video_mode(args) == 2
+        assert "will not publish as a Reel" in capsys.readouterr().err
+
+    def test_attach_video_prints_the_spec_and_the_warning(self, stub_config, monkeypatch, capsys):
+        monkeypatch.setattr(
+            cli,
+            "attach_video",
+            lambda cfg, draft, path, *, mode="reel": {
+                "id": draft,
+                "video": "/videos/post-one.mp4",
+                "video_mode": mode,
+                "destinations": ["facebook"],
+                "bytes": 10,
+                "spec": {
+                    "width": 1080,
+                    "height": 1920,
+                    "duration": 6.0,
+                    "fps": 30.0,
+                    "codec": "h264",
+                },
+                "warning": "ffprobe not found",
+            },
+        )
+        args = cli._parse_args(["blog", "attach-video", "post-one", "clip.mp4", "--mode", "post"])
+        assert cli._cmd_blog_attach_video(args) == 0
+        out = capsys.readouterr()
+        assert "Attached /videos/post-one.mp4 to post-one" in out.out
+        assert "1080x1920, 6.0s, 30.00fps, h264" in out.out
+        assert "as a video post, Facebook only" in out.out
+        assert "ffprobe not found" in out.err
+
+    def test_attach_video_reports_a_refusal(self, stub_config, monkeypatch, capsys):
+        def refuse(cfg, draft, path, *, mode="reel"):
+            raise ValueError("will not publish as a Reel: duration 1.0s is outside 3–90s")
+
+        monkeypatch.setattr(cli, "attach_video", refuse)
+        args = cli._parse_args(["blog", "attach-video", "post-one", "clip.mp4"])
+        assert cli._cmd_blog_attach_video(args) == 2
+        assert "will not publish as a Reel" in capsys.readouterr().err

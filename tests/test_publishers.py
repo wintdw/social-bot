@@ -27,6 +27,16 @@ class FakeApi:
         self.photo = None
         self.status = None
         self.comment = None
+        self.reel_start = None
+        self.reel_upload = None
+        self.reel_finish = None
+        self.video = None
+
+    def create_video_post(
+        self, page_id, description, data, *, filename="", content_type="", published=True
+    ):
+        self.video = (page_id, description, data, filename, content_type, published)
+        return {"id": "888"}
 
     def create_photo_post(
         self, page_id, caption, data, *, filename="", content_type="", published=True
@@ -37,6 +47,18 @@ class FakeApi:
     def create_post(self, page_id, message, link=None, published=True):
         self.status = (page_id, message, link, published)
         return {"id": "123_8"}
+
+    def start_reel_upload(self, page_id):
+        self.reel_start = page_id
+        return {"video_id": "777", "upload_url": "https://rupload/x/777"}
+
+    def upload_reel(self, video_id, data, *, upload_url=""):
+        self.reel_upload = (video_id, data, upload_url)
+        return {"success": True}
+
+    def finish_reel(self, page_id, video_id, **fields):
+        self.reel_finish = (page_id, video_id, fields)
+        return {"success": True, "post_id": "555"}
 
     def add_comment(self, post_id, message):
         self.comment = (post_id, message)
@@ -209,11 +231,219 @@ class TestFacebookPublisher:
         assert FacebookPublisher(cfg).configured() is False
 
 
+class TestFacebookVideoPublisher:
+    def _video(self, monkeypatch):
+        monkeypatch.setattr(pub_mod.media, "load_video", lambda cfg, url: (b"MP4DATA", "clip.mp4"))
+
+    def test_a_video_publishes_as_a_reel(self, monkeypatch):
+        self._video(monkeypatch)
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(video="/videos/p.mp4", video_mode="reel")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        result = FacebookPublisher(_cfg()).publish(draft)
+        assert fake.reel_start == "123"
+        assert fake.reel_upload == ("777", b"MP4DATA", "https://rupload/x/777")
+        assert fake.reel_finish == (
+            "123",
+            "777",
+            {"description": "Caption", "state": "PUBLISHED"},
+        )
+        assert result.post_id == "123_555"
+        assert result.permalink == "https://www.facebook.com/reel/777/"
+        assert result.private is False
+
+    def test_private_mode_leaves_the_reel_a_draft(self, monkeypatch):
+        self._video(monkeypatch)
+        cfg = _cfg()
+        cfg["publish"]["private"] = True
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(video="/videos/p.mp4", video_mode="reel")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        result = FacebookPublisher(cfg).publish(draft)
+        assert fake.reel_finish == ("123", "777", {"description": "Caption", "state": "DRAFT"})
+        assert result.private is True
+        # A draft can never be seen publicly, so no comment is attempted.
+        assert fake.comment is None
+
+    def test_the_source_link_is_commented_on_the_reel_post(self, monkeypatch):
+        self._video(monkeypatch)
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(video="/videos/p.mp4", video_mode="reel")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        FacebookPublisher(_cfg()).publish(draft)
+        assert fake.comment == ("123_555", "https://atento.vn/blog/p")
+
+    def test_a_reel_comment_retries_while_the_post_propagates(self, monkeypatch):
+        from social_bot.destinations.facebook.api import ApiError
+
+        self._video(monkeypatch)
+        fake = FakeApi()
+        attempts = []
+
+        def flaky_comment(post_id, message):
+            attempts.append(post_id)
+            if len(attempts) < 3:
+                raise ApiError("not yet", code=100)
+            fake.comment = (post_id, message)
+            return {"id": "1"}
+
+        fake.add_comment = flaky_comment
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(video="/videos/p.mp4", video_mode="reel")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        FacebookPublisher(_cfg()).publish(draft)
+        assert len(attempts) == 3
+        assert fake.comment == ("123_555", "https://atento.vn/blog/p")
+
+    def test_a_video_wins_over_an_image(self, monkeypatch):
+        self._video(monkeypatch)
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(image="https://img/x.jpg", video="/videos/p.mp4", video_mode="reel")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        FacebookPublisher(_cfg()).publish(draft)
+        assert fake.photo is None
+        assert fake.reel_upload is not None
+
+    def test_an_unreadable_video_fails_the_publish(self, monkeypatch):
+        from social_bot import media
+
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(
+            pub_mod.media,
+            "load_video",
+            lambda cfg, url: (_ for _ in ()).throw(media.MediaError("gone")),
+        )
+        draft = _draft(video="/videos/p.mp4", video_mode="reel")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        with pytest.raises(PublisherError):
+            FacebookPublisher(_cfg()).publish(draft)
+
+    def test_describe_names_the_reels_endpoint(self):
+        publisher = FacebookPublisher(_cfg())
+        assert (
+            publisher.describe(_draft(video="/videos/p.mp4", video_mode="reel"))
+            == "POST /123/video_reels"
+        )
+        cfg = _cfg()
+        cfg["publish"]["private"] = True
+        assert (
+            FacebookPublisher(cfg).describe(_draft(video="/videos/p.mp4", video_mode="reel"))
+            == "POST /123/video_reels (draft)"
+        )
+
+    def test_describe_names_the_feed_video_endpoint(self):
+        publisher = FacebookPublisher(_cfg())
+        draft = _draft(video="/videos/p.mp4", video_mode="post")
+        assert publisher.describe(draft) == "POST /123/videos"
+        cfg = _cfg()
+        cfg["publish"]["private"] = True
+        assert FacebookPublisher(cfg).describe(draft) == "POST /123/videos (unpublished)"
+
+    def test_a_video_without_a_placement_defaults_to_the_feed(self, monkeypatch):
+        # The default placement is a feed video: Reels do not reach well here.
+        self._video(monkeypatch)
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(video="/videos/p.mp4")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        result = FacebookPublisher(_cfg()).publish(draft)
+        assert fake.video is not None
+        assert fake.reel_start is None
+        assert result.permalink == "https://www.facebook.com/123/videos/888/"
+
+    def test_a_post_mode_video_publishes_to_the_feed_not_the_reels_tab(self, monkeypatch):
+        self._video(monkeypatch)
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(video="/videos/p.mp4", video_mode="post")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        result = FacebookPublisher(_cfg()).publish(draft)
+        assert fake.video == ("123", "Caption", b"MP4DATA", "clip.mp4", "video/mp4", True)
+        # The Reels session is never opened for a feed video.
+        assert fake.reel_start is None
+        assert result.post_id == "123_888"
+        assert result.permalink == "https://www.facebook.com/123/videos/888/"
+        assert fake.comment == ("123_888", "https://atento.vn/blog/p")
+
+    def test_a_feed_video_comment_falls_back_to_the_video_object(self, monkeypatch):
+        from social_bot.destinations.facebook.api import ApiError
+
+        self._video(monkeypatch)
+        fake = FakeApi()
+        attempts = []
+
+        def picky_comment(post_id, message):
+            attempts.append(post_id)
+            if post_id != "888":
+                raise ApiError("singular statuses API is deprecated", code=100)
+            fake.comment = (post_id, message)
+            return {"id": "1"}
+
+        fake.add_comment = picky_comment
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        draft = _draft(video="/videos/p.mp4", video_mode="post")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        FacebookPublisher(_cfg()).publish(draft)
+        assert attempts == ["123_888", "123_888", "123_888", "888"]
+        assert fake.comment == ("888", "https://atento.vn/blog/p")
+
+    def test_private_mode_leaves_a_feed_video_unpublished(self, monkeypatch):
+        self._video(monkeypatch)
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        monkeypatch.setattr(pub_mod.time, "sleep", lambda s: None)
+        cfg = _cfg()
+        cfg["publish"]["private"] = True
+        draft = _draft(video="/videos/p.mp4", video_mode="post")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        result = FacebookPublisher(cfg).publish(draft)
+        assert fake.video[5] is False
+        assert result.private is True
+        # A draft can never be seen publicly, so no comment is attempted.
+        assert fake.comment is None
+
+    def test_facebook_supports_video_and_linkedin_does_not(self):
+        assert FacebookPublisher.supports_video is True
+        assert LinkedInPublisher.supports_video is False
+
+
 class TestLinkedInPublisher:
     def test_describe_and_configured(self):
         publisher = LinkedInPublisher(_cfg())
         assert publisher.describe(_draft()) == "POST http://host.docker.internal:8082/post"
         assert publisher.configured() is True
+
+    def test_refuses_a_video_draft(self):
+        # Video posts are Facebook-only by policy; the publisher is the second
+        # line of defence behind the pipeline's routing guard.
+        draft = _draft(video="/videos/p.mp4", video_mode="reel")
+        draft.caption = "Caption"
+        draft.state = "ai_draft"
+        with pytest.raises(PublisherError, match="Facebook-only"):
+            LinkedInPublisher(_cfg()).publish(draft)
 
     def test_publish_posts_caption_to_gateway(self, monkeypatch):
         from social_bot.destinations.linkedin import publisher as li_mod

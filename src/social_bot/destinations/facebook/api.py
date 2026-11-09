@@ -2,10 +2,10 @@
 
 The Graph API is plain HTTPS + JSON, so no browser and no third-party HTTP
 dependency: urllib.request handles GET (feed reads), form-encoded POST
-(status/link posts), and a hand-rolled multipart POST (photo uploads — Graph no
-longer gets handed a URL to fetch, see ``create_photo_post``). Access is
-token-based — see README for how to mint a Page access token with the right
-permissions.
+(status/link posts), and a hand-rolled multipart POST (photo and video uploads —
+Graph no longer gets handed a URL to fetch, see ``create_photo_post`` and
+``create_video_post``). Access is token-based — see README for how to mint a
+Page access token with the right permissions.
 """
 
 from __future__ import annotations
@@ -29,6 +29,13 @@ UA = "social-bot/0.1 (Graph API client)"
 #   pages_show_list        -> `whoami` lists the pages the token can manage
 
 FEED_FIELDS = "id,created_time,message,story,permalink_url,status_type,full_picture,from{name,id}"
+
+# Reels uploads go to a separate host, not the Graph API base.
+RUPLOAD_BASE = "https://rupload.facebook.com"
+
+# A video transfer is far slower than a JSON call; the request timeout is raised
+# to this floor so a large clip is not abandoned mid-upload.
+UPLOAD_TIMEOUT_SECONDS = 300.0
 
 
 def _multipart_body(
@@ -180,10 +187,10 @@ class GraphApi:
     def _url(self, path: str) -> str:
         return f"{self.base_url}/{self.api_version}/{path.lstrip('/')}"
 
-    def _send(self, request: urllib.request.Request) -> Any:
+    def _send(self, request: urllib.request.Request, timeout: float | None = None) -> Any:
         """Send a prepared request, decode its JSON answer, raise on Graph errors."""
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as resp:
+            with urllib.request.urlopen(request, timeout=timeout or self.timeout) as resp:
                 raw = resp.read()
                 status = resp.status
         except urllib.error.HTTPError as exc:
@@ -237,8 +244,13 @@ class GraphApi:
         filename: str,
         data: bytes,
         content_type: str,
+        timeout: float | None = None,
     ) -> Any:
-        """POST text fields plus one binary file, as ``multipart/form-data``."""
+        """POST text fields plus one binary file, as ``multipart/form-data``.
+
+        ``timeout`` lets a video upload raise the request timeout above the
+        JSON-call default; a photo or a form post leaves it alone.
+        """
         boundary = f"----socialbot{uuid.uuid4().hex}"
         body = _multipart_body(
             boundary,
@@ -258,7 +270,7 @@ class GraphApi:
                 "Content-Type": f"multipart/form-data; boundary={boundary}",
             },
         )
-        return self._send(request)
+        return self._send(request, timeout=timeout)
 
     # -- Endpoints ------------------------------------------------------
 
@@ -355,6 +367,105 @@ class GraphApi:
             data=data,
             content_type=content_type,
         )
+
+    def create_video_post(
+        self,
+        page_id: str,
+        description: str,
+        data: bytes,
+        *,
+        filename: str = "clip.mp4",
+        content_type: str = "video/mp4",
+        title: str = "",
+        published: bool = True,
+    ) -> dict:
+        """Publish a video to the page's feed — an ordinary video post, not a Reel.
+
+        The video is uploaded as a multipart ``source`` part on the plain
+        ``/{page}/videos`` edge, which is what a feed video uses (the Reel tab
+        takes the separate ``video_reels`` session). The response carries only
+        the video ``id``; the feed story's post id is the composite
+        ``<page id>_<video id>``. ``published=False`` uploads it unpublished
+        (admins only), the video equivalent of a draft.
+        """
+        fields: dict[str, str] = {}
+        if description:
+            fields["description"] = description
+        if title:
+            fields["title"] = title
+        if not published:
+            fields["published"] = "false"
+        return self.post_file(
+            f"{page_id}/videos",
+            fields,
+            field="source",
+            filename=filename,
+            data=data,
+            content_type=content_type,
+            timeout=max(self.timeout, UPLOAD_TIMEOUT_SECONDS),
+        )
+
+    def start_reel_upload(self, page_id: str) -> dict:
+        """Open a Reels upload session; returns ``{video_id, upload_url}``.
+
+        Reels publish through their own endpoint (``/{page}/video_reels``), not
+        the ordinary ``/{page}/videos`` edge: the session gives an explicit
+        ``DRAFT`` state (the video equivalent of ``published=false``) and the
+        finish call returns a ``post_id``, which ``/videos`` does not.
+        """
+        return self.post(f"{page_id}/video_reels", {"upload_phase": "start"})
+
+    def upload_reel(self, video_id: str, data: bytes, *, upload_url: str = "") -> dict:
+        """Send the video bytes to ``rupload.facebook.com`` (not the Graph host).
+
+        One whole-file POST with ``offset: 0``; the session's own ``upload_url``
+        is used when the start response provided one. A resumable upload for a
+        very large file is not implemented — a failed transfer means starting
+        over with a new session.
+        """
+        url = upload_url or f"{RUPLOAD_BASE}/video-upload/{self.api_version}/{video_id}"
+        request = urllib.request.Request(
+            url,
+            data=data,
+            method="POST",
+            headers={
+                "Authorization": f"OAuth {self.token}",
+                "offset": "0",
+                "file_size": str(len(data)),
+                "Content-Type": "application/octet-stream",
+                "User-Agent": UA,
+                "Accept": "application/json",
+            },
+        )
+        return self._send(request, timeout=max(self.timeout, UPLOAD_TIMEOUT_SECONDS))
+
+    def finish_reel(
+        self,
+        page_id: str,
+        video_id: str,
+        *,
+        description: str = "",
+        title: str = "",
+        state: str = "PUBLISHED",
+        scheduled_publish_time: int | None = None,
+    ) -> dict:
+        """End the session and publish the Reel (or leave it a ``DRAFT``).
+
+        ``state`` is ``PUBLISHED``, ``DRAFT`` or ``SCHEDULED``. The response
+        carries ``post_id``, the permalink's post id, once publishing has begun.
+        """
+        fields: dict[str, str] = {
+            "upload_phase": "finish",
+            "video_id": video_id,
+            "video_state": state,
+        }
+        if description:
+            fields["description"] = description
+        if title:
+            fields["title"] = title
+        if scheduled_publish_time:
+            fields["scheduled_publish_time"] = str(int(scheduled_publish_time))
+        return self.post(f"{page_id}/video_reels", fields)
 
     def add_comment(self, post_id: str, message: str) -> dict:
         """Post a comment on an existing post.

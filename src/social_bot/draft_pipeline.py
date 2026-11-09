@@ -12,7 +12,7 @@ import json
 import pathlib
 
 from . import ideas as idea_seeds
-from . import media
+from . import media, video_spec
 from .caption import display_title
 from .caption_lint import lint_caption
 from .config import ROOT, load_config, normalize_skip_days
@@ -20,6 +20,7 @@ from .destinations import (
     DestinationError,
     describe_all,
     publisher_for,
+    video_names,
 )
 from .destinations import (
     names as destination_names,
@@ -29,6 +30,9 @@ from .drafts import (
     APPROVED,
     EXTRACTED,
     STATES,
+    VIDEO_MODES,
+    VIDEO_POST,
+    VIDEO_REEL,
     Draft,
     append_audit,
     find,
@@ -809,6 +813,145 @@ def _recent_texts(drafts: list[Draft], cfg: dict, exclude_id: str = "") -> list[
     return [draft.caption for draft in _recent_written(drafts, exclude_id)[:cap]]
 
 
+def attach_video(
+    cfg: dict, draft_id: str, path: str | pathlib.Path, *, mode: str = VIDEO_POST
+) -> dict:
+    """Attach one rendered clip to a draft (opt-in per post) — never posts.
+
+    A video is drawn/rendered on the **host** (a hyperframes composition, the
+    same way a plate is an HTML page), so this takes a file path and copies the
+    bytes into the served video store. Nothing is rendered here.
+
+    ``mode`` picks the placement: ``post`` (an ordinary video post in the page
+    feed, the default) or ``reel`` (the Reels tab). For a Reel the clip is
+    checked against Meta's Reels limits before it is accepted, so a file that
+    would be rejected after approval is caught now; a video post has no such
+    limits. A missing ``ffprobe`` only warns: the probe is an enhancement, never
+    a blocked gate. The placement can still be switched later
+    (``set_video_mode`` / the /review picker).
+
+    Attaching forces the draft's targets to Facebook alone — LinkedIn has no
+    video path.
+    """
+    if mode not in VIDEO_MODES:
+        raise ValueError(f"unknown video mode {mode!r}; use one of {', '.join(VIDEO_MODES)}")
+    source = pathlib.Path(path)
+    try:
+        data = source.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"cannot read {source}: {exc.strerror or exc}") from None
+    if not data:
+        raise ValueError(f"{source} is empty")
+
+    spec: dict | None = None
+    warning = ""
+    try:
+        spec = video_spec.probe(str(source))
+    except video_spec.SpecError as exc:
+        if video_spec.find_ffprobe():
+            raise ValueError(f"{source.name}: {exc}") from None
+        warning = "ffprobe not found — the Reels limits were not checked"
+    if mode == VIDEO_REEL and spec is not None:
+        problems = video_spec.problems(spec)
+        if problems:
+            raise ValueError(f"{source.name} will not publish as a Reel: " + "; ".join(problems))
+
+    drafts = load_drafts(queue_path(cfg))
+    draft = find(drafts, draft_id)
+    if draft is None:
+        raise ValueError(f"no draft {draft_id!r}")
+    if draft.posted_destinations():
+        raise ValueError(f"draft {draft_id!r} has already been posted; its video cannot change")
+
+    previous = draft.video
+    draft.video = media.save_video(cfg, draft.id, data)
+    draft.video_mode = mode
+    if previous and previous != draft.video:
+        old = media.video_path_for(cfg, previous)
+        if old is not None:
+            old.unlink(missing_ok=True)
+    draft.destinations = list(video_names())
+    draft.touch()
+    save_drafts(queue_path(cfg), drafts)
+    return {
+        "id": draft.id,
+        "video": draft.video,
+        "video_mode": draft.video_mode,
+        "destinations": list(draft.destinations),
+        "bytes": len(data),
+        "spec": spec,
+        "warning": warning,
+    }
+
+
+def set_video_mode(cfg: dict, draft_id: str, mode: str) -> Draft:
+    """Publish an attached clip as a Reel or as an ordinary video post.
+
+    Placement is a content choice — a Reel lives in the Reels tab, a video post
+    in the page feed, and their reach differs — so it stays switchable right up
+    to the send. Switching *to* a Reel re-checks the clip against Meta's Reels
+    limits, since a clip rendered for the feed may be too long or wrongly
+    shaped. Nothing is posted, and the caption is never touched.
+    """
+    return _save_one(cfg, draft_id, lambda draft: _apply_video_mode(cfg, draft, mode))
+
+
+def _apply_video_mode(cfg: dict, draft: Draft, mode: str) -> None:
+    """Validate and set a draft's video placement (no persistence, no posting)."""
+    if mode not in VIDEO_MODES:
+        raise ValueError(f"unknown video mode {mode!r}; use one of {', '.join(VIDEO_MODES)}")
+    if not draft.video:
+        raise ValueError("no video attached, so there is no placement to choose")
+    if mode == VIDEO_REEL:
+        problems = _reel_problems(cfg, draft.video)
+        if problems:
+            raise ValueError(
+                "this clip will not publish as a Reel: "
+                + "; ".join(problems)
+                + " — keep it a video post, or re-render it"
+            )
+    draft.video_mode = mode
+
+
+def _reel_problems(cfg: dict, video_url: str) -> list[str]:
+    """Reasons an attached clip cannot publish as a Reel; empty means ok.
+
+    A missing ``ffprobe`` reports no problems: the probe is an enhancement, never
+    a gate that cannot open. A clip the probe can read but that misses Meta's
+    limits is refused, because Graph would reject it only after approval.
+    """
+    path = media.video_path_for(cfg, video_url)
+    if path is None:
+        return []
+    try:
+        spec = video_spec.probe(str(path))
+    except video_spec.SpecError as exc:
+        return [] if not video_spec.find_ffprobe() else [str(exc)]
+    return video_spec.problems(spec)
+
+
+def detach_video(cfg: dict, draft_id: str) -> dict:
+    """Remove a draft's video (never posts, never touches the caption).
+
+    Destinations are left as they are: detaching must not silently re-add
+    LinkedIn to a draft a human had narrowed. Pick the platform again on
+    /review if the post should go there.
+    """
+    drafts = load_drafts(queue_path(cfg))
+    draft = find(drafts, draft_id)
+    if draft is None:
+        raise ValueError(f"no draft {draft_id!r}")
+    if not draft.video:
+        raise ValueError(f"draft {draft_id!r} has no video")
+    path = media.video_path_for(cfg, draft.video)
+    if path is not None:
+        path.unlink(missing_ok=True)
+    draft.video = ""
+    draft.touch()
+    save_drafts(queue_path(cfg), drafts)
+    return {"id": draft.id, "destinations": list(draft.destinations)}
+
+
 def edit_draft(
     cfg: dict,
     draft_id: str,
@@ -816,6 +959,7 @@ def edit_draft(
     caption: str | None = None,
     hashtags: str | None = None,
     destinations: list[str] | None = None,
+    video_mode: str | None = None,
 ) -> Draft:
     """Human edits from the review page (caption, hashtags).
 
@@ -829,6 +973,11 @@ def edit_draft(
     An empty list is refused: a draft with no target could never be posted, and
     ``publish_draft`` would silently re-adopt the configured default.
 
+    ``video_mode`` switches an attached clip between a Reel and an ordinary
+    video post (the review page's placement picker); it is refused when the
+    draft has no video, and switching *to* a Reel re-checks the clip against
+    Meta's Reels limits.
+
     Re-lints the caption so the /review/{id} warnings track each saved caption.
     """
 
@@ -840,12 +989,21 @@ def edit_draft(
         draft.caption = caption
     if hashtags is not None:
         draft.hashtags = _split_hashtags(hashtags)
+    if video_mode is not None:
+        _apply_video_mode(cfg, draft, video_mode)
     if destinations is not None:
         unknown = [name for name in destinations if name not in destination_names()]
         if unknown:
             raise ValueError(f"unknown destination(s): {', '.join(unknown)}")
         if not destinations:
             raise ValueError("a draft must target at least one destination")
+        if draft.video:
+            blocked = [name for name in destinations if name not in video_names()]
+            if blocked:
+                raise ValueError(
+                    f"video drafts are Facebook-only (got {', '.join(blocked)}); "
+                    "detach the video to target another platform"
+                )
         draft.destinations = list(dict.fromkeys(destinations))
     if caption is not None and draft.caption.strip() and draft.state == EXTRACTED:
         draft.state = AI_DRAFT
@@ -971,6 +1129,10 @@ def backfill_destinations(
         if wanted is not None and draft.id not in wanted:
             continue
         if states is not None and draft.state not in states:
+            continue
+        if draft.video:
+            # A video draft is Facebook only; the backfill must never union
+            # LinkedIn onto it.
             continue
         if limit is not None and len(updated) >= limit:
             break
@@ -1221,7 +1383,9 @@ def publish_draft(
     if not draft.destinations:
         # A draft queued without routing adopts the configured set, so its post
         # records always have a target list to compare against.
-        draft.destinations = list(cfg["publish"]["destinations"])
+        draft.destinations = (
+            list(video_names()) if draft.video else list(cfg["publish"]["destinations"])
+        )
     targets = [destination] if destination else list(draft.destinations)
     # Each destination posts independently: skip the ones already posted publicly,
     # so a re-run (or a retry after a partial failure) only fills the gaps.
@@ -1248,9 +1412,15 @@ def publish_draft(
             results.append({"destination": name, "skipped": "already posted privately today"})
             continue
         publisher = publisher_for(name, cfg, token)
+        if draft.video and not getattr(publisher, "supports_video", False):
+            # Never silently drop the video and send text: only a destination
+            # that can take a clip may be routed to.
+            raise ValueError(f"{name} cannot publish a video post; video drafts are Facebook-only")
         if dry_run:
             print(f"dry-run: would {publisher.describe(draft)}")
-            if draft.image:
+            if draft.video:
+                print(f"  video: {draft.video}")
+            elif draft.image:
                 print(f"  image: {draft.image}")
             print(f"  caption:\n{draft.post_text}")
             results.append({"destination": name, "dry_run": True})

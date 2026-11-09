@@ -87,6 +87,13 @@ class TestPersistence:
         draft = Draft.from_dict({"id": "x", "title": "t", "legacy": 1})
         assert draft.id == "x" and draft.title == "t"
 
+    def test_video_mode_defaults_to_a_feed_video_and_drops_an_unknown_value(self):
+        # A feed video is the default placement; Reels are opt-in.
+        assert Draft(id="x").video_mode == "post"
+        assert Draft.from_dict({"id": "x"}).video_mode == "post"
+        assert Draft.from_dict({"id": "x", "video_mode": "story"}).video_mode == "post"
+        assert Draft.from_dict({"id": "x", "video_mode": "reel"}).video_mode == "reel"
+
     def test_lint_defaults_to_empty_and_round_trips(self):
         assert Draft(id="x").lint == []
         draft = Draft(id="x", lint=[{"code": "hype", "message": "m"}])

@@ -11,8 +11,9 @@ lists manageable pages, `feed` fetches the page's own feed, `post` creates a
 status/link/photo post, `refresh` caches the feed, `blog scan` queues new items
 from source feeds as drafts, `blog masthead` backfills the series masthead onto existing captions,
 `blog backfill-destinations` unions old drafts onto the configured destinations,
-`blog publish` posts the human-approved queue on demand, and `serve` runs a
-long-lived feed dashboard + a draft review UI + scheduled
+`blog attach-video` / `blog detach-video` put a host-rendered clip on one draft
+(a Reel or a feed video, Facebook only), `blog publish` posts the human-approved queue on demand,
+and `serve` runs a long-lived feed dashboard + a draft review UI + scheduled
 refresh/scan/posting. Skeleton cloned from the voz-bot/otofun-bot family
 (cli/config/tests/Docker layout); the crawl engine is replaced by
 `destinations/facebook/api.py`, a ~150-line urllib Graph client.
@@ -33,7 +34,8 @@ src/social_bot/
 ├── ideas.py          # pure parse of the idea-topics file + slugify an idea title (systems, not feeds)
 ├── drafts.py         # Draft model + state machine + per-destination post records + atomic persistence
 ├── draft_pipeline.py # scan sources -> drafts; caption edits; publish (on demand + scheduled)
-├── media.py          # local image store (served at /images/) + the bytes a post uploads
+├── media.py          # local image/video store (served at /images/, /videos/) + the bytes a post uploads
+├── video_spec.py     # host ffprobe check against the Reels limits before a clip is attached
 ├── ui.py             # shared operator-UI chrome: stylesheet, nav, favicon, layout
 ├── styleframe.py     # generated design-system preview (docs/design/styleframe.html)
 ├── draft_html.py     # pure render of the /review queue + a draft detail page
@@ -158,6 +160,56 @@ Captions are written **by the operator in Claude**. The operator pastes the capt
   recognising a locally stored path (`/images/...`). A draft with no
   stored original gets one by re-reading the source page once (as scan
   enrichment does) and keeping it. The restore never touches the caption.
+- **Video is opt-in per post, and a video post is Facebook only.**
+  `Draft.video` (empty on every ordinary post) holds a local `/videos/<id>.<ext>`
+  file; `blog attach-video <draft-id> <file> [--mode reel|post]` copies a
+  **host-rendered** clip (hyperframes composition → MP4; the project stays out of
+  git) into the served `data/review/videos/`, `blog detach-video` removes it. The
+  **routing invariant is Facebook-only, by construction**: `attach_video` sets
+  `destinations = video_names()` (registry: publishers with `supports_video`;
+  LinkedIn declares `False`), `edit_draft` refuses another platform, the
+  `/review` picker offers none, `backfill_destinations` skips video drafts, and
+  `publish_draft` refuses an unsupported destination instead of silently sending
+  text.
+- **A clip's placement is a per-post content choice: a feed video or a Reel.**
+  `Draft.video_mode` is `post` (default: an ordinary video post in the page
+  feed) or `reel` (the Reels tab) — Reels reach poorly on this page, so a feed
+  video is the default; the operator picks per post on `/review/{id}` (the
+  **Publish video as** chips), with
+  `blog attach-video --mode post` / `blog video-mode <id> post`, or through
+  `draft_pipeline.set_video_mode`, which switches it right up to the send. The
+  clip is checked against the Reels limits only for a Reel
+  (`video_spec.py`, host `ffprobe`: 3–90s, 24–60fps, ≥540px short side,
+  9:16–16:9, h264/hevc/vp9/av1) — at attach and again when a draft is switched
+  *to* a Reel, since a feed clip may be long or landscape; a missing ffprobe
+  warns but never blocks. A video post has no such limits.
+- **A clip's audio is rendered by the composition, not added after attach.**
+  A hyperframes composition may carry an `<audio class="clip" src=…>` bed; the
+  renderer muxes it into the MP4 (measured with `npx hyperframes audio
+  <file> --json`: onsets, integrated LUFS, true peak). The bed itself is built
+  on the host: `~/.local/bin/musicgen` renders MusicGen (`facebook/musicgen-small`,
+  CPU, torch + transformers installed globally for the user) from a mood prompt,
+  `--long` stitching 30 s takes into a longer file; `ffmpeg` then loops it to the
+  cut and lays the handful of SFX in. MusicGen needs no API key and no network
+  after the first model download, so a video can be scored offline.
+- **A Reel publishes through `/{page}/video_reels`; a feed video through
+  `/{page}/videos`.** A Reel uses the three-step session (start → POST bytes to
+  `rupload.facebook.com` → finish), because a reel-ified `/videos` upload on this
+  page ignored aspect ratio, returns no `post_id`, and has no draft state.
+  Finishing with `video_state=DRAFT` is the video `publish.private`;
+  `PUBLISHED` otherwise. One Reel is **one post** — it shows in the feed
+  (`status_type: added_video`) and the Reels tab, so never post it twice.
+  Permalink is `https://www.facebook.com/reel/<video-id>/`, and `post_id` comes
+  back bare, so comments must target the composite `<page-id>_<post-id>` (the
+  bare id gives a misleading "singular statuses API is deprecated" error). A
+  video post with `video_mode = post` is instead **one multipart POST** of the
+  clip to `/{page}/videos` (`published=false` when private); it returns only the
+  video id, so the composite `<page-id>_<video-id>` is the feed post id and the
+  permalink is `https://www.facebook.com/<page-id>/videos/<video-id>/`. Its
+  comment tries the composite first and falls back to the video object
+  (`<video-id>/comments`), which the Graph API also accepts. A private send
+  skips the first comment (it can never be seen); a public one retries while
+  Graph propagates a still-processing video.
 - **Every caption opens with a series masthead** from `publish.mastheads` (config.yaml: `[Học cùng Atento]`, `[Đọc báo cùng Atento]`, `[Mỗi ngày 1 kiến thức mới]`) on its own line, before the hook — the recognition cue a new reader learns. The label is a **content judgment, not a source default**, so the operator picks it when writing the caption. `blog masthead` backfills `publish.mastheads.default` onto captions that have none and never replaces a chosen label. It lives in `caption`, so the review preview, the character count, and the posted text all agree (a human can still edit it out on `/review/{id}`).
 - **A Facebook post has no title field**, so a post's title can only be the
   caption's leading line: the **hook under the series masthead** (the masthead is

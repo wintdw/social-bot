@@ -41,6 +41,15 @@ def enabled_names(cfg: dict) -> list[str]:
     return list(cfg.get("publish", {}).get("destinations", []) or [])
 
 
+def video_names() -> list[str]:
+    """Destinations that can publish a video post (Reel or feed video), registry order.
+
+    A video draft may only target one of these; the core refuses the rest
+    instead of silently dropping the clip.
+    """
+    return [name for name, cls in PUBLISHERS.items() if cls.supports_video]
+
+
 def publisher_for(name: str, cfg: dict, token: str | None = None) -> Publisher:
     cls = PUBLISHERS.get(name)
     if cls is None:

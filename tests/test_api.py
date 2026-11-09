@@ -135,6 +135,117 @@ class TestCreatePhotoPost:
         assert captured == {"caption": "hello", "published": "false"}
 
 
+class TestFeedVideoUpload:
+    def test_posts_the_clip_as_a_multipart_source_to_videos(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+
+        def fake_post_file(path, fields, **kw):
+            captured.update(path=path, fields=fields, **kw)
+            return {"id": "888"}
+
+        monkeypatch.setattr(api, "post_file", fake_post_file)
+        resp = api.create_video_post("1148652808337860", "mô tả", b"mp4", filename="c.mp4")
+        assert captured["path"] == "1148652808337860/videos"
+        assert captured["fields"] == {"description": "mô tả"}
+        assert captured["field"] == "source"
+        assert captured["filename"] == "c.mp4"
+        assert captured["data"] == b"mp4"
+        assert captured["content_type"] == "video/mp4"
+        # A video transfer outlives a JSON call's timeout.
+        assert captured["timeout"] >= 300
+        assert resp["id"] == "888"
+
+    def test_a_video_post_omits_empty_text(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+        monkeypatch.setattr(
+            api, "post_file", lambda path, fields, **kw: captured.update(fields) or {}
+        )
+        api.create_video_post("1148652808337860", "", b"mp4")
+        assert captured == {}
+
+    def test_private_sets_published_false(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+        monkeypatch.setattr(
+            api, "post_file", lambda path, fields, **kw: captured.update(fields) or {}
+        )
+        api.create_video_post("1148652808337860", "hello", b"mp4", published=False)
+        assert captured == {"description": "hello", "published": "false"}
+
+
+class TestReelsUpload:
+    def test_start_opens_a_video_reels_session(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+        monkeypatch.setattr(
+            api,
+            "post",
+            lambda path, params=None: (
+                captured.update(path=path, params=params) or {"video_id": "v1"}
+            ),
+        )
+        resp = api.start_reel_upload("1148652808337860")
+        assert captured["path"] == "1148652808337860/video_reels"
+        assert captured["params"] == {"upload_phase": "start"}
+        assert resp["video_id"] == "v1"
+
+    def test_upload_posts_the_bytes_to_rupload_with_oauth_headers(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+
+        def fake_send(request, timeout=None):
+            captured.update(request=request, timeout=timeout)
+            return {"success": True}
+
+        monkeypatch.setattr(api, "_send", fake_send)
+        api.upload_reel("v1", b"mp4bytes", upload_url="https://rupload.facebook.com/x")
+        request = captured["request"]
+        assert request.full_url == "https://rupload.facebook.com/x"
+        assert request.data == b"mp4bytes"
+        assert request.get_header("Authorization") == "OAuth tok"
+        assert request.get_header("Offset") == "0"
+        assert request.get_header("File_size") == "8"
+        assert captured["timeout"] >= 300
+
+    def test_upload_defaults_to_the_versioned_rupload_url(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+        monkeypatch.setattr(
+            api, "_send", lambda request, timeout=None: captured.update(url=request.full_url) or {}
+        )
+        api.upload_reel("v1", b"x")
+        assert captured["url"] == "https://rupload.facebook.com/video-upload/v26.0/v1"
+
+    def test_finish_defaults_to_published(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+        monkeypatch.setattr(
+            api, "post", lambda path, params=None: captured.update(path=path, params=params) or {}
+        )
+        api.finish_reel("1148652808337860", "v1", description="mô tả", title="tiêu đề")
+        assert captured["path"] == "1148652808337860/video_reels"
+        assert captured["params"] == {
+            "upload_phase": "finish",
+            "video_id": "v1",
+            "video_state": "PUBLISHED",
+            "description": "mô tả",
+            "title": "tiêu đề",
+        }
+
+    def test_finish_draft_omits_empty_text(self, monkeypatch):
+        api = GraphApi(token="tok", api_version="v26.0")
+        captured = {}
+        monkeypatch.setattr(api, "post", lambda path, params=None: captured.update(params) or {})
+        api.finish_reel("1148652808337860", "v1", state="DRAFT")
+        assert captured == {
+            "upload_phase": "finish",
+            "video_id": "v1",
+            "video_state": "DRAFT",
+        }
+
+
 class TestMultipartBody:
     def test_carries_the_fields_then_the_file_part(self):
         from social_bot.destinations.facebook.api import _multipart_body

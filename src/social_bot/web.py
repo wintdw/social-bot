@@ -59,10 +59,16 @@ from .ui import favicon_svg
 # FastAPI can resolve the route handlers' string annotations.
 try:  # pragma: no cover - exercised with/without the extra
     from fastapi import FastAPI, Request
-    from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+    from fastapi.responses import (
+        FileResponse,
+        HTMLResponse,
+        JSONResponse,
+        RedirectResponse,
+        Response,
+    )
 except ImportError:  # pragma: no cover
     FastAPI = Request = None
-    HTMLResponse = JSONResponse = RedirectResponse = Response = None
+    FileResponse = HTMLResponse = JSONResponse = RedirectResponse = Response = None
 
 DEFAULT_REFRESH_TIMES = ["07:00", "19:00"]
 DEFAULT_SCAN_TIMES = ["06:00"]
@@ -993,6 +999,25 @@ def create_app(
             headers={"Cache-Control": "no-cache"},
         )
 
+    @app.get("/videos/{name}")
+    async def stored_video(name: str):
+        """A locally stored post video (the clip attached to a draft).
+
+        Static like ``/images``: rendering happens on the host, the CLI copies
+        the file into the bind-mounted videos dir. FileResponse answers Range
+        requests, so the browser can seek and start playing before the whole
+        file has been read.
+        """
+        safe = media.valid_video_name(name)
+        path = media.videos_dir(cfg) / name if safe else None
+        if path is None or not await asyncio.to_thread(path.is_file):
+            return Response("no such video", media_type="text/plain", status_code=404)
+        return FileResponse(
+            path,
+            media_type=media.video_media_type(name),
+            headers={"Cache-Control": "no-cache"},
+        )
+
     @app.get("/", response_class=HTMLResponse)
     async def index(message: str = ""):
         """The operator dashboard: controls + counts + feed."""
@@ -1397,6 +1422,7 @@ def create_app(
         return _page(
             render_drafts_html(
                 page_drafts,
+                cfg=cfg,
                 message=message,
                 private=private,
                 total=len(base),
@@ -1431,6 +1457,7 @@ def create_app(
         return _page(
             render_draft_html(
                 draft,
+                cfg=cfg,
                 message=message,
                 message_kind=kind,
                 private=private,
@@ -1457,6 +1484,7 @@ def create_app(
             else None
         )
         destination = str(form.get("destination", "") or "") or None
+        video_mode = str(form.get("video_mode", "") or "") or None
         try:
             await asyncio.to_thread(
                 pipeline.edit_draft,
@@ -1465,6 +1493,7 @@ def create_app(
                 caption=str(form.get("caption", "") or ""),
                 hashtags=None if hashtags is None else str(hashtags),
                 destinations=destinations,
+                video_mode=video_mode,
             )
             if approve:
                 # Approve & schedule: save the edits, then queue for the poster.
@@ -1542,6 +1571,7 @@ def create_app(
             if "destinations_field" in form
             else None
         )
+        video_mode = str(form.get("video_mode", "") or "") or None
         try:
             await asyncio.to_thread(
                 pipeline.edit_draft,
@@ -1550,6 +1580,7 @@ def create_app(
                 caption=str(form.get("caption", "") or ""),
                 hashtags=None if hashtags is None else str(hashtags),
                 destinations=destinations,
+                video_mode=video_mode,
             )
         except ValueError as exc:
             return _page(render_message_html("Cannot save", str(exc)), 400)

@@ -39,7 +39,7 @@ class LinkedInPublisher(Publisher):
     # LinkedIn has no "unpublished post" equivalent, so private mode is a no-op.
     supports_private = False
     # An image draft sends its bytes to the gateway, which attaches them as media.
-    supports_images = True
+    supports_video = False
 
     @classmethod
     def validate_config(cls, dst: dict) -> None:
@@ -70,6 +70,10 @@ class LinkedInPublisher(Publisher):
         return f"POST {self.base_url()}/post"
 
     def publish(self, draft: Draft) -> PublishResult:
+        if draft.video:
+            # Video drafts are Facebook-only by policy; the pipeline refuses
+            # them before reaching here, and this is the second line of defence.
+            raise PublisherError("linkedin: video posts are Facebook-only")
         text = draft.post_text
         if not text.strip() and not draft.image:
             raise PublisherError("linkedin: draft has no caption or image to post")

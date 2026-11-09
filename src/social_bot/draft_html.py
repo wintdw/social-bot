@@ -21,10 +21,11 @@ import datetime as dt
 import html
 import urllib.parse
 
+from . import media as media_store
 from .caption import display_title, leading_masthead
-from .destinations import label_for, labels_for
+from .destinations import label_for, labels_for, video_names
 from .destinations import names as destination_names
-from .drafts import Draft, parse_when
+from .drafts import VIDEO_MODES, VIDEO_POST, VIDEO_REEL, Draft, parse_when, video_mode_label
 from .ui import BRAND_EYEBROW, badge, fmt_when, layout
 
 # Human labels for the status filter chips (the badge shows the raw state).
@@ -116,13 +117,25 @@ _DETAIL_SCRIPT = """<script>
 </script>"""
 
 
-def _draft_card(draft: Draft) -> str:
+def _src(cfg: dict | None, url: str) -> str:
+    """A media URL for HTML, versioned when it points at a local file."""
+    return media_store.served_url(cfg, url) if cfg else str(url or "")
+
+
+def _draft_card(draft: Draft, cfg: dict | None = None) -> str:
     """One review row: thumbnail, title, state/source/date, caption preview."""
     url = html.escape(f"/review/{draft.id}")
     title = html.escape(display_title(draft.caption, draft.title or draft.id))
-    if draft.image:
+    if draft.video:
+        # A video row shows the clip's first frame implicitly (browsers paint a
+        # poster from metadata); no separate thumbnail is generated.
         thumb = (
-            f'<span class="qthumb"><img src="{html.escape(draft.image)}" alt="" '
+            f'<span class="qthumb video"><video src="{html.escape(_src(cfg, draft.video))}" '
+            'preload="metadata" muted aria-hidden="true"></video></span>'
+        )
+    elif draft.image:
+        thumb = (
+            f'<span class="qthumb"><img src="{html.escape(_src(cfg, draft.image))}" alt="" '
             'loading="lazy"></span>'
         )
     else:
@@ -326,6 +339,7 @@ def _search_form(
 def render_drafts_html(
     drafts: list[Draft],
     *,
+    cfg: dict | None = None,
     message: str = "",
     private: bool = False,
     generated_at: dt.datetime | None = None,
@@ -397,7 +411,9 @@ def render_drafts_html(
                 "</p></div>"
             )
     else:
-        body = '<div class="qlist">' + "".join(_draft_card(draft) for draft in drafts) + "</div>"
+        body = (
+            '<div class="qlist">' + "".join(_draft_card(draft, cfg) for draft in drafts) + "</div>"
+        )
 
     queue = (
         '<section class="panel">'
@@ -468,6 +484,7 @@ def _stepper(draft: Draft) -> str:
 def render_draft_html(
     draft: Draft,
     *,
+    cfg: dict | None = None,
     message: str = "",
     message_kind: str = "info",
     private: bool = False,
@@ -500,18 +517,29 @@ def render_draft_html(
     )
 
     media = ""
-    if draft.image:
+    if draft.video:
+        media = (
+            '<figure class="hero">'
+            f'<video src="{html.escape(_src(cfg, draft.video))}" controls preload="metadata"></video>'
+            "</figure>"
+        )
+    elif draft.image:
         alt = html.escape(draft.title or "Post image")
         media = (
             '<figure class="hero">'
-            f'<img src="{html.escape(draft.image)}" alt="{alt}" loading="lazy">'
+            f'<img src="{html.escape(_src(cfg, draft.image))}" alt="{alt}" loading="lazy">'
             "</figure>"
         )
 
     # Images are the source post's own cover or a drawn plate —
     # nothing is generated in the background anymore.
     image_note = ""
-    if not draft.image:
+    if draft.video:
+        image_note = (
+            '<p class="muted">Video attached — this post publishes as '
+            f"a {video_mode_label(draft.video_mode)}, on Facebook only.</p>"
+        )
+    elif not draft.image:
         image_note = '<p class="muted">No image yet — the post will publish without one.</p>'
     elif image_generated:
         image_note = (
@@ -532,6 +560,10 @@ def render_draft_html(
     # the operator sees what is left to send without scrolling to the action
     # bar.
     known = destination_names()
+    if draft.video:
+        # A video post is Facebook only: only platforms that can take a video
+        # are offered, so LinkedIn can never be ticked onto a video draft.
+        known = [name for name in known if name in video_names()]
     selected = [name for name in draft.destinations if name in known]
     posted = set(draft.posted_destinations())
     dest_picker = ""
@@ -555,6 +587,8 @@ def render_draft_html(
         hints = [
             "Every ticked platform posts separately, with its own button below.",
         ]
+        if draft.video:
+            hints.append("Video posts are Facebook only.")
         if "linkedin" in selected and private:
             hints.append("Private mode does not apply to LinkedIn — it still posts publicly.")
         dest_picker = (
@@ -562,6 +596,27 @@ def render_draft_html(
             f'<div class="cmdbar">{boxes}</div>'
             '<input type="hidden" name="destinations_field" value="1">'
             f'<div class="field-hint">{" ".join(hints)}</div></div>'
+        )
+
+    # The placement of an attached clip: the page feed or the Reels tab. Reach
+    # differs by placement, so it is a content choice, saved with the caption
+    # like the destination chips. A radio group always submits one value.
+    video_picker = ""
+    if draft.video:
+        mode = draft.video_mode if draft.video_mode in VIDEO_MODES else VIDEO_POST
+        boxes = "".join(
+            '<label class="chip">'
+            f'<input type="radio" name="video_mode" value="{value}"'
+            f"{' checked' if value == mode else ''}>"
+            f"{label}</label>"
+            for value, label in ((VIDEO_POST, "Video post"), (VIDEO_REEL, "Reel"))
+        )
+        video_picker = (
+            '<div class="field"><span class="field-label">Publish video as</span>'
+            f'<div class="cmdbar">{boxes}</div>'
+            '<div class="field-hint">A Reel lives in the Reels tab; a video post '
+            "sits in the page feed. Reach differs, so pick what this clip was made "
+            "for.</div></div>"
         )
 
     form = (
@@ -576,6 +631,7 @@ def render_draft_html(
         f'<input type="text" id="hashtags" name="hashtags" value="{tags}">'
         '<div class="field-hint">Appended to the caption when posted. '
         "Space or comma separated.</div></div>"
+        f"{video_picker}"
         f"{dest_picker}"
         "</form>"
     )
@@ -584,7 +640,7 @@ def render_draft_html(
     # still available (stored on the draft, or read back from the source page).
     # Its own form: restoring the image must not save or post the caption edits.
     restore_button = ""
-    if image_generated:
+    if image_generated and not draft.video:
         restore_button = (
             f'<form id="restore-image-form" method="post" action="{action}/restore-image">'
             '<button type="submit" class="btn btn-quiet">Restore source image</button>'
@@ -636,9 +692,14 @@ def render_draft_html(
     )
 
     preview_media = ""
-    if draft.image:
+    if draft.video:
         preview_media = (
-            f'<img class="media" src="{html.escape(draft.image)}" alt="" loading="lazy">'
+            f'<video class="media" src="{html.escape(_src(cfg, draft.video))}" '
+            'controls preload="metadata"></video>'
+        )
+    elif draft.image:
+        preview_media = (
+            f'<img class="media" src="{html.escape(_src(cfg, draft.image))}" alt="" loading="lazy">'
         )
     # One preview: exactly what posts. Both destinations receive the same text
     # and (when there is one) the same image, so no per-platform preview.

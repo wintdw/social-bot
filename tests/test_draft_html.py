@@ -732,3 +732,52 @@ class TestMessageHtml:
         out = render_message_html("Oops", "<script>alert(1)</script>")
         assert "<script>" not in out
         assert "&lt;script&gt;" in out
+
+
+class TestVideoDraft:
+    def _draft(self, **kw):
+        base = {
+            "id": "vid",
+            "title": "Video",
+            "caption": "[Học cùng Atento]\n\nHook line\n\nBody.",
+            "state": "ai_draft",
+            "destinations": ["facebook"],
+            "video": "/videos/vid.mp4",
+        }
+        base.update(kw)
+        return Draft(**base)
+
+    def test_the_hero_and_the_preview_play_the_video(self):
+        out = render_draft_html(self._draft(), private=False)
+        assert 'class="hero"' in out
+        assert '<video src="/videos/vid.mp4" controls preload="metadata"></video>' in out
+        assert '<video class="media" src="/videos/vid.mp4" controls preload="metadata">' in out
+        assert '<img class="media"' not in out
+
+    def test_a_video_is_facebook_only_in_the_ui(self):
+        out = render_draft_html(self._draft(destinations=["facebook"]), private=False)
+        assert "linkedin" not in out.lower()
+        assert "Reel" in out
+
+    def test_the_placement_picker_defaults_to_a_feed_video(self):
+        out = render_draft_html(self._draft(), private=False)
+        assert '<input type="radio" name="video_mode" value="post" checked>' in out
+        assert '<input type="radio" name="video_mode" value="reel">' in out
+        assert "publishes as a video post" in out
+
+    def test_a_reel_draft_reads_as_a_reel(self):
+        out = render_draft_html(self._draft(video_mode="reel"), private=False)
+        assert '<input type="radio" name="video_mode" value="reel" checked>' in out
+        assert "publishes as a Reel" in out
+
+    def test_a_video_row_has_a_play_thumb(self):
+        out = render_drafts_html([self._draft()], generated_at=GENERATED)
+        assert 'class="qthumb video"' in out
+        assert '<video src="/videos/vid.mp4" preload="metadata"' in out
+
+    def test_detaching_is_not_offered_by_a_video_draft(self):
+        # Restoring an image belongs to the image tools; a video draft hides them.
+        out = render_draft_html(
+            self._draft(image="/images/x.jpg"), private=False, image_generated=True
+        )
+        assert "Restore source image" not in out

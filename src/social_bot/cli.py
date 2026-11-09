@@ -7,7 +7,7 @@ import json
 import pathlib
 import sys
 
-from . import __version__, media
+from . import __version__, media, video_spec
 from .config import load_config, validate
 from .destinations import names as destination_names
 from .destinations import publisher_for
@@ -20,7 +20,9 @@ from .destinations.facebook import (
 )
 from .draft_pipeline import (
     apply_masthead,
+    attach_video,
     backfill_destinations,
+    detach_video,
     ideas_topics_path,
     load_topics,
     localize_images,
@@ -30,7 +32,9 @@ from .draft_pipeline import (
     queue_view,
     reset_queue_order,
     scan_sources,
+    set_video_mode,
 )
+from .drafts import VIDEO_MODES, VIDEO_POST, video_mode_label
 
 # Shown when the state directory can't be written (a common Docker uid mismatch).
 _DATA_DIR_HINT = (
@@ -201,6 +205,40 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p_add_idea.add_argument("--excerpt", default="", help="a short outline for the caption")
     p_add_idea.add_argument("--json", action="store_true", help="print the summary as JSON")
     p_add_idea.set_defaults(func=_cmd_blog_add_idea)
+
+    p_attach = blog_sub.add_parser(
+        "attach-video",
+        help="attach a rendered clip to one draft; a video post is Facebook only",
+    )
+    p_attach.add_argument("draft", metavar="ID", help="the draft id to attach the video to")
+    p_attach.add_argument("file", metavar="FILE", help="the rendered .mp4/.webm/.mov")
+    p_attach.add_argument(
+        "--mode",
+        choices=VIDEO_MODES,
+        default=VIDEO_POST,
+        help="placement: 'post' (page feed video, default) or 'reel' (Reels tab)",
+    )
+    p_attach.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_attach.set_defaults(func=_cmd_blog_attach_video)
+
+    p_detach = blog_sub.add_parser(
+        "detach-video",
+        help="remove a draft's video (never posts, never touches the caption)",
+    )
+    p_detach.add_argument("draft", metavar="ID", help="the draft id to detach the video from")
+    p_detach.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_detach.set_defaults(func=_cmd_blog_detach_video)
+
+    p_video_mode = blog_sub.add_parser(
+        "video-mode",
+        help="publish a draft's clip as a Reel (Reels tab) or a video post (page feed)",
+    )
+    p_video_mode.add_argument("draft", metavar="ID", help="the draft id whose clip to re-route")
+    p_video_mode.add_argument(
+        "mode", choices=VIDEO_MODES, help="'reel' (Reels tab) or 'post' (page feed video)"
+    )
+    p_video_mode.add_argument("--json", action="store_true", help="print the summary as JSON")
+    p_video_mode.set_defaults(func=_cmd_blog_video_mode)
 
     p_serve = sub.add_parser(
         "serve",
@@ -595,6 +633,73 @@ def _cmd_blog_add_idea(args: argparse.Namespace) -> int:
     reason = result["skipped_ideas"][0]["reason"] if result["skipped_ideas"] else "not added"
     print(f"Skipped: {reason}", file=sys.stderr)
     return 1
+
+
+def _cmd_blog_attach_video(args: argparse.Namespace) -> int:
+    """Attach one rendered clip to a draft (Reels limits checked first)."""
+    cfg = _load_config(args)
+    try:
+        result = attach_video(cfg, args.draft, args.file, mode=args.mode)
+    except ValueError as exc:
+        print(f"blog attach-video: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(f"blog attach-video: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    spec = result["spec"]
+    detail = f" ({video_spec.summary(spec)})" if spec else ""
+    placement = video_mode_label(result["video_mode"])
+    print(f"Attached {result['video']} to {result['id']}{detail} as a {placement}, Facebook only.")
+    if result["warning"]:
+        print(f"  note: {result['warning']}", file=sys.stderr)
+    return 0
+
+
+def _cmd_blog_detach_video(args: argparse.Namespace) -> int:
+    """Remove a draft's video, leaving its destination choice alone."""
+    cfg = _load_config(args)
+    try:
+        result = detach_video(cfg, args.draft)
+    except ValueError as exc:
+        print(f"blog detach-video: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(f"blog detach-video: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return 0
+    print(
+        f"Removed the video from {result['id']}; targets stay {', '.join(result['destinations'])}."
+    )
+    return 0
+
+
+def _cmd_blog_video_mode(args: argparse.Namespace) -> int:
+    """Switch an attached clip between a Reel and an ordinary video post."""
+    cfg = _load_config(args)
+    try:
+        draft = set_video_mode(cfg, args.draft, args.mode)
+    except ValueError as exc:
+        print(f"blog video-mode: {exc}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        where = getattr(exc, "filename", None) or "the drafts directory"
+        print(f"blog video-mode: cannot write {where}: {exc.strerror or exc}", file=sys.stderr)
+        print(_DATA_DIR_HINT, file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps({"id": draft.id, "video_mode": draft.video_mode}, indent=2))
+        return 0
+    print(f"{draft.id} will publish as a {video_mode_label(draft.video_mode)}, Facebook only.")
+    return 0
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:

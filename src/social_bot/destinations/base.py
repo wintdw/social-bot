@@ -78,6 +78,9 @@ class Publisher(_Destination, ABC):
     # A destination may not support every post feature; the core checks these.
     supports_images: ClassVar[bool] = True
     supports_private: ClassVar[bool] = True
+    # Video is opt-in per destination: a platform must say it can take one
+    # before the core will route a video draft there.
+    supports_video: ClassVar[bool] = False
 
     @classmethod
     def validate_config(cls, dst: dict) -> None:

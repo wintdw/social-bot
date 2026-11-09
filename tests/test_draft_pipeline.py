@@ -1901,3 +1901,255 @@ class TestDestinationSkipDays:
         assert pipeline.destination_skips_day(cfg, "linkedin", saturday) is True
         assert pipeline.destination_skips_day(cfg, "linkedin", monday) is False
         assert pipeline.destination_skips_day(cfg, "facebook", saturday) is False
+
+
+GOOD_SPEC = {"width": 1080, "height": 1920, "duration": 6.0, "fps": 30.0, "codec": "h264"}
+
+
+class TestVideoAttach:
+    def _clip(self, tmp_path, data=b"\x00\x00\x00\x18ftypisom"):
+        path = tmp_path / "clip.mp4"
+        path.write_bytes(data)
+        return path
+
+    def _stub_probe(self, monkeypatch, spec=GOOD_SPEC, problems=None):
+        monkeypatch.setattr(pipeline.video_spec, "probe", lambda path, **kw: spec)
+        monkeypatch.setattr(pipeline.video_spec, "problems", lambda s: list(problems or []))
+
+    def test_attach_stores_the_clip_and_routes_facebook_only(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        assert cfg["publish"]["destinations"] == ["facebook", "linkedin"]
+        self._stub_probe(monkeypatch)
+        result = pipeline.attach_video(cfg, "post-one", self._clip(tmp_path))
+        assert result["video"] == "/videos/post-one.mp4"
+        assert result["destinations"] == ["facebook"]
+        draft = pipeline.get_draft(cfg, "post-one")
+        assert draft.video == "/videos/post-one.mp4"
+        assert draft.destinations == ["facebook"]
+        assert (pipeline.media.videos_dir(cfg) / "post-one.mp4").is_file()
+
+    def test_attach_refuses_a_clip_that_cannot_be_a_reel(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        self._stub_probe(monkeypatch, problems=["duration 1.0s is outside 3–90s"])
+        with pytest.raises(ValueError, match="will not publish as a Reel"):
+            pipeline.attach_video(cfg, "post-one", self._clip(tmp_path), mode="reel")
+        assert pipeline.get_draft(cfg, "post-one").video == ""
+
+    def test_attach_defaults_to_a_feed_video(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        self._stub_probe(monkeypatch)
+        result = pipeline.attach_video(cfg, "post-one", self._clip(tmp_path))
+        assert result["video_mode"] == "post"
+        assert pipeline.get_draft(cfg, "post-one").video_mode == "post"
+
+    def test_reel_mode_takes_a_clip_inside_the_reels_limits(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        self._stub_probe(monkeypatch)
+        result = pipeline.attach_video(cfg, "post-one", self._clip(tmp_path), mode="reel")
+        assert result["video_mode"] == "reel"
+        assert pipeline.get_draft(cfg, "post-one").video_mode == "reel"
+
+    def test_post_mode_takes_a_clip_outside_the_reels_limits(self, tmp_path, monkeypatch):
+        # A long landscape clip cannot be a Reel but is a fine feed video, so the
+        # Reels limits must not gate this placement.
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        self._stub_probe(monkeypatch, problems=["duration 600.0s is outside 3–90s"])
+        result = pipeline.attach_video(cfg, "post-one", self._clip(tmp_path), mode="post")
+        assert result["video_mode"] == "post"
+        assert pipeline.get_draft(cfg, "post-one").video_mode == "post"
+
+    def test_attach_refuses_an_unknown_mode(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        with pytest.raises(ValueError, match="unknown video mode"):
+            pipeline.attach_video(cfg, "post-one", self._clip(tmp_path), mode="story")
+
+    def test_attach_refuses_a_posted_draft(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.state = POSTED
+        draft.record_post("facebook", post_id="123_9")
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        self._stub_probe(monkeypatch)
+        with pytest.raises(ValueError, match="already been posted"):
+            pipeline.attach_video(cfg, "post-one", self._clip(tmp_path))
+
+    def test_a_missing_ffprobe_warns_but_still_attaches(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        monkeypatch.setattr(
+            pipeline.video_spec,
+            "probe",
+            lambda path, **kw: (_ for _ in ()).throw(pipeline.video_spec.SpecError("no tool")),
+        )
+        monkeypatch.setattr(pipeline.video_spec, "find_ffprobe", lambda: "")
+        result = pipeline.attach_video(cfg, "post-one", self._clip(tmp_path))
+        assert result["video"] == "/videos/post-one.mp4"
+        assert "ffprobe not found" in result["warning"]
+
+    def test_an_unreadable_file_is_refused(self, tmp_path):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        with pytest.raises(ValueError, match="cannot read"):
+            pipeline.attach_video(cfg, "post-one", tmp_path / "missing.mp4")
+
+    def test_attach_replaces_a_previous_clip_of_another_type(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        self._stub_probe(monkeypatch)
+        pipeline.attach_video(cfg, "post-one", self._clip(tmp_path))
+        webm = tmp_path / "clip.webm"
+        webm.write_bytes(b"\x1a\x45\xdf\xa3____")
+        pipeline.attach_video(cfg, "post-one", webm)
+        assert not (pipeline.media.videos_dir(cfg) / "post-one.mp4").exists()
+        assert (pipeline.media.videos_dir(cfg) / "post-one.webm").is_file()
+
+    def test_detach_removes_the_file_and_keeps_the_targets(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        self._stub_probe(monkeypatch)
+        pipeline.attach_video(cfg, "post-one", self._clip(tmp_path))
+        result = pipeline.detach_video(cfg, "post-one")
+        assert result["destinations"] == ["facebook"]
+        assert not (pipeline.media.videos_dir(cfg) / "post-one.mp4").exists()
+        assert pipeline.get_draft(cfg, "post-one").video == ""
+
+    def test_detach_refuses_a_draft_without_video(self, tmp_path):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        with pytest.raises(ValueError, match="has no video"):
+            pipeline.detach_video(cfg, "post-one")
+
+
+class TestVideoMode:
+    """The placement choice: a Reel (Reels tab) or a video post (page feed)."""
+
+    def _video_draft(self, tmp_path, mode="reel"):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.video = "/videos/post-one.mp4"
+        draft.video_mode = mode
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        videos = pipeline.media.videos_dir(cfg)
+        videos.mkdir(parents=True, exist_ok=True)
+        (videos / "post-one.mp4").write_bytes(b"\x00\x00\x00\x18ftypisom")
+        return cfg
+
+    def _stub_probe(self, monkeypatch, problems=None):
+        monkeypatch.setattr(pipeline.video_spec, "probe", lambda path, **kw: dict(GOOD_SPEC))
+        monkeypatch.setattr(pipeline.video_spec, "problems", lambda s: list(problems or []))
+
+    def test_switch_to_a_feed_video_and_back(self, tmp_path, monkeypatch):
+        cfg = self._video_draft(tmp_path, mode="reel")
+        self._stub_probe(monkeypatch)
+        assert pipeline.set_video_mode(cfg, "post-one", "post").video_mode == "post"
+        assert pipeline.get_draft(cfg, "post-one").video_mode == "post"
+        assert pipeline.set_video_mode(cfg, "post-one", "reel").video_mode == "reel"
+
+    def test_switching_to_a_reel_rechecks_the_clip(self, tmp_path, monkeypatch):
+        cfg = self._video_draft(tmp_path, mode="post")
+        self._stub_probe(monkeypatch, problems=["duration 600.0s is outside 3–90s"])
+        with pytest.raises(ValueError, match="will not publish as a Reel"):
+            pipeline.set_video_mode(cfg, "post-one", "reel")
+        # The draft keeps the placement it had — nothing half-applied.
+        assert pipeline.get_draft(cfg, "post-one").video_mode == "post"
+
+    def test_a_missing_ffprobe_never_blocks_the_switch(self, tmp_path, monkeypatch):
+        cfg = self._video_draft(tmp_path, mode="post")
+        monkeypatch.setattr(
+            pipeline.video_spec,
+            "probe",
+            lambda path, **kw: (_ for _ in ()).throw(pipeline.video_spec.SpecError("no tool")),
+        )
+        monkeypatch.setattr(pipeline.video_spec, "find_ffprobe", lambda: "")
+        assert pipeline.set_video_mode(cfg, "post-one", "reel").video_mode == "reel"
+
+    def test_a_draft_without_a_video_has_no_placement(self, tmp_path):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        with pytest.raises(ValueError, match="no video attached"):
+            pipeline.set_video_mode(cfg, "post-one", "reel")
+
+    def test_an_unknown_mode_is_refused(self, tmp_path):
+        cfg = self._video_draft(tmp_path)
+        with pytest.raises(ValueError, match="unknown video mode"):
+            pipeline.set_video_mode(cfg, "post-one", "story")
+
+    def test_edit_draft_saves_the_placement_with_the_caption(self, tmp_path, monkeypatch):
+        cfg = self._video_draft(tmp_path, mode="reel")
+        self._stub_probe(monkeypatch)
+        draft = pipeline.edit_draft(cfg, "post-one", caption="Hello", video_mode="post")
+        assert draft.video_mode == "post"
+        assert pipeline.get_draft(cfg, "post-one").video_mode == "post"
+
+
+class TestVideoRouting:
+    def _video_draft(self, tmp_path, **kw):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.video = "/videos/post-one.mp4"
+        for key, value in kw.items():
+            setattr(draft, key, value)
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+        return cfg
+
+    def test_edit_draft_refuses_linkedin_on_a_video(self, tmp_path):
+        cfg = self._video_draft(tmp_path)
+        with pytest.raises(ValueError, match="Facebook-only"):
+            pipeline.edit_draft(cfg, "post-one", destinations=["facebook", "linkedin"])
+
+    def test_edit_draft_allows_facebook_on_a_video(self, tmp_path):
+        cfg = self._video_draft(tmp_path)
+        draft = pipeline.edit_draft(cfg, "post-one", destinations=["facebook"])
+        assert draft.destinations == ["facebook"]
+
+    def test_backfill_never_adds_linkedin_to_a_video(self, tmp_path):
+        cfg = self._video_draft(tmp_path, destinations=["facebook"])
+        result = pipeline.backfill_destinations(cfg)
+        assert result["updated"] == 0
+        assert pipeline.get_draft(cfg, "post-one").destinations == ["facebook"]
+
+    def test_publish_refuses_a_destination_without_video_support(self, tmp_path, monkeypatch):
+        cfg = self._video_draft(tmp_path, destinations=["linkedin"])
+
+        class NoVideo:
+            supports_video = False
+
+            def describe(self, draft):
+                return "POST /post"
+
+            def publish(self, draft):  # pragma: no cover - must not be called
+                raise AssertionError("publish must not run")
+
+        monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: NoVideo())
+        with pytest.raises(ValueError, match="Facebook-only"):
+            pipeline.publish_draft(cfg, "post-one")
+
+    def test_a_video_without_targets_adopts_facebook_not_the_config(self, tmp_path, monkeypatch):
+        cfg = self._video_draft(tmp_path, destinations=[])
+        seen = {}
+
+        class Reel:
+            supports_video = True
+
+            def describe(self, draft):
+                return "POST /123/video_reels"
+
+            def publish(self, draft):
+                seen["destinations"] = list(draft.destinations)
+                return PublishResult(destination="facebook", post_id="123_777")
+
+        monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: Reel())
+        pipeline.publish_draft(cfg, "post-one")
+        assert seen["destinations"] == ["facebook"]
+
+    def test_dry_run_prints_the_video_path(self, tmp_path, monkeypatch, capsys):
+        cfg = self._video_draft(tmp_path)
+
+        class Reel:
+            supports_video = True
+
+            def describe(self, draft):
+                return "POST /123/video_reels"
+
+            def publish(self, draft):  # pragma: no cover - dry run
+                raise AssertionError
+
+        monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: Reel())
+        pipeline.publish_draft(cfg, "post-one", dry_run=True)
+        out = capsys.readouterr().out
+        assert "video: /videos/post-one.mp4" in out
+        assert "POST /123/video_reels" in out

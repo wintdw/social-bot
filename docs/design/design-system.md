@@ -87,6 +87,7 @@ times, and character counts use **tabular figures** so columns line up.
 | Notices | `.notice`, `.notice-ok/warn/error` | `ui.notice_html` |
 | Segmented filter | `.seg`, `.seg-item`, `.count` | `draft_html._segment` |
 | Source chips | `.chip`, `.chip-active` | `draft_html._chip` |
+| Picker chips (checkbox / radio) | `label.chip` + a visually hidden `input` | destination picker, video-placement picker |
 | Review row | `.qrow`, `.qthumb`, `.qbody`, `.qtitle`, `.qmeta`, `.qpreview` | `draft_html._draft_card` |
 | Post queue (`/queue`) | `.qrow-manage`, `.qrow-main`, `.qmove`, `.qgrip`, `.qrow-dragging`, `.qfoot`, `.pill.is-next` | `dashboard_html.render_queue_html` / `_queue_panel` |
 | Pagination | `.pager` | `draft_html._pagination_bar` |

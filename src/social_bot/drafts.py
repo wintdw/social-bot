@@ -22,6 +22,20 @@ REJECTED = "rejected"
 
 STATES = (EXTRACTED, AI_DRAFT, APPROVED, POSTED, REJECTED)
 
+# How an attached clip publishes: as an ordinary video post in the page feed, or
+# as a Reel (the Reels tab). A feed video is the default — Reels reach poorly on
+# this page — but reach differs by placement, so the operator picks per post on
+# /review.
+VIDEO_REEL = "reel"
+VIDEO_POST = "post"
+VIDEO_MODES = (VIDEO_REEL, VIDEO_POST)
+
+
+def video_mode_label(mode: str) -> str:
+    """The operator-facing noun for a video placement ("Reel" / "video post")."""
+    return "video post" if mode == VIDEO_POST else "Reel"
+
+
 # States a draft can be published from (an explicit human click implies approval).
 _PUBLISHABLE = (AI_DRAFT, APPROVED)
 
@@ -71,6 +85,15 @@ class Draft:
     # never written by drawing a plate — so /review/{id} can always put the
     # source's own cover back after a plate replaced it.
     source_image: str = ""
+    # A locally stored video for this post (``/videos/<id>.<ext>``). Opt-in:
+    # empty on every ordinary post. A video draft targets Facebook alone —
+    # LinkedIn has no video path.
+    video: str = ""
+    # Where the attached clip publishes: ``post`` (an ordinary video post in the
+    # page feed, the default) or ``reel`` (the Reels tab). Reach differs by
+    # placement, so the operator chooses per post. Only a Reel is held to Meta's
+    # Reels limits.
+    video_mode: str = VIDEO_POST
     published: str = ""
     lang: str = ""
     state: str = EXTRACTED
@@ -114,7 +137,12 @@ class Draft:
                 destination = (data.get("destinations") or ["facebook"])[0]
                 data["posts"] = {destination: {**legacy, "private": False}}
         known = set(cls.__dataclass_fields__)
-        return cls(**{k: v for k, v in data.items() if k in known})
+        data = {k: v for k, v in data.items() if k in known}
+        # An unknown or missing placement falls back to the default (a feed
+        # video), so a hand-edited file can never publish somewhere unexpected.
+        if data.get("video_mode") not in VIDEO_MODES:
+            data.pop("video_mode", None)
+        return cls(**data)
 
     # -- state -----------------------------------------------------------
 

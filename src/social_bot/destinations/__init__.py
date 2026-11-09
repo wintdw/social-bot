@@ -28,6 +28,7 @@ from .registry import (
     publisher_for,
     reader_for,
     validate_destinations,
+    video_names,
 )
 
 __all__ = [
@@ -48,4 +49,5 @@ __all__ = [
     "publisher_for",
     "reader_for",
     "validate_destinations",
+    "video_names",
 ]
