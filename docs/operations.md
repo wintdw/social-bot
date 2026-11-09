@@ -115,7 +115,7 @@ not-ready, stops accepting new publishes/scans/refreshes (503), waits up to
 **330s** for an in-flight publish to finish (a video upload is the slowest
 send), then cancels the refresh/scan/posting/token loops. Uvicorn's
 graceful-shutdown window is raised to match, and `docker-compose.yml` sets
-`stop_grace_period: 360s` so Docker does not kill the process mid-send. The
+`stop_grace_period: 390s` so Docker does not kill the process mid-send. The
 wait only happens when a post is actually in flight.
 
 ## Data layout

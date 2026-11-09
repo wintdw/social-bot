@@ -26,8 +26,9 @@ services:
     # Let an in-flight post finish on `docker compose down`/redeploy. The app
     # drains up to web.DRAIN_TIMEOUT_SECONDS (330s) — a video upload is the
     # slowest send — and Docker's default 10s would kill it mid-upload, after
-    # the post may already have gone out. Only waits when a send is in flight.
-    stop_grace_period: 360s
+    # the post may already have gone out. Keep this above uvicorn's shutdown
+    # window (360s too); it only waits when a send is in flight.
+    stop_grace_period: 390s
     # Reach the host from inside the container — linkin-bot (the LinkedIn
     # gateway, POST /post) publishes its port on the host at host:8082.
     extra_hosts:
