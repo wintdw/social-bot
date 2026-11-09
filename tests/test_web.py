@@ -6,7 +6,9 @@ import datetime as dt
 
 import pytest
 
+from social_bot import media
 from social_bot.web import (
+    DRAIN_TIMEOUT_SECONDS,
     _parse_hhmm,
     _slot_time,
     _slot_window,
@@ -426,3 +428,8 @@ class TestMessageUrl:
 
     def test_escapes_the_message(self):
         assert message_url("/", "a&b=c") == "/?message=a%26b%3Dc"
+
+
+def test_drain_window_covers_the_longest_publish():
+    """Shutdown must outlast a video upload, or a redeploy can kill it mid-send."""
+    assert DRAIN_TIMEOUT_SECONDS > media.UPLOAD_TIMEOUT_SECONDS
