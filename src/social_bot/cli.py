@@ -1,4 +1,4 @@
-"""social-bot command line: `whoami`, `feed`, `post`, `refresh`, `blog scan`, `serve`."""
+"""social-bot command line: account tools, `post`, `feed`, and `blog …` pipeline."""
 
 from __future__ import annotations
 
@@ -7,16 +7,16 @@ import json
 import pathlib
 import sys
 
-from . import __version__, media, video_spec
+from . import __version__, video_spec
 from .config import load_config, validate
-from .destinations import names as destination_names
-from .destinations import publisher_for
-from .destinations.facebook import (
-    ApiError,
-    api_from_config,
-    format_feed_md,
-    parse_feed_response,
-    refresh_feed,
+from .destinations import (
+    DestinationError,
+    direct_publisher,
+    first_reader,
+    publisher_for,
+)
+from .destinations import (
+    names as destination_names,
 )
 from .draft_pipeline import (
     apply_masthead,
@@ -67,7 +67,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p_dest.set_defaults(func=_cmd_destinations)
 
     p_feed = sub.add_parser("feed", help="fetch the page feed (read-only)")
-    p_feed.add_argument("--page-id", help="override destinations.facebook.account_id")
+    p_feed.add_argument("--page-id", help="override the destination's configured account id")
     p_feed.add_argument(
         "--limit", type=int, default=None, help="posts to show (default: feed.limit)"
     )
@@ -75,7 +75,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     p_feed.set_defaults(func=_cmd_feed)
 
     p_post = sub.add_parser("post", help="post a status, link, or photo to the page")
-    p_post.add_argument("--page-id", help="override destinations.facebook.account_id")
+    p_post.add_argument("--page-id", help="override the destination's configured account id")
     p_post.add_argument("--message", help="post text (required unless --photo is given)")
     p_post.add_argument("--link", help="optional link attached to the post")
     p_post.add_argument(
@@ -287,16 +287,6 @@ def _load_config(args: argparse.Namespace) -> dict:
     return cfg
 
 
-def _page_id(args: argparse.Namespace, cfg: dict) -> str:
-    page_id = (args.page_id or cfg["destinations"]["facebook"].get("account_id") or "").strip()
-    if not page_id:
-        raise ValueError(
-            "no page id: set destinations.facebook.account_id in config.yaml, pass "
-            "--page-id, or run `whoami` to list the pages the token can manage"
-        )
-    return page_id
-
-
 def _cmd_destinations(args: argparse.Namespace) -> int:
     cfg = _load_config(args)
     enabled = set(cfg.get("publish", {}).get("destinations", []) or [])
@@ -310,41 +300,49 @@ def _cmd_destinations(args: argparse.Namespace) -> int:
 
 def _cmd_whoami(args: argparse.Namespace) -> int:
     cfg = _load_config(args)
+    reader = first_reader(cfg, token=args.token)
+    if reader is None:
+        print("whoami: no destination can read an account", file=sys.stderr)
+        return 2
     try:
-        api = api_from_config(cfg, args.token)
+        me = reader.identity()
+        pages = reader.accounts()
     except ValueError as exc:
         print(f"whoami: {exc}", file=sys.stderr)
         return 2
-    me = api.me()
+    except DestinationError as exc:
+        print(f"whoami: {exc}", file=sys.stderr)
+        return 1
     print(f"Token owner: {me.get('name', '?')} (id {me.get('id', '?')})")
-    pages = api.managed_pages()
     if not pages:
         print("  No pages this token can manage (need pages_show_list permission).")
         return 0
     print("Pages:")
     for page in pages:
         print(f"  - {page.get('name', '?')} (id {page.get('id', '?')})")
-    print("Set destinations.facebook.account_id in config.yaml to one of these ids.")
+    print(f"Set destinations.{reader.name}.account_id in config.yaml to one of these ids.")
     return 0
 
 
 def _cmd_feed(args: argparse.Namespace) -> int:
     cfg = _load_config(args)
     limit = args.limit or int(cfg["feed"]["limit"])
+    reader = first_reader(cfg, token=args.token)
+    if reader is None:
+        print("feed: no destination can read a feed", file=sys.stderr)
+        return 2
     try:
-        page_id = _page_id(args, cfg)
-        api = api_from_config(cfg, args.token)
-        raw_items = api.page_feed(page_id, limit)
+        if args.json:
+            raw_items = reader.fetch_feed(limit, args.page_id or "")
+            print(json.dumps(raw_items, indent=2, ensure_ascii=False))
+        else:
+            print(reader.feed_markdown(limit, args.page_id or ""))
     except ValueError as exc:
         print(f"feed: {exc}", file=sys.stderr)
         return 2
-    except ApiError as exc:
+    except DestinationError as exc:
         print(f"feed: {exc}", file=sys.stderr)
         return 1
-    if args.json:
-        print(json.dumps(raw_items, indent=2, ensure_ascii=False))
-    else:
-        print(format_feed_md(parse_feed_response({"data": raw_items})))
     return 0
 
 
@@ -356,46 +354,36 @@ def _cmd_post(args: argparse.Namespace) -> int:
     if args.photo and args.link:
         print("post: --link cannot be combined with --photo", file=sys.stderr)
         return 2
+    publisher = direct_publisher(cfg, token=args.token)
+    if publisher is None:
+        print("post: no destination can post directly", file=sys.stderr)
+        return 2
+    private = bool(cfg.get("publish", {}).get("private", False))
+    options = {
+        "link": args.link or "",
+        "photo": args.photo or "",
+        "published": not private,
+        "account_id": args.page_id or "",
+    }
     try:
-        page_id = _page_id(args, cfg)
-        api = api_from_config(cfg, args.token)
+        detail = publisher.describe_direct(args.message or "", **options)
     except ValueError as exc:
         print(f"post: {exc}", file=sys.stderr)
         return 2
-    private = bool(cfg.get("publish", {}).get("private", False))
-    if args.photo:
-        target = f"{page_id}/photos"
-        params = {"url": args.photo}
-        if args.message:
-            params["caption"] = args.message
-    else:
-        target = f"{page_id}/feed"
-        params = {"message": args.message}
-        if args.link:
-            params["link"] = args.link
-    if private:
-        params["published"] = "false"
+    except DestinationError as exc:
+        print(f"post: {exc}", file=sys.stderr)
+        return 1
     if args.dry_run:
         label = " (unpublished)" if private else ""
-        print(f"dry-run: would POST to /{target}{label}")
-        print(json.dumps(params, indent=2, ensure_ascii=False))
+        print(f"dry-run: would POST to /{detail['endpoint']}{label}")
+        print(json.dumps(detail["params"], indent=2, ensure_ascii=False))
         return 0
     try:
-        if args.photo:
-            # Read the image here and upload the bytes: handing Graph the URL
-            # only works while that host serves it anonymously (see media).
-            image, filename, content_type = media.load(cfg, args.photo)
-            resp = api.create_photo_post(
-                page_id,
-                args.message or "",
-                image,
-                filename=filename,
-                content_type=content_type,
-                published=not private,
-            )
-        else:
-            resp = api.create_post(page_id, args.message, args.link, published=not private)
-    except (ApiError, media.MediaError) as exc:
+        resp = publisher.direct_post(args.message or "", **options)
+    except ValueError as exc:
+        print(f"post: {exc}", file=sys.stderr)
+        return 2
+    except DestinationError as exc:
         print(f"post: {exc}", file=sys.stderr)
         return 1
     post_id = str(resp.get("post_id") or resp.get("id", ""))
@@ -408,12 +396,16 @@ def _cmd_post(args: argparse.Namespace) -> int:
 
 def _cmd_refresh(args: argparse.Namespace) -> int:
     cfg = _load_config(args)
+    reader = first_reader(cfg, token=args.token)
+    if reader is None:
+        print("refresh: no destination can read a feed", file=sys.stderr)
+        return 2
     try:
-        result = refresh_feed(cfg)
+        result = reader.refresh()
     except ValueError as exc:
         print(f"refresh: {exc}", file=sys.stderr)
         return 2
-    except ApiError as exc:
+    except DestinationError as exc:
         print(f"refresh: {exc}", file=sys.stderr)
         return 1
     except OSError as exc:

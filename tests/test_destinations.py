@@ -11,7 +11,9 @@ from social_bot.destinations import (
     PUBLISHERS,
     READERS,
     default_reader,
+    direct_publisher,
     enabled_names,
+    first_reader,
     label_for,
     labels_for,
     names,
@@ -55,6 +57,25 @@ def test_default_reader_is_first_enabled_with_a_reader():
     assert default_reader(cfg).name == "facebook"
     cfg["publish"]["destinations"] = ["linkedin"]
     assert default_reader(cfg) is None
+
+
+def test_default_reader_passes_the_token():
+    assert default_reader(_cfg(), token="tok").token == "tok"
+
+
+def test_first_reader_ignores_publish_routing():
+    """whoami/feed/refresh are account utilities, not routing decisions."""
+    cfg = _cfg()
+    cfg["publish"]["destinations"] = ["linkedin"]
+    assert default_reader(cfg) is None
+    assert first_reader(cfg).name == "facebook"
+
+
+def test_direct_publisher_is_the_first_direct_capable():
+    cfg = _cfg()
+    cfg["publish"]["destinations"] = ["linkedin"]
+    assert direct_publisher(cfg).name == "facebook"
+    assert direct_publisher(cfg, token="tok").token == "tok"
 
 
 def test_validate_destinations_rejects_unknown_and_bad_blocks():

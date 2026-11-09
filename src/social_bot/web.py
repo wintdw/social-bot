@@ -34,7 +34,7 @@ from collections import Counter
 
 from . import draft_pipeline as pipeline
 from . import media
-from .config import load_config
+from .config import FEED_JSON_NAME, feed_cache_dir, load_config
 from .dashboard_html import (
     render_dashboard_html,
     render_publish_html,
@@ -43,13 +43,6 @@ from .dashboard_html import (
 )
 from .destinations import DestinationError, default_reader, linkedin_status
 from .destinations import names as destination_names
-from .destinations.facebook import (
-    JSON_NAME,
-    feed_cache_dir,
-    load_cached_items,
-    refresh_feed,
-    render_feed_section,
-)
 from .draft_html import render_draft_html, render_drafts_html, render_message_html
 from .ui import favicon_svg
 
@@ -400,7 +393,7 @@ def infer_last_runs(cfg: dict) -> dict:
     process has performed any.
     """
     return {
-        "refresh": _mtime(feed_cache_dir(cfg) / JSON_NAME),
+        "refresh": _mtime(feed_cache_dir(cfg) / FEED_JSON_NAME),
         "scan": _mtime(pipeline.seen_path(cfg)),
     }
 
@@ -619,7 +612,7 @@ def create_app(
             state["last_started"] = dt.datetime.now()
             print(f"[web] refresh starting (reason={reason})", flush=True)
             try:
-                result = await asyncio.to_thread(refresh_feed, cfg)
+                result = await asyncio.to_thread(reader.refresh)
                 state["last_ok"] = True
                 state["last_error"] = None
                 print(
@@ -1028,10 +1021,10 @@ def create_app(
         feed_label = ""
         feed_count = 0
         if reader is not None:
-            items = await asyncio.to_thread(load_cached_items, cfg)
+            items = await asyncio.to_thread(reader.cached_feed)
             feed_label = f"{reader.label} feed"
             if items:
-                feed_section = render_feed_section(items)
+                feed_section = await asyncio.to_thread(reader.feed_section, items)
                 feed_count = len(items)
         return _page(
             render_dashboard_html(

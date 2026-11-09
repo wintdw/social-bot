@@ -21,6 +21,20 @@ CONFIG_PATH = ROOT / "config.yaml"
 # /elsewhere/credentials.yaml. Template: credentials.example.yaml.
 CREDENTIALS_NAME = "credentials.yaml"
 
+# The feed cache layout written by `refresh` and read by the dashboard. The
+# platform renders the feed; where the cache lands is core config (`feed.dir`),
+# so the web layer can find it without importing a destination package.
+FEED_JSON_NAME = "latest.json"
+FEED_HTML_NAME = "latest.html"
+
+
+def feed_cache_dir(cfg: dict) -> pathlib.Path:
+    """The cache directory from `feed.dir`, resolved against the project root."""
+    raw = str(cfg.get("feed", {}).get("dir") or "data/feed")
+    path = pathlib.Path(raw)
+    return path if path.is_absolute() else ROOT / path
+
+
 # Token resolution order (per destination): --token flag > SOCIAL_BOT_<NAME>_TOKEN
 # env > SOCIAL_BOT_TOKEN env (global fallback) > destinations.<name>.token
 # (which credentials.yaml populates).

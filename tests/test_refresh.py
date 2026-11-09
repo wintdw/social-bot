@@ -39,7 +39,7 @@ def _cfg(tmp_path):
 
 def test_writes_cache(tmp_path, monkeypatch):
     fake = FakeApi(RAW)
-    monkeypatch.setattr(refresh_mod, "api_from_config", lambda cfg: fake)
+    monkeypatch.setattr(refresh_mod, "api_from_config", lambda cfg, token=None: fake)
 
     result = refresh_mod.refresh_feed(_cfg(tmp_path))
 
@@ -82,3 +82,36 @@ def test_cache_dir_absolute_is_kept(tmp_path):
 
 def test_cache_dir_default():
     assert refresh_mod.feed_cache_dir({}) == ROOT / "data" / "feed"
+
+
+class FakeReaderApi(FakeApi):
+    def me(self):
+        return {"id": "1", "name": "Me"}
+
+    def managed_pages(self):
+        return [{"id": "123", "name": "Page"}]
+
+
+def test_reader_identity_and_feed_utilities(tmp_path, monkeypatch):
+    fake = FakeReaderApi(RAW)
+    monkeypatch.setattr(refresh_mod, "api_from_config", lambda cfg, token=None: fake)
+    reader = refresh_mod.FacebookReader(_cfg(tmp_path))
+
+    assert reader.identity()["name"] == "Me"
+    assert reader.accounts() == [{"id": "123", "name": "Page"}]
+    assert "hi" in reader.feed_markdown(5)
+
+
+def test_reader_refresh_passes_the_token(tmp_path, monkeypatch):
+    seen = {}
+    fake = FakeApi(RAW)
+    monkeypatch.setattr(
+        refresh_mod,
+        "api_from_config",
+        lambda cfg, token=None: seen.update(token=token) or fake,
+    )
+    reader = refresh_mod.FacebookReader(_cfg(tmp_path), token="tok")
+    result = reader.refresh()
+
+    assert seen["token"] == "tok"
+    assert result["count"] == 1

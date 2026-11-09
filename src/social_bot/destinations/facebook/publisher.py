@@ -33,6 +33,8 @@ class FacebookPublisher(Publisher):
     # Video goes out as a page destination; the placement (feed video or Reel)
     # is per draft — see ``Draft.video_mode``.
     supports_video = True
+    # The CLI `post` utility can create a raw status/link/photo post.
+    supports_direct = True
 
     def __init__(self, cfg: dict, token: str | None = None) -> None:
         super().__init__(cfg, token)
@@ -65,6 +67,87 @@ class FacebookPublisher(Publisher):
     def private(self) -> bool:
         """True when publish.private is on: post unpublished (admins only)."""
         return bool(self.cfg.get("publish", {}).get("private", False))
+
+    def _direct_request(
+        self,
+        caption: str,
+        *,
+        link: str = "",
+        photo: str = "",
+        published: bool = True,
+        account_id: str = "",
+    ) -> tuple[str, str, dict[str, str]]:
+        """The page id, endpoint, and form fields for a raw `post` command."""
+        page_id = str(account_id or self.page_id())
+        if photo:
+            endpoint = f"{page_id}/photos"
+            params: dict[str, str] = {"url": photo}
+            if caption:
+                params["caption"] = caption
+        else:
+            endpoint = f"{page_id}/feed"
+            params = {"message": caption}
+            if link:
+                params["link"] = link
+        if not published:
+            params["published"] = "false"
+        return page_id, endpoint, params
+
+    def describe_direct(
+        self,
+        caption: str,
+        *,
+        link: str = "",
+        photo: str = "",
+        published: bool = True,
+        account_id: str = "",
+    ) -> dict:
+        """Endpoint and form fields for the CLI `post` dry run."""
+        _page_id, endpoint, params = self._direct_request(
+            caption,
+            link=link,
+            photo=photo,
+            published=published,
+            account_id=account_id,
+        )
+        return {"endpoint": endpoint, "params": params}
+
+    def direct_post(
+        self,
+        caption: str,
+        *,
+        link: str = "",
+        photo: str = "",
+        published: bool = True,
+        account_id: str = "",
+    ) -> dict:
+        """Create a raw status/link/photo post (the CLI `post` utility)."""
+        page_id, _endpoint, _params = self._direct_request(
+            caption,
+            link=link,
+            photo=photo,
+            published=published,
+            account_id=account_id,
+        )
+        try:
+            if photo:
+                # Upload the bytes: handing Graph a remote URL fails once the
+                # host stops serving it anonymously (see media).
+                try:
+                    image, filename, content_type = media.load(self.cfg, photo)
+                except media.MediaError as exc:
+                    raise PublisherError(f"facebook: {exc}") from None
+                return self.api.create_photo_post(
+                    page_id,
+                    caption,
+                    image,
+                    filename=filename,
+                    content_type=content_type,
+                    published=published,
+                )
+            return self.api.create_post(page_id, caption, link or None, published=published)
+        except ApiError as exc:
+            raise PublisherError(f"facebook: {exc}") from None
 
     def describe(self, draft: Draft) -> str:
         """The endpoint a real send would hit (dry-run text)."""

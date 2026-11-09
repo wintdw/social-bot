@@ -657,3 +657,70 @@ class TestLinkedInPublisher:
     def test_publisher_for_unknown(self):
         with pytest.raises(PublisherError):
             publisher_for("mastodon", _cfg())
+
+
+class TestFacebookDirectPost:
+    """The CLI `post` capability: raw status/link/photo, no draft."""
+
+    @staticmethod
+    def _publisher(monkeypatch):
+        fake = FakeApi()
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: fake)
+        return publisher_for("facebook", _cfg()), fake
+
+    def test_status_post(self, monkeypatch):
+        publisher, fake = self._publisher(monkeypatch)
+        assert publisher.describe_direct("hi") == {
+            "endpoint": "123/feed",
+            "params": {"message": "hi"},
+        }
+        assert publisher.direct_post("hi") == {"id": "123_8"}
+        assert fake.status == ("123", "hi", None, True)
+
+    def test_link_private_and_page_override(self, monkeypatch):
+        publisher, fake = self._publisher(monkeypatch)
+        publisher.direct_post("hi", link="https://x.test", published=False, account_id="999")
+        assert fake.status == ("999", "hi", "https://x.test", False)
+
+    def test_photo_uploads_the_bytes(self, monkeypatch):
+        publisher, fake = self._publisher(monkeypatch)
+        monkeypatch.setattr(
+            pub_mod.media,
+            "load",
+            lambda cfg, url, **kw: (b"jpeg", "photo.jpg", "image/jpeg"),
+        )
+        assert publisher.describe_direct("cap", photo="https://img/a.jpg") == {
+            "endpoint": "123/photos",
+            "params": {"url": "https://img/a.jpg", "caption": "cap"},
+        }
+        publisher.direct_post("cap", photo="https://img/a.jpg")
+        assert fake.photo == ("123", "cap", b"jpeg", "photo.jpg", "image/jpeg", True)
+
+    def test_missing_page_id_raises(self):
+        cfg = _cfg()
+        cfg["destinations"]["facebook"]["account_id"] = ""
+        with pytest.raises(ValueError):
+            publisher_for("facebook", cfg).direct_post("hi")
+
+    def test_graph_error_is_a_publisher_error(self, monkeypatch):
+        from social_bot.destinations.facebook import ApiError
+
+        class Boom(FakeApi):
+            def create_post(self, *args, **kwargs):
+                raise ApiError("nope")
+
+        monkeypatch.setattr(pub_mod, "api_from_config", lambda cfg, token: Boom())
+        with pytest.raises(PublisherError):
+            publisher_for("facebook", _cfg()).direct_post("hi")
+
+    def test_unreadable_photo_is_a_publisher_error(self, monkeypatch):
+        from social_bot import media
+
+        publisher, _ = self._publisher(monkeypatch)
+        monkeypatch.setattr(
+            pub_mod.media,
+            "load",
+            lambda *args, **kwargs: (_ for _ in ()).throw(media.MediaError("gone")),
+        )
+        with pytest.raises(PublisherError):
+            publisher.direct_post("cap", photo="https://img/a.jpg")

@@ -7,6 +7,7 @@ import json
 import pytest
 
 from social_bot import cli
+from social_bot.destinations import DestinationError
 from social_bot.drafts import Draft
 
 PHOTO = "https://example.com/a.jpg"
@@ -44,52 +45,66 @@ class TestPostValidation:
         assert "--link cannot be combined with --photo" in capsys.readouterr().err
 
 
+class FakePublisher:
+    """The direct-post capability of a destination, with no network."""
+
+    name = "facebook"
+
+    def __init__(self):
+        self.described = None
+        self.posted = None
+
+    def describe_direct(self, caption, **options):
+        self.described = (caption, options)
+        if options["photo"]:
+            params = {"url": options["photo"]}
+            if caption:
+                params["caption"] = caption
+            endpoint = f"{options['account_id'] or '123'}/photos"
+        else:
+            params = {"message": caption}
+            if options["link"]:
+                params["link"] = options["link"]
+            endpoint = f"{options['account_id'] or '123'}/feed"
+        if not options["published"]:
+            params["published"] = "false"
+        return {"endpoint": endpoint, "params": params}
+
+    def direct_post(self, caption, **options):
+        self.posted = (caption, options)
+        return {"post_id": "123_456"}
+
+
+@pytest.fixture
+def fake_publisher(monkeypatch):
+    publisher = FakePublisher()
+    monkeypatch.setattr(cli, "direct_publisher", lambda cfg, token=None: publisher)
+    return publisher
+
+
 class TestPostExecution:
-    def test_photo_dry_run_targets_photos_endpoint(self, stub_config, monkeypatch, capsys):
-        monkeypatch.setattr(cli, "api_from_config", lambda cfg, token: object())
+    def test_photo_dry_run_targets_photos_endpoint(self, stub_config, fake_publisher, capsys):
         args = cli._parse_args(["post", "--message", "hi", "--photo", PHOTO, "--dry-run"])
         assert cli._cmd_post(args) == 0
         lines = capsys.readouterr().out.splitlines()
         assert lines[0] == "dry-run: would POST to /123/photos"
         assert json.loads("\n".join(lines[1:])) == {"url": PHOTO, "caption": "hi"}
+        assert fake_publisher.posted is None
 
-    def test_photo_post_downloads_then_uploads_the_bytes(self, stub_config, monkeypatch, capsys):
-        calls = {}
-        monkeypatch.setattr(
-            cli.media,
-            "load",
-            lambda cfg, url, **kw: (b"\xff\xd8\xffjpeg", "photo.jpg", "image/jpeg"),
-        )
-
-        class FakeApi:
-            def create_photo_post(
-                self, page_id, caption, data, *, filename="", content_type="", published=True
-            ):
-                calls.update(
-                    page_id=page_id,
-                    caption=caption,
-                    data=data,
-                    filename=filename,
-                    content_type=content_type,
-                    published=published,
-                )
-                return {"id": "999", "post_id": "123_456"}
-
-        monkeypatch.setattr(cli, "api_from_config", lambda cfg, token: FakeApi())
+    def test_photo_post_hands_the_url_to_the_publisher(self, stub_config, fake_publisher, capsys):
         args = cli._parse_args(["post", "--photo", PHOTO])
         assert cli._cmd_post(args) == 0
-        assert calls == {
-            "page_id": "123",
-            "caption": "",
-            "data": b"\xff\xd8\xffjpeg",
-            "filename": "photo.jpg",
-            "content_type": "image/jpeg",
+        caption, options = fake_publisher.posted
+        assert caption == ""
+        assert options == {
+            "link": "",
+            "photo": PHOTO,
             "published": True,
+            "account_id": "",
         }
         assert "https://www.facebook.com/123_456" in capsys.readouterr().out
 
-    def test_status_post_still_targets_feed(self, stub_config, monkeypatch, capsys):
-        monkeypatch.setattr(cli, "api_from_config", lambda cfg, token: object())
+    def test_status_post_still_targets_feed(self, stub_config, fake_publisher, capsys):
         args = cli._parse_args(["post", "--message", "hi", "--dry-run"])
         assert cli._cmd_post(args) == 0
         lines = capsys.readouterr().out.splitlines()
@@ -109,8 +124,7 @@ class TestPostPrivateMode:
             },
         )
 
-    def test_dry_run_marks_the_post_unpublished(self, private_config, monkeypatch, capsys):
-        monkeypatch.setattr(cli, "api_from_config", lambda cfg, token: object())
+    def test_dry_run_marks_the_post_unpublished(self, private_config, fake_publisher, capsys):
         args = cli._parse_args(["post", "--message", "hi", "--photo", PHOTO, "--dry-run"])
         assert cli._cmd_post(args) == 0
         lines = capsys.readouterr().out.splitlines()
@@ -121,23 +135,82 @@ class TestPostPrivateMode:
             "published": "false",
         }
 
-    def test_private_post_sends_published_false(self, private_config, monkeypatch, capsys):
-        calls = {}
-        monkeypatch.setattr(
-            cli.media, "load", lambda cfg, url, **kw: (b"jpeg", "photo.jpg", "image/jpeg")
-        )
-
-        class FakeApi:
-            def create_photo_post(
-                self, page_id, caption, data, *, filename="", content_type="", published=True
-            ):
-                calls["published"] = published
-                return {"post_id": "123_456"}
-
-        monkeypatch.setattr(cli, "api_from_config", lambda cfg, token: FakeApi())
+    def test_private_post_sends_published_false(self, private_config, fake_publisher, capsys):
         assert cli._cmd_post(cli._parse_args(["post", "--photo", PHOTO])) == 0
-        assert calls["published"] is False
+        assert fake_publisher.posted[1]["published"] is False
         assert "Posted privately (unpublished)" in capsys.readouterr().out
+
+
+class TestAccountUtilities:
+    def test_whoami_lists_pages(self, monkeypatch, capsys):
+        class FakeReader:
+            name = "facebook"
+
+            def identity(self):
+                return {"id": "1", "name": "Me"}
+
+            def accounts(self):
+                return [{"id": "2", "name": "Page"}]
+
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(cli, "first_reader", lambda cfg, token=None: FakeReader())
+        assert cli._cmd_whoami(cli._parse_args(["whoami"])) == 0
+        out = capsys.readouterr().out
+        assert "Page (id 2)" in out
+        assert "destinations.facebook.account_id" in out
+
+    def test_whoami_network_failure_exits_1(self, monkeypatch, capsys):
+        class FakeReader:
+            name = "facebook"
+
+            def identity(self):
+                raise DestinationError("facebook: boom")
+
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(cli, "first_reader", lambda cfg, token=None: FakeReader())
+        assert cli._cmd_whoami(cli._parse_args(["whoami"])) == 1
+        assert "boom" in capsys.readouterr().err
+
+    def test_feed_json_reads_through_the_reader(self, monkeypatch, capsys):
+        class FakeReader:
+            name = "facebook"
+            calls = None
+
+            def fetch_feed(self, limit, account_id=""):
+                self.calls = (limit, account_id)
+                return [{"id": "1"}]
+
+        reader = FakeReader()
+        monkeypatch.setattr(cli, "_load_config", lambda args: {"feed": {"limit": 5}})
+        monkeypatch.setattr(cli, "first_reader", lambda cfg, token=None: reader)
+        args = cli._parse_args(["feed", "--json", "--limit", "3", "--page-id", "9"])
+        assert cli._cmd_feed(args) == 0
+        assert reader.calls == (3, "9")
+        assert json.loads(capsys.readouterr().out) == [{"id": "1"}]
+
+    def test_feed_markdown_reads_through_the_reader(self, monkeypatch, capsys):
+        class FakeReader:
+            name = "facebook"
+
+            def feed_markdown(self, limit, account_id=""):
+                return f"# feed {limit}"
+
+        monkeypatch.setattr(cli, "_load_config", lambda args: {"feed": {"limit": 5}})
+        monkeypatch.setattr(cli, "first_reader", lambda cfg, token=None: FakeReader())
+        assert cli._cmd_feed(cli._parse_args(["feed"])) == 0
+        assert "# feed 5" in capsys.readouterr().out
+
+    def test_refresh_reads_through_the_reader(self, monkeypatch, capsys):
+        class FakeReader:
+            name = "facebook"
+
+            def refresh(self):
+                return {"count": 2, "html_file": "/tmp/feed/latest.html"}
+
+        monkeypatch.setattr(cli, "_load_config", lambda args: {})
+        monkeypatch.setattr(cli, "first_reader", lambda cfg, token=None: FakeReader())
+        assert cli._cmd_refresh(cli._parse_args(["refresh"])) == 0
+        assert "Cached 2 post(s) -> /tmp/feed/latest.html" in capsys.readouterr().out
 
 
 class TestBlogScanArgs:

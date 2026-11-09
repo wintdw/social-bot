@@ -63,12 +63,35 @@ def reader_for(name: str, cfg: dict, token: str | None = None) -> AccountReader 
     return cls(cfg, token) if cls else None
 
 
-def default_reader(cfg: dict) -> AccountReader | None:
+def default_reader(cfg: dict, token: str | None = None) -> AccountReader | None:
     """The reader for the first enabled destination that has one, else None."""
     for name in enabled_names(cfg):
-        reader = reader_for(name, cfg)
+        reader = reader_for(name, cfg, token)
         if reader is not None:
             return reader
+    return None
+
+
+def first_reader(cfg: dict, token: str | None = None) -> AccountReader | None:
+    """The first registered reader, ignoring publish routing.
+
+    `whoami`/`feed`/`refresh` are account utilities, not routing decisions:
+    they work even when no feed-capable destination is enabled for new drafts.
+    """
+    for cls in READERS.values():
+        return cls(cfg, token)
+    return None
+
+
+def direct_publisher(cfg: dict, token: str | None = None) -> Publisher | None:
+    """The first publisher that can post raw content (the CLI `post` utility).
+
+    Registry order wins (facebook first). Like `first_reader`, this is a
+    platform utility, not the draft routing in `publish.destinations`.
+    """
+    for cls in PUBLISHERS.values():
+        if cls.supports_direct:
+            return cls(cfg, token)
     return None
 
 

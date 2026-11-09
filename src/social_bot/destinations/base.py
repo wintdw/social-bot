@@ -81,6 +81,10 @@ class Publisher(_Destination, ABC):
     # Video is opt-in per destination: a platform must say it can take one
     # before the core will route a video draft there.
     supports_video: ClassVar[bool] = False
+    # Direct posting is the CLI `post` utility (raw status/link/photo), not the
+    # draft pipeline. A platform that can do it sets this and implements the
+    # two methods below.
+    supports_direct: ClassVar[bool] = False
 
     @classmethod
     def validate_config(cls, dst: dict) -> None:
@@ -97,6 +101,34 @@ class Publisher(_Destination, ABC):
     def publish(self, draft: Draft) -> PublishResult:
         """Send the draft; return where it landed."""
 
+    def describe_direct(
+        self,
+        caption: str,
+        *,
+        link: str = "",
+        photo: str = "",
+        published: bool = True,
+        account_id: str = "",
+    ) -> dict:
+        """Endpoint and form fields for the CLI `post` dry run.
+
+        Only a destination with ``supports_direct`` implements this; the core
+        never assumes a platform's post shape.
+        """
+        raise DestinationError(f"{self.name}: direct posting is not supported")
+
+    def direct_post(
+        self,
+        caption: str,
+        *,
+        link: str = "",
+        photo: str = "",
+        published: bool = True,
+        account_id: str = "",
+    ) -> dict:
+        """Post raw content outside the draft pipeline (the CLI `post` utility)."""
+        raise DestinationError(f"{self.name}: direct posting is not supported")
+
 
 class AccountReader(_Destination, ABC):
     """Reads an account's own feed and identity for the operator UI."""
@@ -106,9 +138,41 @@ class AccountReader(_Destination, ABC):
         """Account identity as ``{"id": ..., "name": ...}``."""
 
     @abstractmethod
-    def fetch_feed(self, limit: int) -> list:
-        """The account's own recent feed items, newest first."""
+    def fetch_feed(self, limit: int, account_id: str = "") -> list:
+        """The account's own recent feed items, newest first.
+
+        ``account_id`` overrides the configured one (`--page-id` on the CLI);
+        empty means "the configured account".
+        """
 
     def token_status(self) -> dict:
         """Introspect the account token for the dashboard's Token panel."""
         raise DestinationError(f"{self.name}: token status is not supported")
+
+    # -- optional capabilities -------------------------------------------
+    # Only a feed-capable platform implements these. The core calls them
+    # through this contract, so it never imports a destination package.
+
+    def identity(self) -> dict:
+        """The token owner (`whoami`)."""
+        raise DestinationError(f"{self.name}: token identity is not supported")
+
+    def accounts(self) -> list[dict]:
+        """Accounts/pages this credential can manage (`whoami`)."""
+        raise DestinationError(f"{self.name}: account listing is not supported")
+
+    def feed_markdown(self, limit: int, account_id: str = "") -> str:
+        """The account feed rendered as markdown (`feed` CLI)."""
+        raise DestinationError(f"{self.name}: feed rendering is not supported")
+
+    def refresh(self) -> dict:
+        """Fetch the account feed and write the cached copy."""
+        raise DestinationError(f"{self.name}: feed caching is not supported")
+
+    def cached_feed(self) -> list | None:
+        """The cached feed items, or None when nothing is cached."""
+        raise DestinationError(f"{self.name}: feed caching is not supported")
+
+    def feed_section(self, items: list) -> str:
+        """The feed items rendered as an HTML fragment for the dashboard."""
+        raise DestinationError(f"{self.name}: feed rendering is not supported")
