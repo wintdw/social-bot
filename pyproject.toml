@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "social-bot"
-version = "0.1.0"
+version = "0.2.0"
 description = "Graph API bot for a Facebook Page: fetch the page feed and post updates. No browser."
 readme = "README.md"
 requires-python = ">=3.11"
