@@ -48,6 +48,10 @@ VIDEO_TYPES = {
     ".mov": "video/quicktime",
 }
 
+# The longest a single publish can take: a video upload. `serve` drains an
+# in-flight publish on shutdown, so this also bounds that wait (web.py).
+UPLOAD_TIMEOUT_SECONDS = 300.0
+
 DOWNLOAD_TIMEOUT_SECONDS = 60.0
 UA = "social-bot/0.1 (+media store)"
 

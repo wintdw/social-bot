@@ -705,7 +705,7 @@ def _cmd_blog_video_mode(args: argparse.Namespace) -> int:
 def _cmd_serve(args: argparse.Namespace) -> int:
     import uvicorn
 
-    from .web import create_app
+    from .web import DRAIN_TIMEOUT_SECONDS, create_app
 
     app = create_app(
         config_path=args.config,
@@ -715,7 +715,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         boot_scan=args.boot_scan,
         post_at=args.publish_at,
     )
-    uvicorn.run(app, host=args.host, port=args.port, log_level="info")
+    # Give the lifespan drain (a slow video upload) room to finish; uvicorn's
+    # own graceful-shutdown timeout would otherwise cut it short.
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        log_level="info",
+        timeout_graceful_shutdown=int(DRAIN_TIMEOUT_SECONDS + 30),
+    )
     return 0
 
 

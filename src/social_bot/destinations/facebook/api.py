@@ -19,6 +19,7 @@ import uuid
 from typing import Any
 
 from ...config import resolve_token
+from ...media import UPLOAD_TIMEOUT_SECONDS
 from ..base import DestinationError
 
 UA = "social-bot/0.1 (Graph API client)"
@@ -32,10 +33,6 @@ FEED_FIELDS = "id,created_time,message,story,permalink_url,status_type,full_pict
 
 # Reels uploads go to a separate host, not the Graph API base.
 RUPLOAD_BASE = "https://rupload.facebook.com"
-
-# A video transfer is far slower than a JSON call; the request timeout is raised
-# to this floor so a large clip is not abandoned mid-upload.
-UPLOAD_TIMEOUT_SECONDS = 300.0
 
 
 def _multipart_body(

@@ -78,8 +78,10 @@ REVIEW_PER_PAGE = 20
 REVIEW_MAX_PER_PAGE = 200
 
 # How long shutdown waits for an in-flight publish to finish before cancelling
-# the background loops. Keep below uvicorn's --timeout-graceful-shutdown.
-DRAIN_TIMEOUT_SECONDS = 30.0
+# the background loops. A video upload is the slowest send, so this is that
+# timeout plus a margin for the comment/audit tail. Docker's stop window
+# (docker-compose.yml `stop_grace_period`) must exceed this.
+DRAIN_TIMEOUT_SECONDS = media.UPLOAD_TIMEOUT_SECONDS + 30.0
 
 # The loops /ready treats as the heartbeat of the service. The token/page loops
 # are one-shot startup lookups and are deliberately excluded — a finished task
