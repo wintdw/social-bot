@@ -10,7 +10,8 @@
 destinations:
   facebook:
     # Base of the Graph API. Pin the version; Meta keeps a rolling window of
-    # supported majors, so bump api_version deliberately when needed.
+    # supported majors. v27.0 is current (2026-11-04); this pin stays v26.0
+    # until the v27 changelog is reviewed — both are supported.
     base_url: https://graph.facebook.com
     api_version: v26.0
     timeout_seconds: 30.0

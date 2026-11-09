@@ -1558,7 +1558,7 @@ def create_app(
 
     @app.post("/review/{draft_id}/save")
     async def review_save(draft_id: str, request: Request):
-        """Save the compose edits (caption, hashtags, image prompt). Never posts."""
+        """Save the compose edits (caption, hashtags, destinations). Never posts."""
         form = await request.form()
         hashtags = form.get("hashtags")
         destinations = (

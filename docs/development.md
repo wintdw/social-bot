@@ -18,7 +18,8 @@ record. Its `select` is pinned on purpose so the check doesn't drift with ruff's
 releases, and `E501` is off — the formatter owns line length, and long strings
 (URLs, HTML fragments, the stylesheet) are not re-wrapped.
 
-Tests never touch the network and never need the `[server]` extra. Conventions:
+Tests never touch the network. They run without the `[server]` extra; the
+serve route smoke tests skip when fastapi/httpx2 are absent. Conventions:
 
 - Pure logic is tested directly against fixture strings (XML/HTML/JSON), e.g.
   `tests/test_source.py` parses sample sitemap/RSS/HTML with no I/O.
@@ -29,8 +30,8 @@ Tests never touch the network and never need the `[server]` extra. Conventions:
 - Stateful code uses `tmp_path` and points `cfg["review"]["dir"]` (and
   `cfg["publish"]["dir"]`) at it.
 - `web.py`'s scheduling helpers are pure and tested without fastapi
-  (`tests/test_web.py`). Route handlers are not unit-tested — smoke-test them by
-  running `serve`.
+  (`tests/test_web.py`). The route smoke tests (`tests/test_web_routes.py`) use
+  FastAPI's `TestClient` and skip unless `[server]` + `httpx2` are installed.
 
 ## Style
 
@@ -69,7 +70,7 @@ modules return fragments only and hand them to `layout()`. Read
 ## Recipe: add a CLI command
 
 1. Add a subparser in `cli.py:_parse_args` and `set_defaults(func=_cmd_x)`.
-2. Write `_cmd_x`, catching `ValueError → 2`, `ApiError`/`SourceError → 1`,
+2. Write `_cmd_x`, catching `ValueError → 2`, `DestinationError`/`SourceError → 1`,
    `OSError → 1` (see the existing `_DATA_DIR_HINT` pattern).
 3. Keep it thin: put logic in the relevant module, not the CLI.
 4. Add arg-parsing / usage tests in `tests/test_cli.py`.
@@ -96,6 +97,11 @@ Everything platform-specific lives in one package; the core never changes.
    (`destinations/base.py`): set `name`, `label`, implement
    `describe(draft) -> str` and `publish(draft) -> PublishResult`, and override
    `validate_config(dst)` / `configured()` if it has its own config schema.
+   A platform that can also read its account feed subclasses `AccountReader`
+   (implement `account`, `fetch_feed`, and — when it can — `identity`,
+   `accounts`, `feed_markdown`, `refresh`, `cached_feed`, `feed_section`).
+   A platform that supports the CLI `post` utility sets `supports_direct` and
+   implements `direct_post` / `describe_direct`.
 2. Register it in `destinations/registry.py` (`PUBLISHERS`; add a `READERS`
    entry too if it can read an account feed).
 3. Add its `DEFAULTS["destinations"]["<name>"]` block in `config.py` and the

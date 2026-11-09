@@ -13,9 +13,9 @@ your task.
   tokens, components, and rules; read before changing markup or the stylesheet.
   The generated visual preview is `design/styleframe.html`.
 - **[voices/](voices/)** — reference briefs for the register of a post: one file
-  per voice (`technical` / `essay` / `announcement` / `funny`), each a brief and a
-  set of verbatim human samples. The app does not read them; use them when you
-  write in Claude.
+  per voice (`technical` / `essay` / `announcement` / `funny` / `natural`), each
+  a brief and a set of verbatim human samples. The app does not read them; use
+  them when you write in Claude.
 - **[image-styles/](image-styles/)** — how a post's image may be drawn:
   `diagram.md` (the HTML5 explainer plate) and `illustration.md` (a crafted
   `anatomy` isometric figure, used selectively).
@@ -27,6 +27,8 @@ your task.
 | You want to… | Work in |
 |---|---|
 | Add or change a CLI command / flag | `src/social_bot/cli.py` |
+| Change `whoami` / `feed` / `refresh` (account utilities) | the `AccountReader` contract in `destinations/base.py`, the platform implementation (`destinations/facebook/reader.py`), and `cli.py`; tests in `tests/test_cli.py` / `tests/test_refresh.py` |
+| Change the direct `post` command (raw status/link/photo) | `Publisher.direct_post` / `describe_direct` in `destinations/base.py` and `destinations/facebook/publisher.py`, plus `cli.py`; tests in `tests/test_publishers.py` / `tests/test_cli.py` |
 | Add a config key (default + validation) | `src/social_bot/config.py`, `config.yaml`, `tests/test_config.py` |
 | Add a source type / feed parser | `src/social_bot/source.py` (parse + `parse_source`), `src/social_bot/draft_pipeline.py:scan_sources`, `tests/test_source.py` |
 | Change how original posts are seeded (the idea themes) | `src/social_bot/ideas.py` (parse/slug) + `draft_pipeline.py` (`queue_ideas`) + `cli.py` (`blog add-idea` / `blog topics`) + the `ideas` block in `config.yaml`, `tests/test_ideas.py` / `tests/test_draft_pipeline.py` |
@@ -60,8 +62,10 @@ your task.
    `publisher.py`, `reader.py`) and `source_api.py` do I/O.
 2. **Platform logic is isolated.** Everything that talks to a platform lives in
    `destinations/<name>/`; the core (pipeline, CLI, web, UI) reaches it only
-   through `destinations/registry.py`. Adding LinkedIn means a new package, not
-   edits to the pipeline.
+   through `destinations/registry.py` and the `AccountReader` / `Publisher`
+   contracts. Adding LinkedIn means a new package, not edits to the pipeline;
+   account utilities (`whoami`, `feed`, `refresh`, direct `post`) use the same
+   seam.
 3. **Orchestration is thin and explicit.** `draft_pipeline.py` and the facebook
    reader wire pure code + I/O together and are the only places that read/write
    the `data/` files.

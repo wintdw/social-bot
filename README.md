@@ -31,12 +31,17 @@ and [development](docs/development.md).
 | `social-bot blog publish` | Post the human-approved queue now (add `--dry-run` to preview). |
 | `social-bot blog queue` | Show the approved post queue in the order it will post. |
 | `social-bot blog move <id> up\|down\|top\|bottom` | Move one approved draft in the post queue. |
+| `social-bot blog masthead` | Backfill the series masthead onto captions that have none (never replaces a chosen label). |
+| `social-bot blog attach-video <id> <file> [--mode post\|reel]` | Attach a host-rendered clip to one draft (a feed video by default, or a Reel). Facebook only. |
+| `social-bot blog detach-video <id>` | Remove a draft's clip; the caption and destination choice are untouched. |
+| `social-bot blog video-mode <id> post\|reel` | Switch an attached clip between the page feed and the Reels tab. |
 | `social-bot blog localize-images` | Migration: copy generated images that are still remote URLs into the local store (never regenerates). |
 | `social-bot blog backfill-destinations` | Migration: union queued drafts onto `publish.destinations` (never removes). |
 | `social-bot serve` | Long-lived operator UI (dashboard/review/published/status) + scheduled refresh/scan/posting (needs the `server` extra). |
 
-Every command takes `--page-id` (overrides config) and `--token` (overrides
-the environment). `serve` refreshes the cached feed and scans source feeds on a
+Every command takes `--token` (the global override); `feed` and `post` also
+take `--page-id` to override the destination's configured account id. `serve`
+refreshes the cached feed and scans source feeds on a
 schedule, and posts approved drafts at the `publish.post_at` slots. It **never
 approves anything**: a draft must first be approved on `/review`
 ("Approve & schedule", or "Post now" to send immediately). `publish.post_at: []`
@@ -133,15 +138,18 @@ is read from next to whichever `config.yaml` is in use, so
 
 Meta supports a rolling window of Graph API versions (current and two
 previous majors), so `destinations.facebook.api_version` should be bumped
-consciously rather than left to rot.
+consciously rather than left to rot. **v27.0** is current (released
+2026-11-04); this repo stays on **v26.0** until the v27 changelog is reviewed —
+both are inside the support window.
 
 ## Run with Docker (service mode)
 
-The default deployment is a long-lived container: one operator UI on `:8083`,
-plus built-in refresh/scan **and posting** schedules — **no host cron**. The
-scan loop only queues drafts; the posting loop only posts drafts a human
-approved on `/review` (it never approves). `publish.post_at: []` disables timed
-posting.
+The default deployment is a long-lived container: one operator UI on
+**`127.0.0.1:8083`** (loopback only — the UI is unauthenticated, so keep nginx,
+a VPN, or basic auth in front of it), plus built-in refresh/scan **and posting**
+schedules — **no host cron**. The scan loop only queues drafts; the posting loop
+only posts drafts a human approved on `/review` (it never approves).
+`publish.post_at: []` disables timed posting.
 
 ```sh
 docker compose up -d --build          # build + start
@@ -156,21 +164,26 @@ docker compose logs -f                # follow refresh/scan runs
 |---|---|
 | `GET /` | **Dashboard** — refresh/scan controls, open-draft and published counts, scheduler state, the next post (time + which draft), and the cached feed. |
 | `GET /review` | **Review queue** — open drafts, newest first (with a **Scan sources now** button). Paged (`?page=`, `?per_page=`, default 20). |
-| `GET /review/{id}` | One draft: editable caption + hashtags, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set (and **Unapprove** on a draft already approved), **Restore source image** when the image is a diagram. |
+| `GET /review/{id}` | One draft: editable caption + hashtags, Save / Post now / Reject, Approve & schedule when `publish.post_at` is set (and **Unapprove** on a draft already approved), **Restore source image** when a plate replaced the source cover, and **Publish video as** for an attached clip. |
 | `GET /queue` | **Post queue** — the approved drafts in the order they will post, the one going out next marked, with drag / Top-Up-Down reorder controls and a **Post approved now** button. |
 | `GET /publish` | **Published** — the audit log (public and private sends, with permalinks). |
 | `GET /status` | **Status** — sources, drafts by state, publish settings (min interval, days remaining, next up), and scheduler runs. |
 | `GET /health` | JSON: busy, last refresh/scan result, schedules, next runs, open drafts, lifecycle. |
 | `GET /live` | Liveness probe — always `{"status": "alive"}` while the process runs. |
 | `GET /ready` | Readiness probe — 200 when serving, 503 while draining or unhealthy. |
+| `GET /videos/{name}` | A locally stored draft clip (Range requests supported, so the review player can seek). |
+| `GET /api/status` | JSON snapshot — sources, drafts by state, seen, published, schedules, lifecycle, and the next scheduled post. |
 | `POST /refresh` | `{"started": true}`, or `409` if a refresh is already running. |
 | `POST /scan` | Scan the sources now; new drafts appear at `/review`. |
 | `POST /publish/run` | Post the approved queue now, without waiting for a slot. |
+| `POST /publish/pause` / `POST /publish/resume` | Pause or resume the unattended poster (persisted; manual sends still work). |
+| `POST /queue/order` / `/queue/reset` / `/queue/{id}/move` | Reorder the approved queue (JSON drag, reset, or one move); never approves or posts. |
+| `POST /queue/{id}/publish` | Send one approved draft now to one platform (a manual send). |
 | `POST /review/{id}/save` | Save the compose edits (caption, hashtags); never posts. |
 | `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only; `approve=1` queues the draft for the next slot instead). |
 | `POST /review/{id}/unapprove` | Pull an approved draft back out of the queue (back to `ai_draft`); never posts. |
 | `POST /review/{id}/reject` | Mark the draft rejected. |
-| `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a diagram. |
+| `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a drawn plate. |
 
 All five pages share the same top navigation, so you can move between them
 without editing URLs; `/drafts` redirects to `/review` for old bookmarks.
@@ -251,6 +264,24 @@ still-remote non-source image keep it until you run
 `social-bot blog localize-images`, which copies those images into the store
 (no rendering).
 
+**Video is opt-in per post, and Facebook only.** Render a clip on the host
+(a hyperframes composition), then attach it to one draft:
+
+```sh
+.venv/bin/social-bot blog attach-video <draft-id> clip.mp4            # feed video (default)
+.venv/bin/social-bot blog attach-video <draft-id> clip.mp4 --mode reel
+.venv/bin/social-bot blog video-mode <draft-id> reel                 # switch later
+.venv/bin/social-bot blog detach-video <draft-id>                    # remove it
+```
+
+A feed video is an ordinary `/{page}/videos` post; a Reel uses
+`/{page}/video_reels` and is checked against Meta's Reels limits (3–90s,
+24–60fps, ≥540px short side, 9:16–16:9) with host `ffprobe` before it is
+accepted. A missing `ffprobe` only warns. The placement is also switchable on
+`/review/{id}` (**Publish video as**), saved with the caption. Attaching a clip
+narrows the draft to Facebook by construction — LinkedIn has no video path.
+Files live in `data/review/videos/` and are served at `/videos/<name>`.
+
 **Original posts, not just reposts.** Besides `sources:` (feeds to repost),
 `ideas:` lists **systems** in a plain file — `data/ideas/topics.md`, one per line
 (Elasticsearch, ClickHouse, Loki, MySQL, …), optionally `| <docs url>`. Write an
@@ -298,19 +329,11 @@ not a dry run — it does create a post object, just an unpublished one.
 `"manual": true` and left out of `publish.interval_days` — so posting by hand
 never blocks the timer-driven poster, and the interval never refuses you.
 
-| Endpoint | Returns |
-|---|---|
-| `GET /` | Dashboard: controls + counts + scheduler state + cached feed. |
-| `GET /review` | HTML review list of open drafts (with a **Scan sources now** button). |
-| `GET /review/{id}` | HTML detail with an editable caption and hashtags + Approve/Reject (and Unapprove on an approved draft, Restore source image). |
-| `GET /publish` | HTML audit log of what has been posted (public and private). |
-| `GET /status` | HTML status page (sources, drafts by state, publish settings, runs). |
-| `POST /scan` | Trigger a source scan now (`{"started": true}`, or `409` if one is running). |
-| `POST /review/{id}/publish` | Publish on approval (form field `dry_run=1` to preview only). |
-| `POST /review/{id}/unapprove` | Pull an approved draft back out of the queue (back to `ai_draft`); never posts. |
-| `POST /review/{id}/reject` | Mark the draft rejected. |
-| `POST /review/{id}/restore-image` | Put the source post's own image back, replacing a diagram. |
-| `GET /api/status` | JSON: full pipeline snapshot — sources, drafts by state, seen, published, schedules, lifecycle. `publish.next_draft` names the oldest approved draft the poster will send next (`publish.approved` counts them, `publish.interval_remaining` is the days still to wait). |
+The page and endpoint table above is the canonical list; the pipeline-specific
+routes (`/scan`, `/publish/run`, `/review/{id}/…`, `/queue/…`) are the ones a
+review workflow uses day to day. In `/api/status`, `publish.next_draft` names
+the oldest approved draft the poster will send next, `publish.approved` counts
+the queue, and `publish.interval_remaining` is the days still to wait.
 
 **Destinations** are pluggable: each platform is a package under
 `src/social_bot/destinations/` and is registered in `destinations/registry.py`.
@@ -342,9 +365,11 @@ Ruff is the linter and formatter; its pinned config lives in `pyproject.toml`
 The tests never import fastapi/uvicorn — `serve`'s scheduling helpers are pure,
 so `[dev]` is enough to run them.
 
-## Notes / hard-won facts (verified Sept 2026)
+## Notes / hard-won facts (verified Nov 2026)
 
-- Graph API **v26.0** is the current version (introduced July 29, 2026).
+- Graph API **v27.0** is the current version (released Nov 4, 2026); this repo
+  pins **v26.0** until the v27 changelog is reviewed. Both are supported (Meta
+  keeps the current version plus two previous majors).
   `GET /{page}/feed` and `POST /{page}/feed` behave as documented at
   developers.facebook.com.
 - Feed timestamps come back as ISO-8601 with a colon-less offset (`+0000`);

@@ -23,7 +23,7 @@ resolution: `config.yaml` at the project root (or `--config`), with a
 .venv/bin/social-bot whoami                       # token + manageable pages
 .venv/bin/social-bot feed --limit 5
 .venv/bin/social-bot blog scan                    # queue new drafts (no token needed)
-.venv/bin/.venv/bin/social-bot blog publish --dry-run       # post the approved queue (needs a token)
+.venv/bin/social-bot blog publish --dry-run       # post the approved queue (needs a token)
 .venv/bin/social-bot serve --port 8083            # dashboard + review UI + schedulers
 .venv/bin/social-bot post --dry-run --message "…" # then drop --dry-run to post
 ```
@@ -69,9 +69,12 @@ docker compose up -d --build
 ```
 
 `./data` is bind-mounted (state survives rebuilds); `./config.yaml` and
-`./credentials.yaml` are mounted read-only. Host port **8083**. The container
-command is `serve --refresh-at 07:00 19:00 --scan-at 06:00`; the posting slots
-come from `publish.post_at` in the mounted `config.yaml`.
+`./credentials.yaml` are mounted read-only. The UI is bound to
+**`127.0.0.1:8083`** on the host — the endpoints are unauthenticated, so put
+nginx (with basic auth), a VPN, or a proxy in front. Publish `8083:8080` only
+on a trusted private host. The container command is
+`serve --refresh-at 07:00 19:00 --scan-at 06:00`; the posting slots come from
+`publish.post_at` in the mounted `config.yaml`.
 
 The image runs as **uid/gid 1000** (matching a typical host user), so the
 bind-mounted `./data` needs no chown. Different host uid? Rebuild with
@@ -82,7 +85,7 @@ bind-mounted `./data` needs no chown. Different host uid? Rebuild with
 ```sh
 docker compose up -d --build
 ```
-Check what's actually deployed: `curl -s http://<host>/api/status`.
+Check what's actually deployed: `curl -s http://127.0.0.1:8083/api/status`.
 
 ## Endpoints
 
@@ -108,10 +111,12 @@ load-balancer/healthcheck at `/live` for restarts and `/ready` for routing.
 ## Lifecycle
 
 On `SIGTERM` (e.g. `docker compose down`, a redeploy), `serve` marks itself
-not-ready, stops accepting new publishes/scans/refreshes (503), waits up to 30s
-for an in-flight publish to finish, then cancels the refresh/scan/posting/token
-loops. Keep uvicorn's `--timeout-graceful-shutdown`
-above that window so a slow post is not killed mid-flight.
+not-ready, stops accepting new publishes/scans/refreshes (503), waits up to
+**330s** for an in-flight publish to finish (a video upload is the slowest
+send), then cancels the refresh/scan/posting/token loops. Uvicorn's
+graceful-shutdown window is raised to match, and `docker-compose.yml` sets
+`stop_grace_period: 360s` so Docker does not kill the process mid-send. The
+wait only happens when a post is actually in flight.
 
 ## Data layout
 
@@ -120,6 +125,11 @@ above that window so a slow post is not killed mid-flight.
 | `data/feed/latest.{json,html}` | Cached page feed (written by `refresh`/`serve`). |
 | `data/review/queue.json` | The review queue. |
 | `data/review/seen.json` | Dedupe ledger (`source:slug`). |
+| `data/review/images/` | Post images (source covers and drawn plates), served at `/images/`. |
+| `data/review/plates/` | Hand-written HTML5 plates, screenshotted to a PNG (not served). |
+| `data/review/videos/` | Attached clips, served at `/videos/`. |
+| `data/ideas/` | Idea-seed topics plus their dedupe ledger. |
+| `data/voice/` | Legacy local corpus from the removed retrieval/rewrite experiment; no code reads it, so it is safe to archive or delete. |
 | `data/publish/published.jsonl` | Publish audit log. |
 | `data/state.json` | Last refresh/scan run, whether posting is paused, and each destination's last-run posting slot (so a restart neither resumes a pause nor re-fires a slot that already ran). |
 
@@ -143,14 +153,16 @@ same id.
 | Hashtags missing from a post | Ensure the image includes the `Draft.post_text` fix (rebuild). Hashtags are appended to the caption at publish time. |
 | Draft stuck `extracted` | No caption yet. Write it in Claude, paste it on `/review/{id}`, and save: saving moves the draft to `ai_draft`, ready to approve. |
 | Draft has no image | Expected unless the source post published a cover: use the source cover as-is, or draw an HTML5 plate in `data/review/plates/` and screenshot it to a PNG. |
-| A plate replaced a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. Only `blog diagram --overwrite` replaces a cover, deliberately. |
+| A plate replaced a post's own cover | **Restore source image** on `/review/{id}` puts the source post's picture back (the caption is untouched); the source image is kept on the draft from scan time, and read back from the source page if the draft predates that. |
 
 ## Security
 
 The web endpoints are **unauthenticated**. Anyone who can reach `/review` can
 read drafts, and anyone who can `POST /review/{id}/publish` can post to the
-Page. Before exposing `serve` publicly, put it behind auth (reverse proxy, VPN,
-or a shared-secret middleware you add in `web.py`).
+Page. The Docker service binds the port to **127.0.0.1** by default; before
+exposing `serve` beyond the host, put it behind auth (nginx basic auth, a VPN,
+or a shared-secret middleware you add in `web.py`). Keep
+`credentials.yaml` at mode `0600` — it holds the Page token.
 
 ## Guardrails recap
 

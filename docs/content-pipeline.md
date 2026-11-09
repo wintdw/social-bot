@@ -74,8 +74,8 @@ The caption is written by the operator in Claude. The voice briefs in
 Paste the result into the Caption field on `/review/{id}` and save. `edit_draft`
 stores the caption and hashtags, re-lints the caption (`caption_lint.py`, advisory
 only), and moves an `extracted` draft to `ai_draft`, which is what makes it
-approvable. Image prompt, image style and destinations are saved with it. The app
-never calls a model.
+approvable. The destination chips and (for a video draft) the placement are saved
+with it. The app never calls a model.
 
 ### 2b. Images (source cover, drawn HTML5 plate, or a drawn illustration)
 
@@ -206,10 +206,11 @@ human approval.
   **Post to &lt;Platform&gt;** button per platform still pending (the plain
   **Post publicly** when only one is left), so Facebook and LinkedIn are
   independent sends: a draft can go to either, or to both, in any order.
-- Actions: **Save** (persist the caption, hashtags, and image prompt without
-  posting) and **Post now** (publish immediately) always; **Reject**. A draft
-  whose image is a diagram also offers **Restore source image**, which
-  swaps the source post's own picture back in and leaves the caption alone.
+- Actions: **Save** (persist the caption, hashtags, destination chips, and video
+  placement without posting) and **Post now** (publish immediately) always;
+  **Reject**. A draft whose cover was replaced by a drawn plate also offers
+  **Restore source image**, which swaps the source post's own picture back in and
+  leaves the caption alone.
   
   When `publish.post_at` is non-empty, **Approve & schedule** also appears — it
   saves the caption edits and queues the draft as `approved` for the next slot.
@@ -309,8 +310,8 @@ human approval.
   destination's wake. (Before this, a 14:25 wake for one destination could fire
   another's *previous-day* slot, hours late.)
 - After a run that actually posted, `serve` also refreshes the feed cache
-  (`refresh_feed`), so the new post shows on the dashboard immediately instead
-  of waiting for the next `--refresh-at` slot. A run that posted nothing
+  (the reader's `refresh()`), so the new post shows on the dashboard immediately
+  instead of waiting for the next `--refresh-at` slot. A run that posted nothing
   refreshes nothing.
 - `publish.interval_days` sets a minimum gap between **scheduled** public posts
   (e.g. `2`
@@ -364,7 +365,7 @@ The idea seeds (§2d) keep their own state under `ideas.dir`:
 | GET | `/` | Factory dashboard: controls, counts, scheduler state, cached feed. |
 | GET | `/queue` | Post queue: the approved drafts in posting order, with the reorder controls and the **Post approved now** button (when `publish.post_at` is set). |
 | GET | `/review` | Review queue list, newest first (has the **Scan sources now** button). Optional `?source=<name>&status=<state>` filters, `?q=<text>` title/excerpt search, and `?sort=oldest`; paged with `?page=<n>&per_page=<n>` (default 20, max 200). |
-| GET | `/review/{id}` | Review detail: editable caption and hashtags; the destination picker (per-platform chips) and one **Post to &lt;Platform&gt;** button per pending destination; Save / Reject, plus Approve & schedule when `publish.post_at` is set (+ Unapprove on an approved draft, + + Restore source image when the image is a diagram). |
+| GET | `/review/{id}` | Review detail: editable caption and hashtags; the destination picker (per-platform chips), one **Post to &lt;Platform&gt;** button per pending destination, and the **Publish video as** picker for an attached clip; Save / Reject, plus Approve & schedule when `publish.post_at` is set (+ Unapprove on an approved draft, Restore source image when a plate replaced the source cover). |
 | GET | `/publish` | Publish audit log (public + private sends). |
 | GET | `/status` | Human-readable snapshot: token validity/expiry, schedules, sources. |
 | GET | `/videos/{name}` | A locally stored post video (the clip attached to a draft), served with Range support so the review player can seek. |
@@ -378,12 +379,14 @@ The idea seeds (§2d) keep their own state under `ideas.dir`:
 | POST | `/publish/run` | Drain the approved queue now (JSON, or a 303 back to the submitting page — `/review` by default). Still works while paused. |
 | POST | `/publish/pause` | Pause the posting scheduler — it skips its slots until resumed (JSON, or a 303 back to `/`); persisted across restarts. |
 | POST | `/publish/resume` | Resume the posting scheduler (JSON, or a 303 back to `/`). |
-| POST | `/review/{id}/save` | Save the compose edits (caption, hashtags, image prompt); never posts. |
+| POST | `/review/{id}/save` | Save the compose edits (caption, hashtags, destination chips, video placement); never posts. |
 | POST | `/review/{id}/unapprove` | Pull an approved draft out of the post queue: back to `ai_draft`, so the poster skips it, while it stays on `/review`. The inverse of `approve=1`; never posts. |
 | POST | `/review/{id}/publish` | Publish (form; `dry_run=1` to preview). With `approve=1` it saves the edits and queues the draft as `approved` instead of posting. |
 | POST | `/review/{id}/reject` | Reject. |
 | POST | `/review/{id}/restore-image` | Put the source post's own image back, replacing a generated one (reads the source page once when the draft has no stored original). |
 | POST | `/queue/{id}/move` | Move an approved draft in the post queue (`direction=up\|down\|top\|bottom`, plus a `next` return path — the queue page sends `/queue#post-queue`); never posts. |
+| POST | `/queue/{id}/destinations` | Retarget one draft's platforms from the queue; refuses a platform the draft cannot use (video is Facebook only). |
+| POST | `/queue/{id}/publish` | Send one approved draft now to one platform (`destination=…`); a manual send, exempt from `interval_days`. |
 | POST | `/queue/order` | Persist a drag-and-drop reorder: JSON `{"ids": [...]}` (a subset is fine), returns `{"ok": true, "order": [...]}`. |
 | POST | `/queue/reset` | Clear every manual position, restoring the default oldest-first order. |
 

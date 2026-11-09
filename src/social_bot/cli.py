@@ -52,8 +52,8 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument(
         "--token",
         help=(
-            "facebook access token (overrides SOCIAL_BOT_TOKEN, "
-            "SOCIAL_BOT_FACEBOOK_TOKEN, and credentials.yaml)"
+            "destination access token (overrides SOCIAL_BOT_<NAME>_TOKEN, "
+            "SOCIAL_BOT_TOKEN, and credentials.yaml)"
         ),
     )
     sub = parser.add_subparsers(dest="command", required=True)

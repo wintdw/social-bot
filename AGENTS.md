@@ -57,11 +57,12 @@ Flow: `load_config` merges `config.yaml` and `credentials.yaml` over `DEFAULTS`
 `/{page}/feed`, or downloads the `--photo` image and uploads it as a multipart
 `source` to `/{page}/photos`.
 The core (pipeline, CLI, web, UI) reaches a platform only through
-`destinations/registry.py` — no `facebook`/`linkedin` import outside `destinations/`.
+`destinations/registry.py` — no `facebook`/`linkedin` import outside `destinations/`
+(the generated styleframe preview is the one dev-only exception).
 
 `serve` flow: the FastAPI `lifespan` starts the schedulers; the refresh
-loop calls `destinations.facebook:refresh_feed` (via `asyncio.to_thread`) at the
-`--refresh-at` slots and on `POST /refresh`, writing
+loop calls the configured account reader's `refresh()` (via `asyncio.to_thread`)
+at the `--refresh-at` slots and on `POST /refresh`, writing
 `data/feed/latest.{json,html}`, the scan loop calls
 `draft_pipeline.py:scan_sources` at the `--scan-at` slots, and the posting loop
 calls `draft_pipeline.py:publish_scheduled` at the `--publish-at` slots (from
@@ -89,8 +90,9 @@ Captions are written **by the operator in Claude**. The operator pastes the capt
 
 ## Hard-won facts
 
-- **Graph API v26.0** is current as of Sept 2026 (introduced 2026-07-29).
-  Meta supports the current version plus two previous majors; `destinations.facebook.api_version`
+- **Graph API v27.0** is current (released 2026-11-04); the repo pins **v26.0**
+  deliberately until the v27 changelog is reviewed. Meta supports the current
+  version plus two previous majors, so v26 remains supported. `destinations.facebook.api_version`
   is configurable and pinned in `config.yaml`.
 - The token is the whole auth story. It is **never in code or committed
   config**: passed via `SOCIAL_BOT_TOKEN` (global) / `SOCIAL_BOT_<NAME>_TOKEN`,
@@ -318,9 +320,8 @@ Captions are written **by the operator in Claude**. The operator pastes the capt
   render `next_post`; the **Post schedule** row keeps the raw wake. Never show a
   wake as if it were a post time.
 - `serve` needs the `[server]` extra (fastapi/uvicorn) and stays web-free
-  otherwise. Docker: host port **8083** (voz-bot 8080, otofun-bot 8081,
-  linkin-bot 8082), `./data` bind-mounted for the feed cache, and
-  `./credentials.yaml` mounted read-only so the token never enters the image.
+  otherwise. Docker: loopback **127.0.0.1:8083** (bind it wider only behind
+  auth); sibling bots use 8080/8081/8082.
 
 ## Guardrails (do not silently weaken)
 
@@ -411,7 +412,7 @@ helpers (no fastapi import needed). Live calls are manual: `whoami` first, then
 `post --dry-run` before
 the first real post.
 
-The deployed UI (`https://social.atento.vn/`, nginx -> host port 8083) sits
+The deployed UI (`https://social.atento.vn/`, nginx -> `127.0.0.1:8083`) sits
 behind HTTP basic auth. To poke it with agent-browser, run
 `scripts/open_site.py [url]`: it reads `site.user` / `site.password` from the
 git-ignored `credentials.yaml` via the core's own `load_config` — so the pair
