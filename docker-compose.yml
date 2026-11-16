@@ -42,7 +42,7 @@ services:
       # Loopback-only: the operator UI is unauthenticated, so never publish it
       # on a public interface. Put nginx/VPN/basic auth in front, or change this
       # to "8083:8080" only on a host you trust.
-      - "127.0.0.1:8083:8080"      # 8083 on the host (voz-bot 8080, otofun-bot 8081, linkin-bot 8082)
+      - "0.0.0.0:8083:8080"      # 8083 on the host (voz-bot 8080, otofun-bot 8081, linkin-bot 8082)
     volumes:
       - ./data:/app/data
       # config.yaml is read at startup; mount it so page_id edits need no rebuild.
