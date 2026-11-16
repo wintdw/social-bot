@@ -427,6 +427,47 @@ class TestPublish:
         out = render_publish_html([], generated_at=GENERATED)
         assert "Nothing published yet." in out
 
+    def test_a_landed_link_comment_is_shown(self):
+        out = render_publish_html(
+            [
+                {
+                    "id": "c",
+                    "source": "bytebytego",
+                    "destination": "linkedin",
+                    "posted_at": "2026-09-11T10:00:00+00:00",
+                    "commented": True,
+                }
+            ],
+            generated_at=GENERATED,
+        )
+        assert "Link comment" in out
+        assert "commented" in out
+        assert "missing" not in out
+
+    def test_a_failed_link_comment_is_flagged_with_its_reason(self):
+        # The post is out but its source link never landed: the audit has to say so.
+        out = render_publish_html(
+            [
+                {
+                    "id": "c",
+                    "source": "bytebytego",
+                    "destination": "linkedin",
+                    "posted_at": "2026-09-11T10:00:00+00:00",
+                    "commented": False,
+                    "comment_error": "no comment box in the new post's card",
+                }
+            ],
+            generated_at=GENERATED,
+        )
+        assert "missing" in out
+        assert "no comment box" in out
+
+    def test_no_comment_outcome_leaves_the_column_empty(self):
+        out = render_publish_html(RECORDS, generated_at=GENERATED)
+        assert "Link comment" in out
+        assert "missing" not in out
+        assert "commented" not in out
+
     def test_escapes_source(self):
         out = render_publish_html(
             [{"source": "<script>alert(1)</script>", "posted_at": "x"}], generated_at=GENERATED

@@ -615,6 +615,99 @@ class TestLinkedInPublisher:
         LinkedInPublisher(_cfg()).publish(idea)
         assert "comment" not in bodies[1]
 
+    def test_the_comment_outcome_is_carried_on_the_result(self, monkeypatch):
+        """A failed first comment does not fail the post, but it is not silent.
+
+        The gateway returns ``ok`` with ``commented: false`` (the post is already
+        out, so a retry would duplicate it); that outcome must reach the caller so
+        the draft record and the audit log can show the link never landed.
+        """
+        from social_bot.destinations.linkedin import publisher as li_mod
+
+        body = {
+            "ok": True,
+            "post_urn": "urn:li:share:1",
+            "permalink": "https://x/1",
+            "commented": False,
+            "comment_error": "no comment box in the new post's card",
+        }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(body).encode()
+
+        monkeypatch.setattr(
+            li_mod.urllib.request, "urlopen", lambda request, timeout=None: FakeResponse()
+        )
+        draft = _draft()
+        draft.caption = "Hello"
+        draft.state = "ai_draft"
+        result = LinkedInPublisher(_cfg()).publish(draft)
+        assert result.commented is False
+        assert result.comment_error == "no comment box in the new post's card"
+        assert result.to_dict()["commented"] is False
+
+    def test_a_landed_comment_is_reported(self, monkeypatch):
+        from social_bot.destinations.linkedin import publisher as li_mod
+
+        body = {
+            "ok": True,
+            "post_urn": "urn:li:share:2",
+            "permalink": "https://x/2",
+            "commented": True,
+            "comment_error": None,
+        }
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return json.dumps(body).encode()
+
+        monkeypatch.setattr(
+            li_mod.urllib.request, "urlopen", lambda request, timeout=None: FakeResponse()
+        )
+        draft = _draft()
+        draft.caption = "Hello"
+        draft.state = "ai_draft"
+        result = LinkedInPublisher(_cfg()).publish(draft)
+        assert result.commented is True
+        assert result.comment_error == ""
+        assert result.to_dict()["commented"] is True
+
+    def test_an_idea_carries_no_comment_outcome(self, monkeypatch):
+        # No source URL -> no comment requested -> the record keeps its old shape.
+        from social_bot.destinations.linkedin import publisher as li_mod
+
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+            def read(self):
+                return b'{"ok": true, "post_urn": "urn:li:share:3", "permalink": ""}'
+
+        monkeypatch.setattr(
+            li_mod.urllib.request, "urlopen", lambda request, timeout=None: FakeResponse()
+        )
+        idea = _draft(url="", title="", caption="Original idea")
+        idea.state = "ai_draft"
+        result = LinkedInPublisher(_cfg()).publish(idea)
+        assert result.commented is None
+        assert "commented" not in result.to_dict()
+
     def test_image_only_draft_can_publish(self, monkeypatch, fake_image):
         from social_bot.destinations.linkedin import publisher as li_mod
 

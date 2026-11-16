@@ -184,14 +184,26 @@ class Draft:
         post_id: str = "",
         permalink: str = "",
         private: bool = False,
+        commented: bool | None = None,
+        comment_error: str = "",
     ) -> None:
-        """Record the result of a send to one destination."""
-        self.posts[destination] = {
+        """Record the result of a send to one destination.
+
+        ``commented`` is the first-comment outcome where the platform reports one
+        (LinkedIn's gateway); ``None`` means no comment was involved, so the record
+        keeps its old shape and nothing is invented.
+        """
+        record = {
             "post_id": str(post_id),
             "permalink": str(permalink),
             "posted_at": now_iso(),
             "private": bool(private),
         }
+        if commented is not None:
+            record["commented"] = bool(commented)
+            if comment_error:
+                record["comment_error"] = str(comment_error)
+        self.posts[destination] = record
         self.touch()
 
     def mark_posted(
@@ -201,13 +213,22 @@ class Draft:
         post_id: str = "",
         permalink: str = "",
         private: bool = False,
+        commented: bool | None = None,
+        comment_error: str = "",
     ) -> None:
         """Record a send; flip to POSTED once every target has a public post.
 
         A private send (``publish.private``) is recorded but never completes the
         draft, so it stays in the queue for a later public send.
         """
-        self.record_post(destination, post_id=post_id, permalink=permalink, private=private)
+        self.record_post(
+            destination,
+            post_id=post_id,
+            permalink=permalink,
+            private=private,
+            commented=commented,
+            comment_error=comment_error,
+        )
         if not private and self.is_fully_posted():
             self.state = POSTED
 

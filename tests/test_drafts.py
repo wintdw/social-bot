@@ -129,6 +129,27 @@ class TestPersistence:
         assert Draft(id="x", queue_order=-2).rank == 0
         assert Draft.from_dict({"id": "x", "queue_order": "later"}).rank == 0
 
+    def test_the_comment_outcome_rides_the_post_record(self):
+        # A post whose source link never landed must stay inspectable.
+        draft = Draft(id="x", destinations=["linkedin"], state="approved")
+        draft.mark_posted(
+            "linkedin",
+            post_id="urn:li:activity:1",
+            permalink="https://x/1",
+            commented=False,
+            comment_error="no comment box",
+        )
+        assert draft.posts["linkedin"]["commented"] is False
+        assert draft.posts["linkedin"]["comment_error"] == "no comment box"
+        assert Draft.from_dict(draft.to_dict()).posts["linkedin"]["commented"] is False
+
+    def test_no_comment_keeps_the_record_shape(self):
+        # Facebook (and any draft with no source link) never invents the field.
+        draft = Draft(id="x", destinations=["facebook"], state="approved")
+        draft.mark_posted("facebook", post_id="1_2", permalink="https://x/1_2")
+        assert "commented" not in draft.posts["facebook"]
+        assert "comment_error" not in draft.posts["facebook"]
+
     def test_find(self):
         drafts = [_draft(), _draft(id="post-two")]
         assert find(drafts, "post-two").id == "post-two"

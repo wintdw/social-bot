@@ -37,14 +37,25 @@ class PublishResult:
     post_id: str = ""
     permalink: str = ""
     private: bool = False
+    # The first-comment outcome, for a destination that posts the source link as
+    # the new post's first comment. ``None`` = no comment was involved (no source
+    # URL, or a platform that comments inside the API call). A failed comment never
+    # fails the send: the post is out, so it is reported here instead.
+    commented: bool | None = None
+    comment_error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "destination": self.destination,
             "post_id": self.post_id,
             "permalink": self.permalink,
             "private": self.private,
         }
+        if self.commented is not None:
+            data["commented"] = self.commented
+            if self.comment_error:
+                data["comment_error"] = self.comment_error
+        return data
 
 
 class _Destination:

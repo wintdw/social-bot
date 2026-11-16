@@ -1431,6 +1431,8 @@ def publish_draft(
             post_id=result.post_id,
             permalink=result.permalink,
             private=result.private,
+            commented=result.commented,
+            comment_error=result.comment_error,
         )
         append_audit(published_path(cfg), _audit_record(draft, name, manual=manual))
         save_drafts(queue_path(cfg), drafts)  # persist after each destination
@@ -1464,6 +1466,12 @@ def _audit_record(draft: Draft, destination: str, *, manual: bool = False) -> di
         audit["private"] = True
     if manual:
         audit["manual"] = True
+    if record.get("commented") is not None:
+        # The first-comment outcome (LinkedIn): a false with the gateway's reason,
+        # so a post whose source link never landed is visible in the audit log.
+        audit["commented"] = bool(record.get("commented"))
+        if record.get("comment_error"):
+            audit["comment_error"] = str(record["comment_error"])
     return audit
 
 

@@ -132,6 +132,15 @@ Captions are written **by the operator in Claude**. The operator pastes the capt
   as the same Page. That is why the caption's CTA says the link is in the comment:
   the body carries no URL (an outbound link is deprioritized). An idea draft has
   no `url`, so nothing is commented.
+- **A comment that did not land is reported, never assumed.** The LinkedIn gateway
+  reports the first comment separately (`commented`/`comment_error`) because the
+  post is already out — a failed comment must not fail or duplicate it. That
+  outcome rides `PublishResult` → `Draft.posts[<destination>]["commented"]` /
+  `["comment_error"]` → the audit record, `/publish` shows it as a `missing` pill,
+  and `/review/{id}` names the reason. Nov 2026: the gateway's comment path was
+  broken for weeks (AttributeError on the card's ElementHandle) and every post
+  looked sent, so this flag is the only thing that makes a missing link visible.
+  A post with no comment outcome (Facebook, an idea) keeps the old record shape.
 - **Photo posts upload the image bytes** (a multipart `source` part); they are
   never a `url` for Graph to fetch — a remote host may not serve the file to
   Graph at all. Images live locally under the served `/images/` dir

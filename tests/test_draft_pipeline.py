@@ -909,6 +909,51 @@ class TestPublish:
         audit = pipeline.published_path(cfg).read_text(encoding="utf-8").splitlines()
         assert json.loads(audit[0])["post_id"] == "123_9"
 
+    def test_the_comment_outcome_reaches_the_record_and_audit(self, tmp_path, monkeypatch):
+        """A post whose source link did not land is recorded as sent *and* flagged.
+
+        The post is out, so it still counts as posted; the failed comment is carried
+        beside it so /publish and /review/{id} can show it instead of hiding it.
+        """
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        draft = pipeline.get_draft(cfg, "post-one")
+        draft.destinations = ["linkedin"]
+        pipeline.save_drafts(pipeline.queue_path(cfg), [draft])
+
+        class CommentFailingPublisher(FakePublisher):
+            def publish(self, draft):
+                self.published.append(draft.id)
+                return PublishResult(
+                    destination="linkedin",
+                    post_id="urn:li:activity:1",
+                    permalink="https://www.linkedin.com/feed/update/urn:li:activity:1/",
+                    commented=False,
+                    comment_error="no comment box in the new post's card",
+                )
+
+        fake = CommentFailingPublisher()
+        monkeypatch.setattr(pipeline, "publisher_for", lambda name, cfg, token=None: fake)
+        result = pipeline.publish_draft(cfg, "post-one")
+        assert result["private"] is False
+        draft = pipeline.get_draft(cfg, "post-one")
+        assert draft.state == POSTED
+        record = draft.posts["linkedin"]
+        assert record["commented"] is False
+        assert record["comment_error"] == "no comment box in the new post's card"
+        audit = json.loads(pipeline.published_path(cfg).read_text(encoding="utf-8"))
+        assert audit["commented"] is False
+        assert audit["comment_error"] == "no comment box in the new post's card"
+
+    def test_a_post_with_no_comment_keeps_the_audit_clean(self, tmp_path, monkeypatch):
+        cfg = _seed_draft(tmp_path, caption="Hello")
+        monkeypatch.setattr(
+            pipeline, "publisher_for", lambda name, cfg, token=None: FakePublisher()
+        )
+        pipeline.publish_draft(cfg, "post-one")
+        audit = json.loads(pipeline.published_path(cfg).read_text(encoding="utf-8"))
+        assert "commented" not in audit
+        assert "comment_error" not in audit
+
     def test_each_destination_posts_independently(self, tmp_path, monkeypatch):
         cfg = _seed_draft(tmp_path, caption="Hello")
         draft = pipeline.get_draft(cfg, "post-one")

@@ -790,6 +790,14 @@ def render_draft_html(
     for name, record in draft.posts.items():
         if record.get("private"):
             continue
+        if record.get("commented") is False:
+            # The post is out but its source link never landed (LinkedIn's gateway
+            # reports it): say so here, where the operator looks after a send.
+            reason = str(record.get("comment_error") or "")
+            posted_lines.append(
+                f"{html.escape(label_for(name))}: the source link was not commented"
+                + (f" ({html.escape(reason)})" if reason else "")
+            )
         if name == "linkedin":
             # LinkedIn's URL is a read-back guess, not the post's link.
             posted_lines.append(f"Already posted to {html.escape(label_for(name))}.")

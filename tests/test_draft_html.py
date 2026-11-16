@@ -373,6 +373,48 @@ class TestRenderDraftHtml:
         assert "https://x/li" not in out
         assert "li1" not in out
 
+    def test_a_failed_link_comment_is_shown_on_the_draft(self):
+        # The post is out, so it still says "Already posted"; the missing source
+        # link is called out with the gateway's reason, not swallowed.
+        draft = Draft(
+            id="p",
+            title="T",
+            caption="Hi",
+            state="posted",
+            destinations=["linkedin"],
+            posts={
+                "linkedin": {
+                    "post_id": "li1",
+                    "permalink": "https://x/li",
+                    "posted_at": "now",
+                    "commented": False,
+                    "comment_error": "no comment box in the new post's card",
+                }
+            },
+        )
+        out = render_draft_html(draft)
+        assert "Already posted to LinkedIn." in out
+        assert "the source link was not commented" in out
+        assert "no comment box" in out
+
+    def test_a_landed_link_comment_adds_no_warning(self):
+        draft = Draft(
+            id="p",
+            title="T",
+            caption="Hi",
+            state="posted",
+            destinations=["linkedin"],
+            posts={
+                "linkedin": {
+                    "post_id": "li1",
+                    "permalink": "https://x/li",
+                    "posted_at": "now",
+                    "commented": True,
+                }
+            },
+        )
+        assert "not commented" not in render_draft_html(draft)
+
     def test_private_action_is_labelled_private(self):
         out = render_draft_html(Draft(id="p", title="T", caption="Hi"), private=True)
         assert "Publish privately" in out

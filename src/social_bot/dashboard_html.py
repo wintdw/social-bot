@@ -893,6 +893,17 @@ def render_publish_html(
             source_cell = f'<a href="{html.escape(url)}">{html.escape(source)}</a>'
         destination = str(record.get("destination", "") or "")
         permalink = str(record.get("permalink", "") or "")
+        commented = record.get("commented")
+        if commented is True:
+            comment_cell = '<span class="pill"><span class="dot dot-ok"></span>commented</span>'
+        elif commented is False:
+            reason = str(record.get("comment_error", "") or "")
+            title = f' title="{html.escape(reason)}"' if reason else ""
+            comment_cell = (
+                f'<span class="pill"{title}><span class="dot dot-danger"></span>missing</span>'
+            )
+        else:
+            comment_cell = ""
         if destination == "linkedin":
             # LinkedIn's post URL is a read-back guess from the Page's posts
             # list, not the created post's id — it repeatedly points at the
@@ -912,6 +923,7 @@ def render_publish_html(
                 source_cell,
                 html.escape(destination),
                 post_cell,
+                comment_cell,
             ]
         )
     return layout(
@@ -920,7 +932,7 @@ def render_publish_html(
         + _panel(
             "Audit log",
             '<div class="panel-body">'
-            + _table(["When", "Source", "Destination", "Post"], rows)
+            + _table(["When", "Source", "Destination", "Post", "Link comment"], rows)
             + "</div>",
             extra=f'<span class="pill">{len(records)} record(s)</span>',
         ),

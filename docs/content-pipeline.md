@@ -415,7 +415,9 @@ and audit rows flow through unchanged. `linkedin/publisher.py` shows the shape o
 a destination that **delegates to another local service**: it calls linkin-bot's
 `POST /post` gateway (text + the image bytes as base64 + the source URL, which the
 gateway comments on the new post) instead of talking to the platform API, so no
-token/OAuth lives here.
+token/OAuth lives here. The gateway also reports whether that comment landed
+(`commented`/`comment_error`); the publisher carries it on `PublishResult`, the
+draft's post record keeps it, and `/publish` + `/review/{id}` flag a missing one.
 
 **Changing the caption text.** The published text is `Draft.post_text`
 (caption + hashtags). Keep hashtags in the `hashtags` field, not the caption.

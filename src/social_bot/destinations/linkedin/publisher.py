@@ -17,6 +17,11 @@ A draft with a source URL sends it as the post's **first comment** (the gateway'
 Page) — the caption's CTA points at the link ("đọc bài gốc ở comment"), and the
 feed deprioritizes a post carrying an outbound link. Same reason the Facebook
 publisher comments the link (see ``facebook/publisher.py``).
+
+The gateway reports the comment separately (``commented``/``comment_error``) because
+a failed comment must never fail — or duplicate — a post that is already out. That
+outcome is carried on the result, into the draft's post record and the audit log:
+a post whose link never landed has to be visible, not silently "sent".
 """
 
 from __future__ import annotations
@@ -119,9 +124,26 @@ class LinkedInPublisher(Publisher):
             raise PublisherError(f"linkedin: cannot reach the gateway: {exc}") from None
         if not body.get("ok"):
             raise PublisherError(f"linkedin: gateway rejected the post: {body.get('error')}")
+        # The gateway reports the first comment separately: the post is already out,
+        # so a comment that did not land comes back as ``commented: false`` +
+        # ``comment_error``. Keep it (it rides into the draft record and the audit)
+        # and say so loudly — a silent failure here used to leave posts with a
+        # caption promising "đọc bài gốc ở comment" and no comment at all.
+        commented = None
+        comment_error = str(body.get("comment_error") or "")
+        if payload.get("comment"):
+            commented = bool(body.get("commented"))
+            if not commented:
+                print(
+                    f"linkedin: posted, but the source link was NOT commented: "
+                    f"{comment_error or 'the gateway did not confirm the comment'}",
+                    flush=True,
+                )
         return PublishResult(
             destination=self.name,
             post_id=str(body.get("post_urn") or ""),
             permalink=str(body.get("permalink") or ""),
             private=False,
+            commented=commented,
+            comment_error=comment_error if commented is False else "",
         )
