@@ -108,6 +108,12 @@ instance should take no traffic — while it is draining on shutdown, if a
 scheduler task has died, or if a state directory is not writable. Point a
 load-balancer/healthcheck at `/live` for restarts and `/ready` for routing.
 
+On the deployed vhost (`https://social.atento.vn`), `/live` and `/ready` are the
+only paths that skip nginx's HTTP basic auth, so an external probe can reach
+them without the password; `/health`, `/api/status` and the operator pages stay
+authenticated. Prometheus probes `https://social.atento.vn/ready` as part of its
+`blackbox_http` job.
+
 ## Lifecycle
 
 On `SIGTERM` (e.g. `docker compose down`, a redeploy), `serve` marks itself
