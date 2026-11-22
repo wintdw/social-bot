@@ -373,6 +373,7 @@ The idea seeds (§2d) keep their own state under `ideas.dir`:
 | GET | `/health` | Liveness + last run info (JSON). |
 | GET | `/live` | Liveness probe: `{"status": "alive"}`, never touches state. |
 | GET | `/ready` | Readiness probe: 200 when serving, 503 while draining or if a scheduler died / state dir is unwritable. |
+| GET | `/metrics` | Prometheus text exposition of the token readout: `social_bot_token_valid`, `social_bot_token_expires_in_days`, `social_bot_token_checked_timestamp_seconds`, labelled `destination="facebook"`. Unknown values are omitted, so a stopped check reads as NoData. |
 | GET | `/api/status` | Full pipeline snapshot (JSON); `publish.next_draft` is the first approved draft in posting order the poster will send next. |
 | POST | `/refresh` | Refresh the feed now. |
 | POST | `/scan` | Scan sources now (JSON, or a 303 back to `/review` for browsers). |

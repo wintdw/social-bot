@@ -20,6 +20,7 @@ from social_bot.web import (
     infer_last_runs,
     live_view,
     message_url,
+    metrics_view,
     next_post_at,
     next_run_at,
     readiness_view,
@@ -286,6 +287,45 @@ class TestReadiness:
 
     def test_live_view_always_alive(self):
         assert live_view() == {"status": "alive"}
+
+
+class TestMetricsView:
+    def test_unknown_readout_emits_no_samples(self):
+        text = metrics_view({})
+        assert 'social_bot_token_valid{destination="facebook"}' not in text
+        assert "# TYPE social_bot_token_valid gauge" in text
+        assert text.endswith("\n")
+
+    def test_valid_expiring_token(self):
+        checked = dt.datetime(2026, 11, 22, 15, 0, 0)
+        text = metrics_view(
+            {
+                "token_destination": "facebook",
+                "token_status": {"valid": True, "expires_in_days": 9},
+                "token_checked": checked,
+            }
+        )
+        assert 'social_bot_token_valid{destination="facebook"} 1' in text
+        assert 'social_bot_token_expires_in_days{destination="facebook"} 9' in text
+        assert (
+            f'social_bot_token_checked_timestamp_seconds{{destination="facebook"}} '
+            f"{int(checked.timestamp())}" in text
+        )
+
+    def test_rejected_token_is_zero(self):
+        text = metrics_view({"token_status": {"valid": False}})
+        assert 'social_bot_token_valid{destination="facebook"} 0' in text
+
+    def test_large_numbers_are_not_scientific(self):
+        checked = dt.datetime(2026, 11, 22, 15, 0, 0, 296000)
+        text = metrics_view({"token_checked": checked})
+        assert "e+" not in text
+        assert f"{checked.timestamp():.3f}".rstrip("0").rstrip(".") in text
+
+    def test_never_expiring_token_omits_the_days_sample(self):
+        text = metrics_view({"token_status": {"valid": True, "never_expires": True}})
+        assert "social_bot_token_expires_in_days{" not in text
+        assert 'social_bot_token_valid{destination="facebook"} 1' in text
 
 
 class TestWritableDir:

@@ -114,6 +114,12 @@ them without the password; `/health`, `/api/status` and the operator pages stay
 authenticated. Prometheus probes `https://social.atento.vn/ready` as part of its
 `blackbox_http` job.
 
+`/metrics` is scraped over the internal network (`midnight.local.atento.vn:8083`)
+rather than through the proxy, and it powers three Grafana alerts: token
+invalid, token expiring within 14 days, and token check stale (the readout
+refreshes after every scheduled feed refresh, so older than 36h means the
+refresh loop itself has stopped working).
+
 ## Lifecycle
 
 On `SIGTERM` (e.g. `docker compose down`, a redeploy), `serve` marks itself

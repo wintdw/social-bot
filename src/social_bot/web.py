@@ -418,6 +418,58 @@ def readiness_view(checks: dict[str, bool]) -> tuple[dict, int]:
     return payload, (200 if not failed else 503)
 
 
+def _gauge_bool(value) -> float | None:
+    """A tri-state validity flag as a gauge: None stays "unknown" (no sample)."""
+    return None if value is None else (1.0 if value else 0.0)
+
+
+def _gauge_text(value) -> str:
+    """A gauge sample without scientific notation (epoch seconds keep their digits)."""
+    text = f"{float(value):.3f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def metrics_view(state: dict) -> str:
+    """Prometheus text exposition of the token readout (pure).
+
+    Only what an alert needs: whether the token is valid, how many days it has
+    left, and when it was last introspected — so a readout that stopped
+    refreshing is visible instead of silently reporting an old "valid" forever.
+    A value that is unknown is omitted rather than guessed, which Prometheus
+    reads as NoData (and NoData never means "fine" for these rules).
+    """
+    destination = str(state.get("token_destination") or "facebook")
+    status = state.get("token_status") or {}
+    checked = state.get("token_checked")
+    label = f'{{destination="{destination}"}}'
+    families = [
+        (
+            "social_bot_token_valid",
+            "gauge",
+            "1 when the destination token is accepted, 0 when rejected; absent when unknown.",
+            _gauge_bool(status.get("valid")),
+        ),
+        (
+            "social_bot_token_expires_in_days",
+            "gauge",
+            "Days until the destination token expires; absent when it never expires.",
+            status.get("expires_in_days"),
+        ),
+        (
+            "social_bot_token_checked_timestamp_seconds",
+            "gauge",
+            "Unix time of the last token introspection.",
+            checked.timestamp() if checked is not None else None,
+        ),
+    ]
+    lines: list[str] = []
+    for name, kind, help_text, value in families:
+        lines += [f"# HELP {name} {help_text}", f"# TYPE {name} {kind}"]
+        if value is not None:
+            lines.append(f"{name}{label} {_gauge_text(value)}")
+    return "\n".join(lines) + "\n"
+
+
 def _writable_dir(path) -> bool:
     """True when the nearest existing ancestor of `path` is writable.
 
@@ -519,6 +571,7 @@ def create_app(
         "token_status": None,
         "token_error": None,
         "token_checked": None,
+        "token_destination": None,
         "token_busy": False,
         # Lifecycle: shutdown sets `shutting_down`, pauses new publish work, and
         # waits on `drain` (cleared while a publish is in flight, set when none).
@@ -591,6 +644,7 @@ def create_app(
             state["token_busy"] = False
         state["token_status"] = status
         state["token_error"] = status.get("error")
+        state["token_destination"] = getattr(reader, "name", "") or None
         print(f"[web] token checked (reason={reason}, valid={status.get('valid')})", flush=True)
 
     async def _token_loop() -> None:
@@ -1111,6 +1165,18 @@ def create_app(
                 "shutting_down": state["shutting_down"],
                 "inflight_publishes": state["inflight_publishes"],
             }
+        )
+
+    @app.get("/metrics")
+    async def metrics():
+        """Prometheus text exposition of the token readout.
+
+        Scraped over the internal network (no proxy hop), so it holds no secret:
+        only the token's validity, its remaining days, and the check's timestamp.
+        """
+        return Response(
+            content=metrics_view(state),
+            media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
     @app.get("/api/status")
