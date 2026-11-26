@@ -103,35 +103,37 @@ curl -X POST https://<host>/publish/pause   # pause the posting scheduler (persi
 curl -X POST https://<host>/publish/resume  # resume it
 ```
 
-`/live` answers as long as the process is up; `/ready` returns **503** when the
+`/live` answers as long as the process is up. `/ready` returns **503** when the
 instance should take no traffic — while it is draining on shutdown, if a
 scheduler task (refresh, scan, or the posting loop when timed posting is on) has
-died, or if a state directory is not writable. Point a
-load-balancer/healthcheck at `/live` for restarts and `/ready` for routing.
-Neither probe looks at the pipeline: a healthy process with a dead destination
-is still "ready" to serve the operator UI.
+died, if a state directory is not writable, or if the pipeline health check has
+an active issue (`pipeline_ok`). Point a load-balancer/healthcheck at `/live`
+for restarts and `/ready` for routing.
 
-**`/health` is the pipeline check.** It answers **200** only when nothing needs
-attention, and **503** with an `issues` list otherwise. The same list feeds the
-dashboard's **Needs attention** panel, the `/status` **Health** panel and
-`/api/status.health`. Its issue kinds are stable (a monitoring contract):
-`token_invalid`, `token_check_stale`, `refresh_failed`, `refresh_stale`,
-`scan_failed`, `scan_stale`, `post_failed` (the last drain recorded a per-draft
-error — it had been reported as "last run ok" before Nov 2026), 
-`linkedin_gateway_down`, `linkedin_session_dead`, and `posting_silent` (approved
-drafts wait while no public post has landed for longer than `interval_days`
-allows).
+**`/health` is the detailed pipeline check.** It answers **200** only when
+nothing needs attention, and **503** with an `issues` list otherwise. The same
+list feeds the dashboard's **Needs attention** panel, the `/status` **Health**
+panel and `/api/status.health`. Its issue kinds are stable: `token_invalid`,
+`token_check_stale`, `refresh_failed`, `refresh_stale`, `scan_failed`,
+`scan_stale`, `post_failed` (the last drain recorded a per-draft error — it had
+been reported as "last run ok" before Nov 2026), `linkedin_gateway_down`,
+`linkedin_session_dead`, and `posting_silent` (approved drafts wait while no
+public post has landed for longer than `interval_days` allows).
 
 On the deployed vhost (`https://social.atento.vn`), `/live` and `/ready` are the
 only paths that skip nginx's HTTP basic auth, so an external probe can reach
 them without the password; `/health`, `/api/status` and the operator pages stay
 authenticated. Prometheus probes `https://social.atento.vn/ready` as part of its
-`blackbox_http` job — that is a process/TLS probe, not the pipeline check.
+`blackbox_http` job, so any active pipeline issue fails that probe and raises
+the existing **HTTP probe failing** alert — no separate rule is needed. The
+probe payload names the failed check (`pipeline_ok`); the messages stay on
+`/health`, which is authenticated.
 
 `/metrics` is scraped over the internal network (`midnight.local.atento.vn:8083`)
 rather than through the proxy. It carries the token readout
 (`social_bot_token_valid`, `social_bot_token_expires_in_days`,
-`social_bot_token_checked_timestamp_seconds`) plus the pipeline health families:
+`social_bot_token_checked_timestamp_seconds`) and the pipeline health families
+for dashboards and ad-hoc queries:
 
 | Metric | Meaning |
 |---|---|
@@ -143,9 +145,9 @@ rather than through the proxy. It carries the token readout
 | `social_bot_destination_ok{destination=...}` | 1 when that destination can publish. |
 | `social_bot_last_public_post_timestamp_seconds` | Age of the newest public post. |
 
-Grafana alerts on these (see the monitoring stack): token invalid/expiring/stale,
-plus **any active `social_bot_issue`** and a degraded `social_bot_health_ok`.
-Unknown values are omitted, so a stopped readout reads as NoData, never "fine".
+The three token Grafana alerts still read `/metrics`; pipeline issues alert
+through the blackbox probe above. Unknown values are omitted, so a stopped
+readout reads as NoData, never "fine".
 
 ## Lifecycle
 

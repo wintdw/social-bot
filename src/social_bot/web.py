@@ -1473,10 +1473,15 @@ def create_app(
 
     @app.get("/ready")
     async def ready():
-        """Readiness: can this instance serve? 503 while draining or unhealthy.
+        """Readiness: can this instance serve *and* is the pipeline healthy?
 
-        Checks the schedulers are alive and the state dirs are writable — the two
-        things that stop the pipeline working while the process still answers.
+        503 while draining, if a scheduler task has died, if the state dirs are
+        not writable, or if the health check has an active issue. This is the
+        path the blackbox probe watches, so the operator is alerted through the
+        existing HTTP-probe alarm when posting stops (a dead LinkedIn gateway, a
+        failed drain, a stale refresh, …) — `/live` stays the pure liveness probe.
+        The payload names the failed checks but not their messages; `/health`
+        carries the issue details.
         """
         loops = state.get("loops") or {}
         schedulers = [loops.get(name) for name in SCHEDULER_LOOPS]
@@ -1485,10 +1490,16 @@ def create_app(
         # while every other signal stays green.
         if "posting" in loops:
             schedulers.append(loops["posting"])
+        stats, linkedin = await asyncio.gather(
+            asyncio.to_thread(pipeline.status, cfg),
+            asyncio.to_thread(_linkedin_runtime),
+        )
+        report, _ = health_view(_health_snapshot(stats, linkedin))
         checks = {
             "not_shutting_down": not state["shutting_down"],
             "schedulers_alive": all(task is not None and not task.done() for task in schedulers),
             "state_writable": await asyncio.to_thread(_state_writable),
+            "pipeline_ok": not report["issues"],
         }
         payload, status_code = readiness_view(checks)
         return JSONResponse(payload, status_code=status_code)

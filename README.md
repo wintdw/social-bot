@@ -170,7 +170,7 @@ docker compose logs -f                # follow refresh/scan runs
 | `GET /status` | **Status** — sources, drafts by state, publish settings (min interval, days remaining, next up), and scheduler runs. |
 | `GET /health` | JSON: pipeline health (200 clean, **503** with an `issues` list), plus last refresh/scan/post results, schedules, next runs, open drafts, lifecycle. |
 | `GET /live` | Liveness probe — always `{"status": "alive"}` while the process runs. |
-| `GET /ready` | Readiness probe — 200 when serving, 503 while draining or unhealthy. |
+| `GET /ready` | Readiness probe — 200 when serving and the pipeline is healthy, 503 while draining, when a scheduler died, or when the health check has an issue (the blackbox probe path). |
 | `GET /videos/{name}` | A locally stored draft clip (Range requests supported, so the review player can seek). |
 | `GET /api/status` | JSON snapshot — sources, drafts by state, seen, published, schedules, lifecycle, and the next scheduled post. |
 | `POST /refresh` | `{"started": true}`, or `409` if a refresh is already running. |

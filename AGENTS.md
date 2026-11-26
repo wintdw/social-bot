@@ -341,13 +341,15 @@ Captions are written **by the operator in Claude**. The operator pastes the capt
   feeds `health_view` in `web.py`: `/health` answers **503** with `issues`,
   `/metrics` exports `social_bot_health_ok` and `social_bot_issue{kind=...}`,
   and the dashboard **Needs attention** / `/status` **Health** panels render it.
-  The issue kinds are a monitoring contract (Grafana alerts on them):
+  The issue kinds are a monitoring contract (the blackbox probe and the
+  dashboards consume them):
   `token_invalid`, `token_check_stale`, `refresh_failed`, `refresh_stale`,
   `scan_failed`, `scan_stale`, `post_failed`, `linkedin_gateway_down`,
-  `linkedin_session_dead`, `posting_silent`. `/live` and `/ready` stay
-  process-level probes — do not fold pipeline health into `/ready`, or a dead
-  destination would take the operator UI out of rotation. The last post outcome
-  is persisted in `data/state.json` so a deploy cannot clear a failure.
+  `linkedin_session_dead`, `posting_silent`. `/ready` is the path Prometheus's
+  blackbox `http_2xx` probe watches, so it carries `pipeline_ok` too: any active
+  issue answers 503 and raises the existing **HTTP probe failing** alert (no
+  separate Grafana rule). `/live` stays a pure liveness probe. The last post
+  outcome is persisted in `data/state.json` so a deploy cannot clear a failure.
 
 ## Guardrails (do not silently weaken)
 

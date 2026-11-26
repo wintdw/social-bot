@@ -105,9 +105,11 @@ def test_health_flags_a_broken_gateway(client, monkeypatch):
     status = client.get("/api/status").json()
     assert status["health"]["status"] == "degraded"
 
-    # Readiness is about serving, not the pipeline: it must stay green so the
-    # operator UI is still reachable while the alert fires separately.
-    assert client.get("/ready").status_code == 200
+    # This is the path the blackbox probe watches: an unhealthy pipeline must
+    # fail it, so the existing HTTP-probe alert fires without a second rule.
+    ready = client.get("/ready")
+    assert ready.status_code == 503
+    assert "pipeline_ok" in ready.json()["failed"]
 
 
 def test_ready_counts_a_live_poster(tmp_path, monkeypatch):

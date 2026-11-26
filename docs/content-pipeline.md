@@ -372,7 +372,7 @@ The idea seeds (§2d) keep their own state under `ideas.dir`:
 | GET | `/drafts` | Redirect (307) to `/review` for old links. |
 | GET | `/health` | Pipeline health (JSON): 200 when clean, **503** with an `issues` list otherwise (token, scheduler runs, posting failures, LinkedIn gateway, public-post silence). |
 | GET | `/live` | Liveness probe: `{"status": "alive"}`, never touches state. |
-| GET | `/ready` | Readiness probe: 200 when serving, 503 while draining or if a scheduler died (refresh/scan, plus the poster when timed posting is on) / state dir is unwritable. Does not check the pipeline — `/health` does. |
+| GET | `/ready` | Readiness probe: 200 when serving and the pipeline health check is clean, 503 while draining, if a scheduler died (refresh/scan, plus the poster when timed posting is on), if a state dir is unwritable, or if `/health` has an active issue. This is the blackbox probe path. |
 | GET | `/metrics` | Prometheus text exposition: token readout (`social_bot_token_*`), pipeline health (`social_bot_health_ok`, `social_bot_issue{kind=...}`), per-job outcomes (`social_bot_run_ok{job=...}`), `social_bot_post_errors`, `social_bot_destination_ok{destination=...}`, and `social_bot_last_public_post_timestamp_seconds`. Unknown values are omitted, so a stopped check reads as NoData. |
 | GET | `/api/status` | Full pipeline snapshot (JSON); `publish.next_draft` is the first approved draft in posting order the poster will send next. |
 | POST | `/refresh` | Refresh the feed now. |
