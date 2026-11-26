@@ -168,7 +168,7 @@ docker compose logs -f                # follow refresh/scan runs
 | `GET /queue` | **Post queue** — the approved drafts in the order they will post, the one going out next marked, with drag / Top-Up-Down reorder controls and a **Post approved now** button. |
 | `GET /publish` | **Published** — the audit log (public and private sends, with permalinks). |
 | `GET /status` | **Status** — sources, drafts by state, publish settings (min interval, days remaining, next up), and scheduler runs. |
-| `GET /health` | JSON: busy, last refresh/scan result, schedules, next runs, open drafts, lifecycle. |
+| `GET /health` | JSON: pipeline health (200 clean, **503** with an `issues` list), plus last refresh/scan/post results, schedules, next runs, open drafts, lifecycle. |
 | `GET /live` | Liveness probe — always `{"status": "alive"}` while the process runs. |
 | `GET /ready` | Readiness probe — 200 when serving, 503 while draining or unhealthy. |
 | `GET /videos/{name}` | A locally stored draft clip (Range requests supported, so the review player can seek). |

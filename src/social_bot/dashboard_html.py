@@ -361,11 +361,51 @@ def _pipeline(stats: dict, refresh: dict, scan: dict, post: dict | None) -> str:
     )
 
 
-def _attention(stats: dict, token: dict | None) -> str:
+def _health_rows(health: dict | None) -> list[str]:
+    """One attention row per active pipeline issue (the health check's own list)."""
+    rows: list[str] = []
+    for issue in (health or {}).get("issues") or []:
+        if not isinstance(issue, dict):
+            continue
+        title = str(issue.get("title") or issue.get("kind") or "Pipeline issue")
+        message = str(issue.get("message") or "")
+        severity = str(issue.get("severity") or "warning")
+        detail = f"{message} · {severity}" if message else severity
+        rows.append(
+            '<div class="attn-row">'
+            '<span class="attn-ico warn" aria-hidden="true">!</span>'
+            f'<span class="attn-text"><strong>{html.escape(title)}</strong>'
+            f'<span class="small">{html.escape(detail)}</span></span>'
+            '<a class="btn btn-quiet btn-sm" href="/status">Inspect</a>'
+            "</div>"
+        )
+    return rows
+
+
+def _health_panel(health: dict | None) -> str:
+    """The status page's Health panel: every active issue, or an explicit all clear."""
+    if health is None:
+        return ""
+    rows = _health_rows(health)
+    if not rows:
+        return _panel(
+            "Health",
+            '<div class="panel-body"><p class="muted">No active issues.</p></div>',
+            extra='<span class="pill"><span class="dot dot-ok"></span>all clear</span>',
+        )
+    return _panel(
+        "Health",
+        '<div class="attn">' + "".join(rows) + "</div>",
+        extra=f'<span class="pill"><span class="dot dot-warn"></span>{len(rows)} issue(s)</span>',
+    )
+
+
+def _attention(stats: dict, token: dict | None, health: dict | None = None) -> str:
     """What needs a person right now. Says so explicitly when nothing does.
 
     Approved drafts are deliberately absent: they need no decision, and their
-    order and next send belong to the Post queue tab.
+    order and next send belong to the Post queue tab. When the health check ran,
+    its issues are the rows — the same list `/status` and the alerts read.
     """
     drafts = stats.get("drafts", {})
     open_drafts = int(drafts.get("open", 0) or 0)
@@ -382,7 +422,9 @@ def _attention(stats: dict, token: dict | None) -> str:
             '<a class="btn btn-primary btn-sm" href="/review">Open queue</a>'
             "</div>"
         )
-    if token is not None and token.get("valid") is False:
+    if health is not None:
+        rows.extend(_health_rows(health))
+    elif token is not None and token.get("valid") is False:
         rows.append(
             '<div class="attn-row">'
             '<span class="attn-ico warn" aria-hidden="true">!</span>'
@@ -733,6 +775,7 @@ def render_dashboard_html(
     scan: dict,
     post: dict | None = None,
     token: dict | None = None,
+    health: dict | None = None,
     feed_section: str = "",
     feed_label: str = "",
     feed_count: int = 0,
@@ -848,7 +891,7 @@ def render_dashboard_html(
         + "</div>",
     )
 
-    left = '<div class="stack">' + _attention(stats, token) + feed_panel + "</div>"
+    left = '<div class="stack">' + _attention(stats, token, health) + feed_panel + "</div>"
     right = '<div class="stack">' + schedule_panel + ledger_panel + "</div>"
     return layout(
         "Social Content Factory — factory",
@@ -949,6 +992,7 @@ def render_status_html(
     post: dict | None = None,
     token: dict | None = None,
     linkedin: dict | None = None,
+    health: dict | None = None,
     private: bool = False,
     generated_at: dt.datetime | None = None,
 ) -> str:
@@ -1014,6 +1058,7 @@ def render_status_html(
         + cards
         + '<div class="cols">'
         + '<div class="stack">'
+        + _health_panel(health)
         + _token_section(token)
         + _linkedin_section(linkedin)
         + _panel("Schedules", f'<div class="sched">{schedules}</div>')

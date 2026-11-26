@@ -332,6 +332,23 @@ Captions are written **by the operator in Claude**. The operator pastes the capt
   otherwise. Docker: loopback **127.0.0.1:8083** (bind it wider only behind
   auth); sibling bots use 8080/8081/8082.
 
+- **A scheduler run that returns is not a success, and "last run ok" is a
+  health claim.** `_post_job` used to set `post_ok` from the drain merely not
+  raising, while per-draft failures rode `result["errors"]` to stderr only — so
+  a run with `posted=0` and every LinkedIn send refused showed "last run ok" in
+  the Scheduler row and `/api/status`, and a dead `linkin-bot` went unnoticed for
+  six days (Nov 2026). `post_ok` is now `not errors`, and the same issue list
+  feeds `health_view` in `web.py`: `/health` answers **503** with `issues`,
+  `/metrics` exports `social_bot_health_ok` and `social_bot_issue{kind=...}`,
+  and the dashboard **Needs attention** / `/status` **Health** panels render it.
+  The issue kinds are a monitoring contract (Grafana alerts on them):
+  `token_invalid`, `token_check_stale`, `refresh_failed`, `refresh_stale`,
+  `scan_failed`, `scan_stale`, `post_failed`, `linkedin_gateway_down`,
+  `linkedin_session_dead`, `posting_silent`. `/live` and `/ready` stay
+  process-level probes — do not fold pipeline health into `/ready`, or a dead
+  destination would take the operator UI out of rotation. The last post outcome
+  is persisted in `data/state.json` so a deploy cannot clear a failure.
+
 ## Guardrails (do not silently weaken)
 
 - **Official API only.** Do not add browser/login automation or HTML scraping

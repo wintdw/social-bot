@@ -130,14 +130,18 @@ def validate_destinations(cfg: dict) -> None:
         cls.validate_config(block)
 
 
-def linkedin_status(cfg: dict) -> dict:
+def linkedin_status(cfg: dict, timeout: float | None = None) -> dict:
     """The linkin-bot gateway status for the operator UI (never raises).
 
     The one seam for the LinkedIn side-channel: the core calls this, never the
     ``linkedin`` package directly, so no platform import leaks outside
     ``destinations/``. Unconfigured or unreachable gateway is an ``ok: False``
     view, never an exception.
+
+    ``timeout`` overrides ``destinations.linkedin.timeout_seconds``. The
+    health/metrics paths pass a short one: those are scraped often, so they must
+    never wait the full post timeout for a hung gateway.
     """
     from .linkedin.status import get_status
 
-    return get_status(cfg)
+    return get_status(cfg, timeout=timeout)

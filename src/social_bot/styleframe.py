@@ -194,6 +194,25 @@ _LINKEDIN = {
     "next_run": {"connect": "2026-09-10 09:30", "follow": "2026-09-10 10:00"},
 }
 
+_HEALTH = {
+    "status": "degraded",
+    "issues": [
+        {
+            "kind": "linkedin_gateway_down",
+            "title": "LinkedIn gateway unreachable",
+            "message": "linkedin: cannot reach the gateway: connection refused",
+            "severity": "critical",
+        },
+        {
+            "kind": "posting_silent",
+            "title": "Nothing published recently",
+            "message": "no public post for 2.1 d while 2 approved draft(s) wait",
+            "severity": "warning",
+        },
+    ],
+    "checked_at": "2026-09-10 12:00:00",
+}
+
 _RECORDS = [
     {
         "id": "a-guide-to-application-networking-basics",
@@ -395,6 +414,7 @@ def render_pages() -> list[tuple[str, str]]:
                 scan=_SCAN,
                 post=_POST,
                 token=_TOKEN,
+                health=_HEALTH,
                 feed_section=render_feed_section(_ITEMS),
                 feed_label="Facebook feed",
                 feed_count=len(_ITEMS),
@@ -458,6 +478,7 @@ def render_pages() -> list[tuple[str, str]]:
                 post=_POST,
                 token=_TOKEN,
                 linkedin=_LINKEDIN,
+                health=_HEALTH,
                 generated_at=_AT,
             ),
         ),

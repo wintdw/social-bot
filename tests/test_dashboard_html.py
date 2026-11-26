@@ -75,6 +75,26 @@ POST = {
 }
 
 
+HEALTH = {
+    "status": "degraded",
+    "issues": [
+        {
+            "kind": "linkedin_gateway_down",
+            "title": "LinkedIn gateway unreachable",
+            "message": "cannot reach the gateway: connection refused",
+            "severity": "critical",
+        },
+        {
+            "kind": "posting_silent",
+            "title": "Nothing published recently",
+            "message": "no public post for 2.0 d while 2 approved draft(s) wait",
+            "severity": "warning",
+        },
+    ],
+    "checked_at": "2026-09-10 12:00:00",
+}
+
+
 def _dash(feed_items=None, *, account_label="Atento Education", **kw):
     """render_dashboard_html with a Facebook feed panel, as the app wires it."""
     section = ""
@@ -169,6 +189,18 @@ class TestDashboard:
         out = _dash(account_label="Atento Education")
         assert "Atento Education" in out
 
+    def test_health_issues_are_attention_rows(self):
+        out = _dash(health=HEALTH)
+        assert "LinkedIn gateway unreachable" in out
+        assert "cannot reach the gateway" in out
+        assert "Nothing published recently" in out
+
+    def test_a_clean_health_report_has_no_token_row(self):
+        token = {"valid": False, "error": "OAuthException"}
+        out = _dash(health={"status": "ok", "issues": []}, token=token)
+        assert "Token invalid" not in out
+        assert "draft(s) waiting for review" in out
+
 
 class TestNoImageJobsSection:
     """No background image jobs exist anymore: images are local files."""
@@ -180,6 +212,25 @@ class TestNoImageJobsSection:
     def test_status_has_no_image_jobs_panel(self):
         out = render_status_html(STATS, refresh=REFRESH, scan=SCAN, generated_at=GENERATED)
         assert "Image jobs" not in out
+
+    def test_status_shows_the_health_panel(self):
+        out = render_status_html(
+            STATS, refresh=REFRESH, scan=SCAN, health=HEALTH, generated_at=GENERATED
+        )
+        assert "Health" in out
+        assert "LinkedIn gateway unreachable" in out
+        assert "2 issue(s)" in out
+
+    def test_status_health_all_clear(self):
+        out = render_status_html(
+            STATS,
+            refresh=REFRESH,
+            scan=SCAN,
+            health={"status": "ok", "issues": []},
+            generated_at=GENERATED,
+        )
+        assert "No active issues." in out
+        assert "all clear" in out
 
 
 class TestPostQueue:

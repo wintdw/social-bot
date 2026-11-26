@@ -78,7 +78,9 @@ DRAIN_TIMEOUT_SECONDS = media.UPLOAD_TIMEOUT_SECONDS + 30.0
 
 # The loops /ready treats as the heartbeat of the service. The token/page loops
 # are one-shot startup lookups and are deliberately excluded — a finished task
-# there is normal, not a dead scheduler.
+# there is normal, not a dead scheduler. The posting loop is optional (timed
+# posting may be off) and is added only when it exists; a dead poster means
+# nothing goes out while the app still looks fine.
 SCHEDULER_LOOPS = ("refresh", "scan")
 
 
@@ -329,6 +331,14 @@ def runtime_state_snapshot(state: dict) -> dict:
         "post": {
             "paused": bool(state.get("post_paused")),
             "slot": {str(k): v for k, v in (state.get("post_slot") or {}).items()},
+            # The last drain's outcome survives a restart: a deploy must not
+            # clear a posting failure before the next run would have reported it.
+            "last_started": _iso(state.get("post_started")),
+            "last_finished": _iso(state.get("post_finished")),
+            "ok": state.get("post_ok"),
+            "error": state.get("post_error"),
+            "errors": state.get("post_errors"),
+            "last_posted": state.get("last_posted"),
         },
     }
 
@@ -358,6 +368,12 @@ def apply_runtime_state(state: dict, data: dict) -> None:
         for name, marker in slots.items():
             value[str(name)] = None if marker is None else str(marker)
         state["post_slot"] = value
+    state["post_started"] = _parse_iso(post.get("last_started"))
+    state["post_finished"] = _parse_iso(post.get("last_finished"))
+    state["post_ok"] = post.get("ok")
+    state["post_error"] = post.get("error")
+    state["post_errors"] = post.get("errors")
+    state["last_posted"] = post.get("last_posted")
 
 
 def _read_state_file(path: pathlib.Path) -> dict:
@@ -418,6 +434,226 @@ def readiness_view(checks: dict[str, bool]) -> tuple[dict, int]:
     return payload, (200 if not failed else 503)
 
 
+# --- pipeline health ---------------------------------------------------------
+
+# Stable issue kinds. Grafana alerts on `social_bot_issue{kind="..."}`, so these
+# strings are a monitoring contract: rename one and the alert silently stops.
+TOKEN_INVALID = "token_invalid"
+TOKEN_CHECK_STALE = "token_check_stale"
+REFRESH_FAILED = "refresh_failed"
+REFRESH_STALE = "refresh_stale"
+SCAN_FAILED = "scan_failed"
+SCAN_STALE = "scan_stale"
+POST_FAILED = "post_failed"
+LINKEDIN_GATEWAY_DOWN = "linkedin_gateway_down"
+LINKEDIN_SESSION_DEAD = "linkedin_session_dead"
+POSTING_SILENT = "posting_silent"
+
+# Every issue kind `health_view` can emit, in one place: /metrics exports a 0 or
+# 1 sample for each, so an absent series can never be mistaken for "no issue"
+# (and a Grafana rule never sits in NoData while the pipeline is clean).
+HEALTH_ISSUE_KINDS = (
+    TOKEN_INVALID,
+    TOKEN_CHECK_STALE,
+    REFRESH_FAILED,
+    REFRESH_STALE,
+    SCAN_FAILED,
+    SCAN_STALE,
+    POST_FAILED,
+    LINKEDIN_GATEWAY_DOWN,
+    LINKEDIN_SESSION_DEAD,
+    POSTING_SILENT,
+)
+
+# A readout older than this means its loop stopped working, not that it is fine.
+TOKEN_STALE_AFTER = dt.timedelta(hours=36)
+RUN_STALE_AFTER = dt.timedelta(hours=36)
+
+
+def summarize_post_errors(errors) -> str:
+    """A one-line summary of a post run's per-draft failures (pure)."""
+    entries = [err for err in (errors or []) if isinstance(err, dict)]
+    parts = [
+        f"{err.get('id') or '?'}: {err.get('error') or 'unknown error'}" for err in entries[:3]
+    ]
+    text = "; ".join(parts)
+    remaining = len(entries) - len(parts)
+    if remaining > 0:
+        text += f" (+{remaining} more)"
+    return text or "unknown error"
+
+
+def _local_naive(value) -> dt.datetime | None:
+    """A runtime or audit timestamp as a naive local datetime (pure).
+
+    Runtime stamps are naive local; audit records carry an offset. Normalizing
+    both to local wall time keeps every age comparison consistent.
+    """
+    parsed = value if isinstance(value, dt.datetime) else _parse_iso(value)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def _age_text(now: dt.datetime, when: dt.datetime) -> str:
+    hours = max(0.0, (now - when).total_seconds() / 3600)
+    if hours < 1:
+        return f"{int(hours * 60)} min"
+    if hours < 48:
+        return f"{hours:.1f} h"
+    return f"{hours / 24:.1f} d"
+
+
+def _health_issue(kind: str, title: str, message: str, *, severity: str) -> dict:
+    return {"kind": kind, "title": title, "message": message, "severity": severity}
+
+
+def health_view(snapshot: dict, *, now: dt.datetime | None = None) -> tuple[dict, int]:
+    """The pipeline's health from an /api/status-shaped snapshot (pure).
+
+    One place decides what "an issue" means, so the dashboard, `/health`,
+    `/metrics` and the Grafana alerts all agree. Any issue makes the payload
+    `degraded` and `/health` answer 503; every issue also becomes a
+    `social_bot_issue{kind=...}` sample for alerting.
+
+    Checks: the destination token (rejected, or its readout went stale), the
+    feed refresh and source scan (last run failed, or no success in 36h), the
+    posting run (the last drain recorded a per-draft error — a run where every
+    send failed must never read as "last run ok"), the LinkedIn gateway
+    (unreachable, or its session not connected), and posting silence (approved
+    drafts waiting but no *public* post for longer than the interval allows).
+    """
+    now = now or dt.datetime.now()
+    issues: list[dict] = []
+
+    token = snapshot.get("token") or {}
+    if token.get("valid") is False:
+        issues.append(
+            _health_issue(
+                TOKEN_INVALID,
+                "Facebook token invalid",
+                f"Graph rejected the token: {token.get('error') or 'see /status'}",
+                severity="critical",
+            )
+        )
+    checked = _local_naive(token.get("checked_at"))
+    if checked is not None and now - checked > TOKEN_STALE_AFTER:
+        issues.append(
+            _health_issue(
+                TOKEN_CHECK_STALE,
+                "Token check is stale",
+                f"the token has not been introspected for {_age_text(now, checked)}",
+                severity="warning",
+            )
+        )
+
+    refresh = snapshot.get("refresh") or {}
+    if refresh.get("ok") is False:
+        issues.append(
+            _health_issue(
+                REFRESH_FAILED,
+                "Feed refresh failed",
+                f"{refresh.get('error') or 'unknown error'}",
+                severity="warning",
+            )
+        )
+    finished = _local_naive(refresh.get("last_finished"))
+    if finished is not None and now - finished > RUN_STALE_AFTER:
+        issues.append(
+            _health_issue(
+                REFRESH_STALE,
+                "Feed refresh is stale",
+                f"no successful refresh for {_age_text(now, finished)}",
+                severity="warning",
+            )
+        )
+
+    scan = snapshot.get("scan") or {}
+    if scan.get("ok") is False:
+        issues.append(
+            _health_issue(
+                SCAN_FAILED,
+                "Source scan failed",
+                f"{scan.get('error') or 'unknown error'}",
+                severity="warning",
+            )
+        )
+    scan_finished = _local_naive(scan.get("last_finished"))
+    if scan_finished is not None and now - scan_finished > RUN_STALE_AFTER:
+        issues.append(
+            _health_issue(
+                SCAN_STALE,
+                "Source scan is stale",
+                f"no scan finished for {_age_text(now, scan_finished)}",
+                severity="warning",
+            )
+        )
+
+    post = snapshot.get("post") or {}
+    if post.get("ok") is False:
+        issues.append(
+            _health_issue(
+                POST_FAILED,
+                "Posting failed",
+                f"{post.get('error') or 'one or more drafts failed to send'}",
+                severity="critical",
+            )
+        )
+
+    linkedin = snapshot.get("linkedin") or {}
+    if linkedin.get("configured"):
+        if not linkedin.get("ok"):
+            issues.append(
+                _health_issue(
+                    LINKEDIN_GATEWAY_DOWN,
+                    "LinkedIn gateway unreachable",
+                    f"{linkedin.get('error') or 'the gateway did not answer'}",
+                    severity="critical",
+                )
+            )
+        elif linkedin.get("connected") is False:
+            issues.append(
+                _health_issue(
+                    LINKEDIN_SESSION_DEAD,
+                    "LinkedIn session is not connected",
+                    f"{linkedin.get('session_check') or 'sign in again on linkin-bot'}",
+                    severity="critical",
+                )
+            )
+
+    publish = snapshot.get("publish") or {}
+    published = snapshot.get("published") or {}
+    last_public = _local_naive(published.get("last_public_post_at"))
+    if (
+        publish.get("enabled", True)
+        and publish.get("approved")
+        and post.get("schedule")
+        and not post.get("paused")
+        and last_public is not None
+    ):
+        interval = int(publish.get("interval_days") or 0)
+        grace = dt.timedelta(hours=24 * max(interval, 1) + 24)
+        if now - last_public > grace:
+            issues.append(
+                _health_issue(
+                    POSTING_SILENT,
+                    "Nothing published recently",
+                    f"no public post for {_age_text(now, last_public)} "
+                    f"while {publish.get('approved')} approved draft(s) wait",
+                    severity="warning",
+                )
+            )
+
+    payload = {
+        "status": "degraded" if issues else "ok",
+        "issues": issues,
+        "checked_at": _iso(now),
+    }
+    return payload, (503 if issues else 200)
+
+
 def _gauge_bool(value) -> float | None:
     """A tri-state validity flag as a gauge: None stays "unknown" (no sample)."""
     return None if value is None else (1.0 if value else 0.0)
@@ -429,19 +665,31 @@ def _gauge_text(value) -> str:
     return text or "0"
 
 
-def metrics_view(state: dict) -> str:
-    """Prometheus text exposition of the token readout (pure).
+def _prom_label(value: str) -> str:
+    """Escape a Prometheus label value."""
+    return str(value).replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
 
-    Only what an alert needs: whether the token is valid, how many days it has
-    left, and when it was last introspected — so a readout that stopped
-    refreshing is visible instead of silently reporting an old "valid" forever.
-    A value that is unknown is omitted rather than guessed, which Prometheus
-    reads as NoData (and NoData never means "fine" for these rules).
+
+def metrics_view(
+    state: dict,
+    *,
+    health: dict | None = None,
+    linkedin: dict | None = None,
+    published: dict | None = None,
+) -> str:
+    """Prometheus text exposition of the token and pipeline health (pure).
+
+    The token families were the first alert surface; the health families make
+    every *other* failure visible too: a degraded pipeline, each active issue
+    by kind, each scheduler run's outcome, per-destination reachability, and the
+    age of the newest public post. A value that is unknown is omitted rather
+    than guessed, which Prometheus reads as NoData (and NoData never means
+    "fine" for these rules).
     """
     destination = str(state.get("token_destination") or "facebook")
     status = state.get("token_status") or {}
     checked = state.get("token_checked")
-    label = f'{{destination="{destination}"}}'
+    label = f'{{destination="{_prom_label(destination)}"}}'
     families = [
         (
             "social_bot_token_valid",
@@ -467,6 +715,86 @@ def metrics_view(state: dict) -> str:
         lines += [f"# HELP {name} {help_text}", f"# TYPE {name} {kind}"]
         if value is not None:
             lines.append(f"{name}{label} {_gauge_text(value)}")
+
+    if health is not None:
+        active = {
+            str(issue.get("kind")) for issue in health.get("issues") or [] if issue.get("kind")
+        }
+        lines += [
+            "# HELP social_bot_health_ok 1 when no pipeline issue is active, 0 when degraded.",
+            "# TYPE social_bot_health_ok gauge",
+            f"social_bot_health_ok {1.0 if health.get('status') == 'ok' else 0.0}",
+            "# HELP social_bot_issue 1 for each active pipeline issue, 0 when clear, "
+            "labelled by kind.",
+            "# TYPE social_bot_issue gauge",
+        ]
+        for issue_kind in HEALTH_ISSUE_KINDS:
+            lines.append(
+                f'social_bot_issue{{kind="{_prom_label(issue_kind)}"}} '
+                f"{1.0 if issue_kind in active else 0.0}"
+            )
+        for issue_kind in sorted(active - set(HEALTH_ISSUE_KINDS)):
+            lines.append(f'social_bot_issue{{kind="{_prom_label(issue_kind)}"}} 1.0')
+
+    runs = (
+        ("refresh", state.get("last_ok"), state.get("last_finished")),
+        ("scan", state.get("scan_ok"), state.get("scan_finished")),
+        ("post", state.get("post_ok"), state.get("post_finished")),
+    )
+    lines += [
+        "# HELP social_bot_run_ok 1 when the job's last run succeeded, 0 when it failed.",
+        "# TYPE social_bot_run_ok gauge",
+    ]
+    for job, ok, _ in runs:
+        value = _gauge_bool(ok)
+        if value is not None:
+            lines.append(f'social_bot_run_ok{{job="{job}"}} {_gauge_text(value)}')
+    lines += [
+        "# HELP social_bot_run_finished_timestamp_seconds Unix time the job last finished.",
+        "# TYPE social_bot_run_finished_timestamp_seconds gauge",
+    ]
+    for job, _, finished in runs:
+        when = finished if isinstance(finished, dt.datetime) else _parse_iso(finished)
+        if when is not None:
+            lines.append(
+                f'social_bot_run_finished_timestamp_seconds{{job="{job}"}} '
+                f"{_gauge_text(when.timestamp())}"
+            )
+
+    if state.get("post_errors") is not None:
+        lines += [
+            "# HELP social_bot_post_errors Drafts that failed in the last posting run.",
+            "# TYPE social_bot_post_errors gauge",
+            f"social_bot_post_errors {_gauge_text(int(state.get('post_errors') or 0))}",
+        ]
+
+    if published is not None:
+        lines += [
+            "# HELP social_bot_last_public_post_timestamp_seconds "
+            "Unix time of the newest public post; absent when none exists.",
+            "# TYPE social_bot_last_public_post_timestamp_seconds gauge",
+        ]
+        last_public = _local_naive(published.get("last_public_post_at"))
+        if last_public is not None:
+            lines.append(
+                f"social_bot_last_public_post_timestamp_seconds {_gauge_text(last_public.timestamp())}"
+            )
+
+    lines += [
+        "# HELP social_bot_destination_ok 1 when a destination can publish, 0 when it cannot.",
+        "# TYPE social_bot_destination_ok gauge",
+    ]
+    valid = status.get("valid")
+    if valid is not None:
+        lines.append(
+            f'social_bot_destination_ok{{destination="{_prom_label(destination)}"}} '
+            f"{_gauge_text(1.0 if valid else 0.0)}"
+        )
+    if linkedin is not None and linkedin.get("configured"):
+        ok = bool(linkedin.get("ok")) and linkedin.get("connected") is not False
+        lines.append(
+            f'social_bot_destination_ok{{destination="linkedin"}} {_gauge_text(1.0 if ok else 0.0)}'
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -561,6 +889,7 @@ def create_app(
         "post_finished": None,
         "post_ok": None,
         "post_error": None,
+        "post_errors": None,
         "post_slot": {},
         "last_posted": None,
         # Timed posting can be paused at runtime (and the pause persisted to
@@ -770,8 +1099,14 @@ def create_app(
                 result = await _run_publish(
                     pipeline.publish_scheduled, cfg, destination=destination
                 )
-                state["post_ok"] = True
-                state["post_error"] = None
+                errors = result.get("errors") or []
+                # A drain that returns without raising is not automatically a
+                # success: per-draft failures travel in `errors`, and a run where
+                # every send failed must never read as "last run ok" (that bug is
+                # why a dead LinkedIn gateway went unnoticed for days).
+                state["post_ok"] = not errors
+                state["post_error"] = summarize_post_errors(errors) if errors else None
+                state["post_errors"] = len(errors)
                 posted = len(result["posted"])
                 state["last_posted"] = posted
                 print(
@@ -979,6 +1314,7 @@ def create_app(
             "busy": state["post_busy"],
             "ok": state["post_ok"],
             "error": state["post_error"],
+            "errors": state["post_errors"],
             "last_posted": state["last_posted"],
             "last_finished": _iso(state["post_finished"]),
             "schedule": post_times,
@@ -989,6 +1325,22 @@ def create_app(
             "paused": state["post_paused"],
             "next": next_run_at(post_times).strftime("%Y-%m-%d %H:%M") if post_times else "",
             "next_post": next_post.strftime("%Y-%m-%d %H:%M") if next_post else "",
+        }
+
+    def _linkedin_runtime() -> dict:
+        """The gateway readout, with a short timeout: pages and scrapes hit it often."""
+        return linkedin_status(cfg, timeout=5.0)
+
+    def _health_snapshot(stats: dict, linkedin: dict | None) -> dict:
+        """The /api/status-shaped view `health_view` reads (one definition)."""
+        return {
+            "token": _token_runtime(),
+            "refresh": _refresh_runtime(),
+            "scan": _scan_runtime(),
+            "post": _post_runtime(),
+            "linkedin": linkedin or {},
+            "publish": stats.get("publish") or {},
+            "published": stats.get("published") or {},
         }
 
     def _next_post_label() -> str:
@@ -1065,7 +1417,11 @@ def create_app(
     @app.get("/", response_class=HTMLResponse)
     async def index(message: str = ""):
         """The operator dashboard: controls + counts + feed."""
-        stats = await asyncio.to_thread(pipeline.status, cfg)
+        stats, linkedin = await asyncio.gather(
+            asyncio.to_thread(pipeline.status, cfg),
+            asyncio.to_thread(_linkedin_runtime),
+        )
+        health, _ = health_view(_health_snapshot(stats, linkedin))
         feed_section = ""
         feed_label = ""
         feed_count = 0
@@ -1086,6 +1442,7 @@ def create_app(
                 scan=_scan_runtime(),
                 post=_post_runtime(),
                 token=_token_runtime(),
+                health=health,
                 message=message,
                 private=private,
             )
@@ -1123,6 +1480,11 @@ def create_app(
         """
         loops = state.get("loops") or {}
         schedulers = [loops.get(name) for name in SCHEDULER_LOOPS]
+        # The poster is optional (publish.post_at may be empty), but when it is
+        # configured a dead loop must fail readiness — otherwise nothing posts
+        # while every other signal stays green.
+        if "posting" in loops:
+            schedulers.append(loops["posting"])
         checks = {
             "not_shutting_down": not state["shutting_down"],
             "schedulers_alive": all(task is not None and not task.done() for task in schedulers),
@@ -1133,12 +1495,22 @@ def create_app(
 
     @app.get("/health")
     async def health():
-        open_drafts = await asyncio.to_thread(
-            lambda: len(pipeline.list_drafts(cfg, pipeline.REVIEW_STATES))
+        """The pipeline's real health: 200 when clean, 503 with the issue list.
+
+        This is the check an operator or monitor should trust: it looks at the
+        last run of every scheduler, the token readout, the LinkedIn gateway,
+        and whether anything has actually published, not merely whether the
+        process answers. `/live` and `/ready` stay process-level probes.
+        """
+        stats, linkedin = await asyncio.gather(
+            asyncio.to_thread(pipeline.status, cfg),
+            asyncio.to_thread(_linkedin_runtime),
         )
+        report, status_code = health_view(_health_snapshot(stats, linkedin))
+        open_drafts = int(stats.get("drafts", {}).get("open", 0) or 0)
         return JSONResponse(
             {
-                "status": "ok",
+                **report,
                 "busy": state["busy"],
                 "last_started": _iso(state["last_started"]),
                 "last_finished": _iso(state["last_finished"]),
@@ -1155,6 +1527,7 @@ def create_app(
                 "post_busy": state["post_busy"],
                 "post_ok": state["post_ok"],
                 "post_error": state["post_error"],
+                "post_errors": state["post_errors"],
                 "last_posted": state["last_posted"],
                 "post_paused": state["post_paused"],
                 "publish_schedule": post_times,
@@ -1164,18 +1537,31 @@ def create_app(
                 "open_drafts": open_drafts,
                 "shutting_down": state["shutting_down"],
                 "inflight_publishes": state["inflight_publishes"],
-            }
+            },
+            status_code=status_code,
         )
 
     @app.get("/metrics")
     async def metrics():
-        """Prometheus text exposition of the token readout.
+        """Prometheus text exposition of the token and pipeline health.
 
         Scraped over the internal network (no proxy hop), so it holds no secret:
-        only the token's validity, its remaining days, and the check's timestamp.
+        the token's validity/days, each scheduler's last outcome, the active
+        issue kinds, per-destination reachability, and the age of the newest
+        public post.
         """
+        stats, linkedin = await asyncio.gather(
+            asyncio.to_thread(pipeline.status, cfg),
+            asyncio.to_thread(_linkedin_runtime),
+        )
+        health, _ = health_view(_health_snapshot(stats, linkedin))
         return Response(
-            content=metrics_view(state),
+            content=metrics_view(
+                state,
+                health=health,
+                linkedin=linkedin,
+                published=stats.get("published") or {},
+            ),
             media_type="text/plain; version=0.0.4; charset=utf-8",
         )
 
@@ -1184,8 +1570,9 @@ def create_app(
         """A full pipeline snapshot: sources, drafts by state, posted, schedules."""
         stats, linkedin = await asyncio.gather(
             asyncio.to_thread(pipeline.status, cfg),
-            asyncio.to_thread(linkedin_status, cfg),
+            asyncio.to_thread(_linkedin_runtime),
         )
+        health, _ = health_view(_health_snapshot(stats, linkedin))
         return JSONResponse(
             {
                 "generated_at": dt.datetime.now().astimezone().strftime("%Y-%m-%d %H:%M:%S"),
@@ -1195,6 +1582,7 @@ def create_app(
                 "post": _post_runtime(),
                 "token": _token_runtime(),
                 "linkedin": linkedin,
+                "health": health,
                 "lifecycle": {
                     "shutting_down": state["shutting_down"],
                     "inflight_publishes": state["inflight_publishes"],
@@ -1707,8 +2095,9 @@ def create_app(
     async def status_page():
         stats, linkedin = await asyncio.gather(
             asyncio.to_thread(pipeline.status, cfg),
-            asyncio.to_thread(linkedin_status, cfg),
+            asyncio.to_thread(_linkedin_runtime),
         )
+        health, _ = health_view(_health_snapshot(stats, linkedin))
         return _page(
             render_status_html(
                 stats,
@@ -1717,6 +2106,7 @@ def create_app(
                 post=_post_runtime(),
                 token=_token_runtime(),
                 linkedin=linkedin,
+                health=health,
                 private=private,
             )
         )

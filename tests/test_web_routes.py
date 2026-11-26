@@ -36,7 +36,11 @@ def client(tmp_path, monkeypatch):
     )
     # /api/status and /status read the sibling LinkedIn gateway; stub it so the
     # suite never touches the network.
-    monkeypatch.setattr(web, "linkedin_status", lambda cfg: {"ok": False, "error": "stubbed"})
+    monkeypatch.setattr(
+        web,
+        "linkedin_status",
+        lambda cfg, timeout=None: {"ok": False, "error": "stubbed"},
+    )
     app = web.create_app(
         config_path=str(config_path),
         refresh_at=["07:00"],
@@ -75,6 +79,63 @@ def test_json_endpoints(client):
     ready = client.get("/ready")
     assert ready.status_code == 200
     assert ready.json()["status"] == "ready"
+
+
+def test_health_flags_a_broken_gateway(client, monkeypatch):
+    """The health check (and its metrics) must not shrug at a dead destination."""
+    monkeypatch.setattr(
+        web,
+        "linkedin_status",
+        lambda cfg, timeout=None: {
+            "configured": True,
+            "ok": False,
+            "error": "linkedin: cannot reach the gateway: refused",
+        },
+    )
+    health = client.get("/health")
+    assert health.status_code == 503
+    payload = health.json()
+    assert payload["status"] == "degraded"
+    assert any(issue["kind"] == "linkedin_gateway_down" for issue in payload["issues"])
+
+    metrics = client.get("/metrics")
+    assert "social_bot_health_ok 0" in metrics.text
+    assert 'social_bot_issue{kind="linkedin_gateway_down"} 1.0' in metrics.text
+
+    status = client.get("/api/status").json()
+    assert status["health"]["status"] == "degraded"
+
+    # Readiness is about serving, not the pipeline: it must stay green so the
+    # operator UI is still reachable while the alert fires separately.
+    assert client.get("/ready").status_code == 200
+
+
+def test_ready_counts_a_live_poster(tmp_path, monkeypatch):
+    """Timed posting is optional, but when on, its loop is part of readiness."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(
+        yaml.safe_dump(
+            {
+                "feed": {"dir": str(tmp_path / "feed")},
+                "review": {"dir": str(tmp_path / "review")},
+                "publish": {"dir": str(tmp_path / "publish")},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        web, "linkedin_status", lambda cfg, timeout=None: {"ok": False, "error": "stubbed"}
+    )
+    app = web.create_app(
+        config_path=str(config_path),
+        refresh_at=["07:00"],
+        scan_at=["06:00"],
+        post_at=["20:00"],
+    )
+    with TestClient(app) as test_client:
+        ready = test_client.get("/ready")
+        assert ready.status_code == 200
+        assert ready.json()["checks"]["schedulers_alive"] is True
 
 
 def test_pause_and_resume_round_trip(client):

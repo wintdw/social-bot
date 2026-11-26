@@ -370,10 +370,10 @@ The idea seeds (§2d) keep their own state under `ideas.dir`:
 | GET | `/status` | Human-readable snapshot: token validity/expiry, schedules, sources. |
 | GET | `/videos/{name}` | A locally stored post video (the clip attached to a draft), served with Range support so the review player can seek. |
 | GET | `/drafts` | Redirect (307) to `/review` for old links. |
-| GET | `/health` | Liveness + last run info (JSON). |
+| GET | `/health` | Pipeline health (JSON): 200 when clean, **503** with an `issues` list otherwise (token, scheduler runs, posting failures, LinkedIn gateway, public-post silence). |
 | GET | `/live` | Liveness probe: `{"status": "alive"}`, never touches state. |
-| GET | `/ready` | Readiness probe: 200 when serving, 503 while draining or if a scheduler died / state dir is unwritable. |
-| GET | `/metrics` | Prometheus text exposition of the token readout: `social_bot_token_valid`, `social_bot_token_expires_in_days`, `social_bot_token_checked_timestamp_seconds`, labelled `destination="facebook"`. Unknown values are omitted, so a stopped check reads as NoData. |
+| GET | `/ready` | Readiness probe: 200 when serving, 503 while draining or if a scheduler died (refresh/scan, plus the poster when timed posting is on) / state dir is unwritable. Does not check the pipeline — `/health` does. |
+| GET | `/metrics` | Prometheus text exposition: token readout (`social_bot_token_*`), pipeline health (`social_bot_health_ok`, `social_bot_issue{kind=...}`), per-job outcomes (`social_bot_run_ok{job=...}`), `social_bot_post_errors`, `social_bot_destination_ok{destination=...}`, and `social_bot_last_public_post_timestamp_seconds`. Unknown values are omitted, so a stopped check reads as NoData. |
 | GET | `/api/status` | Full pipeline snapshot (JSON); `publish.next_draft` is the first approved draft in posting order the poster will send next. |
 | POST | `/refresh` | Refresh the feed now. |
 | POST | `/scan` | Scan sources now (JSON, or a 303 back to `/review` for browsers). |

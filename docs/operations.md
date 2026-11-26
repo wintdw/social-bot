@@ -94,7 +94,7 @@ operator uses most:
 
 ```sh
 curl -s  https://<host>/api/status          # full pipeline snapshot
-curl -s  https://<host>/health              # liveness + last run info
+curl -s  https://<host>/health              # pipeline health: 200 clean, 503 with the issue list
 curl -s  https://<host>/live                # liveness probe (never touches state)
 curl -s -o /dev/null -w '%{http_code}\n' https://<host>/ready   # readiness probe
 curl -X POST https://<host>/scan            # scan sources now
@@ -105,20 +105,47 @@ curl -X POST https://<host>/publish/resume  # resume it
 
 `/live` answers as long as the process is up; `/ready` returns **503** when the
 instance should take no traffic — while it is draining on shutdown, if a
-scheduler task has died, or if a state directory is not writable. Point a
+scheduler task (refresh, scan, or the posting loop when timed posting is on) has
+died, or if a state directory is not writable. Point a
 load-balancer/healthcheck at `/live` for restarts and `/ready` for routing.
+Neither probe looks at the pipeline: a healthy process with a dead destination
+is still "ready" to serve the operator UI.
+
+**`/health` is the pipeline check.** It answers **200** only when nothing needs
+attention, and **503** with an `issues` list otherwise. The same list feeds the
+dashboard's **Needs attention** panel, the `/status` **Health** panel and
+`/api/status.health`. Its issue kinds are stable (a monitoring contract):
+`token_invalid`, `token_check_stale`, `refresh_failed`, `refresh_stale`,
+`scan_failed`, `scan_stale`, `post_failed` (the last drain recorded a per-draft
+error — it had been reported as "last run ok" before Nov 2026), 
+`linkedin_gateway_down`, `linkedin_session_dead`, and `posting_silent` (approved
+drafts wait while no public post has landed for longer than `interval_days`
+allows).
 
 On the deployed vhost (`https://social.atento.vn`), `/live` and `/ready` are the
 only paths that skip nginx's HTTP basic auth, so an external probe can reach
 them without the password; `/health`, `/api/status` and the operator pages stay
 authenticated. Prometheus probes `https://social.atento.vn/ready` as part of its
-`blackbox_http` job.
+`blackbox_http` job — that is a process/TLS probe, not the pipeline check.
 
 `/metrics` is scraped over the internal network (`midnight.local.atento.vn:8083`)
-rather than through the proxy, and it powers three Grafana alerts: token
-invalid, token expiring within 14 days, and token check stale (the readout
-refreshes after every scheduled feed refresh, so older than 36h means the
-refresh loop itself has stopped working).
+rather than through the proxy. It carries the token readout
+(`social_bot_token_valid`, `social_bot_token_expires_in_days`,
+`social_bot_token_checked_timestamp_seconds`) plus the pipeline health families:
+
+| Metric | Meaning |
+|---|---|
+| `social_bot_health_ok` | 1 when no issue is active, 0 when degraded. |
+| `social_bot_issue{kind=...}` | 1 when that issue is active, 0 when it is clear (every kind is always present). |
+| `social_bot_run_ok{job="refresh\|scan\|post"}` | 1/0 for that scheduler's last run. |
+| `social_bot_run_finished_timestamp_seconds{job=...}` | When it last finished. |
+| `social_bot_post_errors` | Drafts that failed in the last posting run. |
+| `social_bot_destination_ok{destination=...}` | 1 when that destination can publish. |
+| `social_bot_last_public_post_timestamp_seconds` | Age of the newest public post. |
+
+Grafana alerts on these (see the monitoring stack): token invalid/expiring/stale,
+plus **any active `social_bot_issue`** and a degraded `social_bot_health_ok`.
+Unknown values are omitted, so a stopped readout reads as NoData, never "fine".
 
 ## Lifecycle
 

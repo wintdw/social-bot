@@ -1297,6 +1297,18 @@ def status(cfg: dict | None = None) -> dict:
             "total": len(published),
             "private": sum(1 for record in published if record.get("private")),
             "recent": recent,
+            # The newest audit record (any kind), and the newest *public* one —
+            # the health check watches the public timestamp so a private test
+            # send can never make a silent page look healthy.
+            "last_post_at": published[-1].get("posted_at") if published else None,
+            "last_public_post_at": next(
+                (
+                    record.get("posted_at")
+                    for record in reversed(published)
+                    if not record.get("private") and record.get("posted_at")
+                ),
+                None,
+            ),
         },
         "publish": {
             "enabled": bool(cfg.get("publish", {}).get("enabled", True)),

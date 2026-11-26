@@ -17,6 +17,7 @@ from social_bot.web import (
     current_slot,
     due_destinations,
     due_slot,
+    health_view,
     infer_last_runs,
     live_view,
     message_url,
@@ -28,6 +29,7 @@ from social_bot.web import (
     safe_local_path,
     seconds_until,
     seconds_until_any,
+    summarize_post_errors,
 )
 
 
@@ -327,6 +329,152 @@ class TestMetricsView:
         assert "social_bot_token_expires_in_days{" not in text
         assert 'social_bot_token_valid{destination="facebook"} 1' in text
 
+    def test_pipeline_health_families(self):
+        health = {
+            "status": "degraded",
+            "issues": [
+                {"kind": "post_failed", "severity": "critical"},
+                {"kind": "linkedin_gateway_down", "severity": "critical"},
+            ],
+        }
+        text = metrics_view(
+            {
+                "token_status": {"valid": True},
+                "last_ok": True,
+                "scan_ok": None,
+                "post_ok": False,
+                "post_errors": 2,
+                "post_finished": dt.datetime(2026, 11, 26, 14, 8, 2),
+            },
+            health=health,
+            linkedin={"configured": True, "ok": False},
+            published={"last_public_post_at": "2026-11-24T20:26:11+07:00"},
+        )
+        assert "social_bot_health_ok 0" in text
+        assert 'social_bot_issue{kind="post_failed"} 1.0' in text
+        assert 'social_bot_issue{kind="linkedin_gateway_down"} 1.0' in text
+        assert 'social_bot_issue{kind="scan_failed"} 0.0' in text
+        assert 'social_bot_run_ok{job="refresh"} 1' in text
+        assert 'social_bot_run_ok{job="post"} 0' in text
+        assert 'social_bot_run_ok{job="scan"}' not in text
+        assert "social_bot_post_errors 2" in text
+        assert 'social_bot_destination_ok{destination="linkedin"} 0' in text
+        assert "social_bot_last_public_post_timestamp_seconds" in text
+
+    def test_healthy_pipeline_has_no_active_issue(self):
+        text = metrics_view(
+            {"token_status": {"valid": True}},
+            health={"status": "ok", "issues": []},
+            linkedin={"configured": True, "ok": True, "connected": True},
+        )
+        assert "social_bot_health_ok 1" in text
+        assert 'social_bot_issue{kind="post_failed"} 0.0' in text
+        assert 'social_bot_issue{kind="post_failed"} 1' not in text
+        assert 'social_bot_destination_ok{destination="linkedin"} 1' in text
+
+
+class TestHealthView:
+    """One health model feeds the dashboard, /health, /metrics, and the alerts."""
+
+    NOW = dt.datetime(2026, 11, 26, 16, 0)
+
+    @staticmethod
+    def _snapshot(**overrides):
+        base = {
+            "token": {
+                "valid": True,
+                "error": None,
+                "checked_at": "2026-11-26 07:00:00",
+            },
+            "refresh": {"ok": True, "error": None, "last_finished": "2026-11-26 07:00:00"},
+            "scan": {"ok": True, "error": None, "last_finished": "2026-11-26 06:00:00"},
+            "post": {
+                "ok": True,
+                "error": None,
+                "paused": False,
+                "schedule": ["20:00"],
+            },
+            "linkedin": {},
+            "publish": {
+                "enabled": True,
+                "approved": 2,
+                "interval_days": 1,
+            },
+            "published": {"last_public_post_at": "2026-11-25T20:30:00+07:00"},
+        }
+        base.update(overrides)
+        return base
+
+    def test_clean_pipeline_is_ok(self):
+        payload, status = health_view(self._snapshot(), now=self.NOW)
+        assert status == 200
+        assert payload["status"] == "ok"
+        assert payload["issues"] == []
+
+    def test_invalid_token_is_critical(self):
+        token = {"valid": False, "error": "OAuthException", "checked_at": "2026-11-26 07:00:00"}
+        payload, status = health_view(self._snapshot(token=token), now=self.NOW)
+        assert status == 503
+        kinds = {issue["kind"] for issue in payload["issues"]}
+        assert "token_invalid" in kinds
+
+    def test_failed_post_run_is_reported(self):
+        post = {
+            "ok": False,
+            "error": "draft-a: connection refused",
+            "paused": False,
+            "schedule": ["20:00"],
+        }
+        payload, status = health_view(self._snapshot(post=post), now=self.NOW)
+        assert status == 503
+        issue = payload["issues"][0]
+        assert issue["kind"] == "post_failed"
+        assert issue["severity"] == "critical"
+        assert "connection refused" in issue["message"]
+
+    def test_unreachable_linkedin_gateway_is_reported(self):
+        linkedin = {
+            "configured": True,
+            "ok": False,
+            "error": "cannot reach the gateway: refused",
+        }
+        payload, _ = health_view(self._snapshot(linkedin=linkedin), now=self.NOW)
+        assert payload["issues"][0]["kind"] == "linkedin_gateway_down"
+
+    def test_disconnected_linkedin_session_is_reported(self):
+        linkedin = {"configured": True, "ok": True, "connected": False}
+        payload, _ = health_view(self._snapshot(linkedin=linkedin), now=self.NOW)
+        assert payload["issues"][0]["kind"] == "linkedin_session_dead"
+
+    def test_stale_refresh_is_reported(self):
+        refresh = {"ok": True, "error": None, "last_finished": "2026-11-24 07:00:00"}
+        payload, _ = health_view(self._snapshot(refresh=refresh), now=self.NOW)
+        assert payload["issues"][0]["kind"] == "refresh_stale"
+
+    def test_silence_while_approved_drafts_wait_is_reported(self):
+        published = {"last_public_post_at": "2026-11-23T20:30:00+07:00"}
+        payload, _ = health_view(self._snapshot(published=published), now=self.NOW)
+        assert payload["issues"][0]["kind"] == "posting_silent"
+
+    def test_silence_without_approved_drafts_is_not_an_issue(self):
+        publish = {"enabled": True, "approved": 0, "interval_days": 1}
+        published = {"last_public_post_at": "2026-11-20T20:30:00+07:00"}
+        payload, _ = health_view(self._snapshot(publish=publish, published=published), now=self.NOW)
+        assert payload["issues"] == []
+
+
+class TestPostErrorSummary:
+    def test_lists_the_first_three_and_counts_the_rest(self):
+        errors = [{"id": f"draft-{n}", "error": "refused"} for n in range(5)]
+        text = summarize_post_errors(errors)
+        assert "draft-0: refused" in text
+        assert "draft-2: refused" in text
+        assert "draft-3" not in text
+        assert "(+2 more)" in text
+
+    def test_empty_is_unknown(self):
+        assert summarize_post_errors([]) == "unknown error"
+
 
 class TestWritableDir:
     def test_existing_dir(self, tmp_path):
@@ -377,6 +525,25 @@ class TestRuntimeState:
 
     def test_posting_pause_defaults_off(self):
         assert runtime_state_snapshot({})["post"]["paused"] is False
+
+    def test_post_failure_round_trips(self):
+        snap = runtime_state_snapshot(
+            {
+                "post_started": dt.datetime(2026, 9, 11, 20, 0, 1),
+                "post_finished": dt.datetime(2026, 9, 11, 20, 0, 9),
+                "post_ok": False,
+                "post_error": "draft-a: connection refused",
+                "post_errors": 2,
+                "last_posted": 0,
+            }
+        )
+        restored: dict = {}
+        apply_runtime_state(restored, snap)
+        assert restored["post_finished"] == dt.datetime(2026, 9, 11, 20, 0, 9)
+        assert restored["post_ok"] is False
+        assert restored["post_error"] == "draft-a: connection refused"
+        assert restored["post_errors"] == 2
+        assert restored["last_posted"] == 0
         restored = {"post_paused": True}
         apply_runtime_state(restored, {"refresh": {}, "scan": {}})
         assert restored["post_paused"] is False
